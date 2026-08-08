@@ -629,17 +629,22 @@ class SafeYoloEngine:
             return None
         return completed.stdout.strip() if completed.returncode == 0 else None
 
-    def _safe_feature_push(self, positional: list[str], context: dict[str, Any]) -> bool:
+    def _safe_feature_push(self, rest: list[str], positional: list[str], context: dict[str, Any]) -> bool:
         cwd = context.get("cwd")
         if not isinstance(cwd, str) or not cwd:
-            return False
-        if positional and positional != ["origin"]:
             return False
         branch = self._git_value(["branch", "--show-current"], cwd)
         if not branch or branch in PROTECTED_BRANCHES or branch.startswith("release/"):
             return False
         upstream = self._git_value(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd)
-        if upstream != f"origin/{branch}":
+        existing_push = upstream == f"origin/{branch}" and (not positional or positional == ["origin"])
+        initial_push = upstream is None and rest in (
+            ["-u", "origin", branch],
+            ["--set-upstream", "origin", branch],
+            ["-u", "origin", "HEAD"],
+            ["--set-upstream", "origin", "HEAD"],
+        )
+        if not existing_push and not initial_push:
             return False
         status = self._git_value(["status", "--porcelain"], cwd)
         return status == ""
@@ -670,8 +675,8 @@ class SafeYoloEngine:
         tag = next((arg for arg in positional if TAG_RE.fullmatch(arg) or "refs/tags/" in arg), None)
         if tag:
             return self.evaluate({"action": "git.push_tag", "target": tag.removeprefix("refs/tags/"), **context})
-        if self._safe_feature_push(positional, context):
-            return result("allow_report", "git.push_feature", "Clean feature branch has matching origin upstream and no force/broad flags.")
+        if self._safe_feature_push(rest, positional, context):
+            return result("allow_report", "git.push_feature", "Clean feature branch has a matching origin upstream or an exact initial set-upstream push, with no force/broad flags.")
         return self.evaluate({"action": "git.push_feature", **context})
 
     def _inspect_gh(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
