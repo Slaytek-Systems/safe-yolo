@@ -18,7 +18,7 @@ PATCH_PATH_RE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$")
 PATCH_DELETE_RE = re.compile(r"^\*\*\* Delete File:")
 WRITE_TOOLS = {"apply_patch", "write", "edit", "multiedit", "multi_edit", "create_file", "write_file", "move_file", "rename_file", "copy_file"}
 DELETE_TOOLS = {"delete_file", "remove_file"}
-READ_TOOLS = {"read", "read_file", "readfile", "grep", "search", "rg", "glob", "list", "list_dir", "listdir", "web_search", "websearch", "view_image", "update_plan", "request_user_input"}
+READ_TOOLS = {"read", "read_file", "readfile", "grep", "search", "rg", "glob", "list", "list_dir", "listdir", "web_search", "websearch", "webrun", "view_image", "update_plan", "request_user_input"}
 SHELL_TOOLS = {"bash", "shell", "exec_command"}
 
 

@@ -25,6 +25,10 @@ class CodexAdapterTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_known_web_read_tool_is_allowed(self):
+        decision = evaluate_payload({"tool_name": "webrun", "tool_input": {}}, self.engine)
+        self.assertEqual("allow", decision["decision"])
+
     def test_shell_and_unknown_side_effects_are_blocked(self):
         shell = evaluate_payload(
             {"tool_name": "Bash", "tool_input": {"command": "rm obsolete.txt"}}, self.engine
