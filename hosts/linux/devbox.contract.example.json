@@ -1,0 +1,13 @@
+{
+  "$schema": "../../contracts/host-contract.schema.json",
+  "version": "1",
+  "operations_root": "/home/dev/devbox-ops",
+  "workspaces_root": "/home/dev/workspaces",
+  "workspace_lifecycle": ["identity", "start", "status", "doctor", "stop", "attach", "explain", "check", "reconcile", "restart", "logs", "infra", "up", "down"],
+  "workspace_commands": [
+    {"workspace": "infotech/repos/infotech-dashboard", "command": ["functions", "push"], "policy_id": "workspace.local_functions_push", "reason": "Reviewed Infotech function push targets only the declared local self-hosted backend."},
+    {"workspace": "infotech/repos/infotech-dashboard", "command": ["fixtures", "public-live", "seed"], "policy_id": "workspace.local_public_live_fixtures_seed", "reason": "Reviewed fixture seed creates only the fixed sanitized local public-live dataset."},
+    {"workspace": "infotech/repos/infotech-dashboard", "command": ["fixtures", "public-live", "clean"], "policy_id": "workspace.local_public_live_fixtures_clean", "reason": "Reviewed fixture cleanup removes only the fixed owned local public-live dataset."},
+    {"workspace": "infotech/repos/infotech-dashboard", "command": ["proof", "public-live-efficiency"], "policy_id": "workspace.local_public_live_efficiency_proof", "reason": "Reviewed proof runs the fixed bounded workload against only the local backend."}
+  ]
+}

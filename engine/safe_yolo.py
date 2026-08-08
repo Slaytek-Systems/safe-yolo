@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -82,10 +83,12 @@ class SafeYoloEngine:
         policy: dict[str, Any],
         capability_store: CapabilityStore | None = None,
         path_variables: dict[str, str] | None = None,
+        host_contract: dict[str, Any] | None = None,
     ):
         self.policy = policy
         self.actions = policy["actions"]
         self.path_variables = dict(path_variables or {})
+        self.host_contract = dict(host_contract or {})
         self.protected_paths = [
             {**item, "resolved": self._resolve_policy_path(item["path"])}
             for item in policy["protected_paths"]
@@ -106,6 +109,7 @@ class SafeYoloEngine:
         path: str | Path,
         capability_store: CapabilityStore | None = None,
         path_variables: dict[str, str] | None = None,
+        host_contract: dict[str, Any] | None = None,
     ) -> "SafeYoloEngine":
         policy_path = Path(path).resolve()
         with policy_path.open(encoding="utf-8") as handle:
@@ -114,7 +118,7 @@ class SafeYoloEngine:
                 "CODEX_HOME": os.environ.get("CODEX_HOME", str(Path.home() / ".codex")),
                 **(path_variables or {}),
             }
-            return cls(json.load(handle), capability_store=capability_store, path_variables=variables)
+            return cls(json.load(handle), capability_store=capability_store, path_variables=variables, host_contract=host_contract)
 
     def evaluate(self, request: dict[str, Any]) -> dict[str, Any]:
         action = request.get("action", "")
@@ -419,7 +423,9 @@ class SafeYoloEngine:
                 return result("block_method", "filesystem.opaque_write", "Use a structured, reviewable editing method instead of inline mutation.")
 
         if executable in {"docker", "docker-compose"}:
-            return result("block_method", "docker.workspace_contract", "Raw Docker requires an approved operations-workspace contract.")
+            return self._inspect_docker(context)
+        if tokens[0] == "./workspace":
+            return self._inspect_workspace_launcher(args, context)
         if tokens[0].startswith("./"):
             return result("block_method", "workspace.lifecycle", "Project launchers require a tracked repository contract.")
         if executable == "git":
@@ -515,6 +521,61 @@ class SafeYoloEngine:
         if not matches:
             return None
         return max(matches, key=lambda item: len(item["resolved"].parts))
+
+    def _inspect_docker(self, context: dict[str, Any]) -> dict[str, Any]:
+        operations_root = self.host_contract.get("operations_root")
+        cwd = context.get("cwd")
+        if not operations_root or not cwd:
+            return result("block_method", "docker.workspace_contract", "Raw Docker requires an approved operations-workspace contract.")
+        try:
+            operations = Path(str(operations_root)).expanduser().resolve(strict=False)
+            working = Path(str(cwd)).expanduser().resolve(strict=False)
+        except OSError:
+            return result("block_method", "docker.workspace_contract", "Docker workspace could not be resolved.")
+        if working != operations and operations not in working.parents:
+            return result("block_method", "docker.workspace_contract", "Raw Docker is reserved for the approved operations workspace.")
+        return result("allow", "docker.operations_workspace", "Docker operation is within the approved operations workspace.")
+
+    def _inspect_workspace_launcher(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
+        workspaces_root = self.host_contract.get("workspaces_root")
+        cwd_value = context.get("cwd")
+        if not workspaces_root or not cwd_value:
+            return result("block_method", "workspace.lifecycle", "Workspace launcher requires an approved host contract.")
+        try:
+            root = Path(str(workspaces_root)).expanduser().resolve(strict=False)
+            cwd = Path(str(cwd_value)).expanduser().resolve(strict=False)
+            relative = cwd.relative_to(root)
+        except (OSError, ValueError):
+            return result("block_method", "workspace.lifecycle", "Workspace launcher is outside the approved workspace root.")
+        launcher = cwd / "workspace"
+        if not launcher.is_file() or launcher.is_symlink():
+            return result("block_method", "workspace.untrusted_launcher", "Workspace launcher must be a real tracked file.")
+        lifecycle = args[0] if args else ""
+        allowed_lifecycle = set(self.host_contract.get("workspace_lifecycle") or [])
+        command_contracts = self.host_contract.get("workspace_commands") or []
+        contract = next(
+            (
+                item
+                for item in command_contracts
+                if item.get("workspace") == str(relative) and item.get("command") == args
+            ),
+            None,
+        )
+        if lifecycle not in allowed_lifecycle and contract is None:
+            return result("block_method", "workspace.lifecycle", "Unknown workspace lifecycle command requires direct review.")
+        checks = (
+            ["git", "-C", str(cwd), "ls-files", "--error-unmatch", "workspace"],
+            ["git", "-C", str(cwd), "diff", "--quiet", "--", "workspace"],
+            ["git", "-C", str(cwd), "diff", "--cached", "--quiet", "--", "workspace"],
+        )
+        try:
+            if any(subprocess.run(check, capture_output=True, check=False, timeout=2).returncode != 0 for check in checks):
+                return result("block_method", "workspace.untrusted_launcher", "Workspace launcher must be tracked and unmodified.")
+        except (OSError, subprocess.TimeoutExpired):
+            return result("block_method", "workspace.unproven_launcher", "Workspace launcher could not be verified.")
+        if contract is not None:
+            return result("allow_report", str(contract["policy_id"]), str(contract["reason"]))
+        return result("allow", "workspace.lifecycle", "Tracked workspace lifecycle command is permitted.")
 
     def _inspect_railway(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
         flags_with_values = {"--project", "-p", "--environment", "-e", "--service", "-s", "--team", "--workspace"}

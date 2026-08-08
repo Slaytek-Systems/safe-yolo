@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://safe-yolo.invalid/host-contract.schema.json",
+  "title": "Safe YOLO host workspace contract",
+  "type": "object",
+  "required": ["version", "operations_root", "workspaces_root", "workspace_lifecycle", "workspace_commands"],
+  "properties": {
+    "version": {"type": "string"},
+    "operations_root": {"type": "string", "minLength": 1},
+    "workspaces_root": {"type": "string", "minLength": 1},
+    "workspace_lifecycle": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "workspace_commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["workspace", "command", "policy_id", "reason"],
+        "properties": {
+          "workspace": {"type": "string", "minLength": 1},
+          "command": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+          "policy_id": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -143,13 +143,15 @@ def main() -> int:
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description="Authoritative Safe YOLO Codex PreToolUse adapter.")
     parser.add_argument("--policy", type=Path, default=root / "policy" / "policy.json")
+    parser.add_argument("--host-contract", type=Path, default=Path(os.environ["SAFE_YOLO_HOST_CONTRACT"]).expanduser() if os.environ.get("SAFE_YOLO_HOST_CONTRACT") else None)
     parser.add_argument("--state-dir", type=Path, default=Path(os.environ.get("SAFE_YOLO_STATE", "~/.safe-yolo/state")).expanduser())
     parser.add_argument("--explain", action="store_true")
     args = parser.parse_args()
     payload = json.load(sys.stdin)
     store = CapabilityStore(args.state_dir / "capabilities")
     pending = PendingMaintenanceStore(args.state_dir / "pending-maintenance")
-    engine = SafeYoloEngine.from_file(args.policy, capability_store=store)
+    host_contract = json.loads(args.host_contract.read_text(encoding="utf-8")) if args.host_contract else None
+    engine = SafeYoloEngine.from_file(args.policy, capability_store=store, host_contract=host_contract)
     if args.explain:
         response = evaluate_payload(payload, engine)
     else:
