@@ -3,7 +3,7 @@
   "hooks": [
     {
       "type": "command",
-      "command": "/usr/bin/python3 /Users/slayga/.safe-yolo/bootstrap.py --release /Users/slayga/.safe-yolo/releases/1.0.5 --manifest-sha256 96bc8d1610938b71c269ce34394f54063116a506c387aeba7e9478cc6930f57d --entry codex --audit-only --state-dir /Users/slayga/.safe-yolo/state",
+      "command": "/usr/bin/python3 /Users/slayga/.safe-yolo/bootstrap.py --release /Users/slayga/.safe-yolo/releases/1.0.6 --manifest-sha256 d56cd7c91520862e4f8aed9fd6e6a72b53853de74e5b8a7f0ce50d87ffd30b22 --entry codex --audit-only --state-dir /Users/slayga/.safe-yolo/state",
       "timeout": 10,
       "statusMessage": "Shadowing canonical Safe YOLO decisions"
     }
