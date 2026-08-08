@@ -1,0 +1,9 @@
+# Generated runtime state and local releases
+.state/
+releases/
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+.env.*
+!.env.example
