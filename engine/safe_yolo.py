@@ -367,6 +367,8 @@ class SafeYoloEngine:
             wrapped = self._wrapped_command(args)
             if wrapped is not None:
                 return self.inspect_command(wrapped, context)
+            if args and not (args[0] in {"-n", "--version", "--help", "-h"}):
+                return result("block_hard", "shell.unclassified", "Untrusted shell script execution is not permitted.")
 
         if executable in {"command", "builtin", "exec"} and args:
             return self._inspect_segment(args, context)
@@ -390,19 +392,36 @@ class SafeYoloEngine:
             return result("block_hard", "filesystem.delete", "Destructive find actions are Red; use a bounded reviewable method.")
 
         if executable in {"cp", "mv", "install", "tee"}:
-            destination = args[-1] if args else ""
-            if destination:
-                path_result = self.inspect_path_write(destination, context)
+            path_arguments = [arg for arg in args if not arg.startswith("-")]
+            for index, arg in enumerate(args[:-1]):
+                if arg in {"--target-directory", "-t"}:
+                    path_arguments.append(args[index + 1])
+                elif arg.startswith("--target-directory="):
+                    path_arguments.append(arg.split("=", 1)[1])
+            for path in path_arguments:
+                path_result = self.inspect_path_write(path, context)
                 if path_result["decision"] != "allow":
                     return path_result
 
-        if executable in {"python", "python3", "node", "bun"}:
+        if executable in {"python", "python3", "node"}:
+            read_only = (
+                args[:1] in (["--version"], ["--help"], ["-h"])
+                or args[:2] == ["-m", "unittest"]
+                or executable == "node" and args[:1] == ["--check"]
+            )
+            if not read_only:
+                return result("block_hard", "shell.unclassified_interpreter", "Inline or script-backed interpreter execution is not permitted.")
+        if executable == "bun":
             inline = self._inline_program(executable, args)
             if inline is not None and self._looks_mutating(inline):
                 if self._mentions_protected_path(inline):
                     return result("block_method", "filesystem.opaque_protected_write", "Inline programs cannot mutate protected paths, even in Maintenance Mode.")
                 return result("block_method", "filesystem.opaque_write", "Use a structured, reviewable editing method instead of inline mutation.")
 
+        if executable in {"docker", "docker-compose"}:
+            return result("block_method", "docker.workspace_contract", "Raw Docker requires an approved operations-workspace contract.")
+        if tokens[0].startswith("./"):
+            return result("block_method", "workspace.lifecycle", "Project launchers require a tracked repository contract.")
         if executable == "git":
             return self._inspect_git(args, context)
         if executable == "gh":
@@ -587,7 +606,12 @@ class SafeYoloEngine:
             return result("block_method", "network.dynamic_url", "Dynamic shell-built network targets are not Green.")
         if any(arg in {"-L", "--location", "--location-trusted"} for arg in args):
             return result("block_method", "network.redirect", "Use the safe fetch wrapper for validated redirects.")
+        file_backed_prefixes = ("--data=@", "--data-binary=@", "--data-raw=@", "--data-urlencode=@", "--post-file=", "--body-file=", "--upload-file=")
+        if any(arg.startswith(file_backed_prefixes) for arg in args):
+            return result("block_hard", "network.exfiltration", "Transmitting local file contents is Red.")
         for index, arg in enumerate(args):
+            if arg in {"-F", "--form"} and index + 1 < len(args) and "@" in args[index + 1]:
+                return result("block_hard", "network.exfiltration", "Transmitting local file contents is Red.")
             if arg in {"-T", "--upload-file"} and index + 1 < len(args):
                 return result("block_hard", "network.exfiltration", "Uploading local file contents is Red.")
             if arg in NETWORK_WRITE_FLAGS and index + 1 < len(args) and args[index + 1].startswith("@"):

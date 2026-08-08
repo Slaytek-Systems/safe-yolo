@@ -125,9 +125,18 @@ def process_payload(
     session_id = str(payload.get("session_id") or "")
     if isinstance(request, dict) and pending_store is not None and session_id:
         pending = pending_store.request(session_id=session_id, harness=str(request["harness"]), scopes=list(request["scopes"]))
+    audit_warning = None
     if audit_log is not None:
-        append_audit_record(audit_log, payload, decision)
-    return hook_response(decision, pending)
+        try:
+            append_audit_record(audit_log, payload, decision)
+        except OSError as error:
+            audit_warning = f"Audit unavailable ({type(error).__name__}); enforcement decision still applied."
+    response = hook_response(decision, pending)
+    if audit_warning:
+        if response is None:
+            return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": audit_warning}}
+        response["hookSpecificOutput"] = {"hookEventName": "PreToolUse", "additionalContext": audit_warning}
+    return response
 
 
 def main() -> int:

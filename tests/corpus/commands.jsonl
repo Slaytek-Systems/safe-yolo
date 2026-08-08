@@ -14,8 +14,8 @@
 {"id":"protected_redirect","command":"printf harmless > ${CODEX_HOME}/hooks/probe.py","expected":"require_capability"}
 {"id":"protected_copy","command":"cp /tmp/source ${CODEX_HOME}/AGENTS.md","expected":"require_capability"}
 {"id":"wrapped_protected_redirect","command":"sh -c 'printf harmless > ${CODEX_HOME}/hooks/probe.py'","expected":"require_capability"}
-{"id":"python_protected_write","command":"python3 -c \"open('/Users/slayga/.codex/hooks/probe.py','w').write('x')\"","expected":"block_method"}
-{"id":"node_protected_write","command":"node -e \"require('fs').writeFileSync('/Users/slayga/.codex/AGENTS.md','x')\"","expected":"block_method"}
+{"id":"python_protected_write","command":"python3 -c \"open('/Users/slayga/.codex/hooks/probe.py','w').write('x')\"","expected":"block_hard"}
+{"id":"node_protected_write","command":"node -e \"require('fs').writeFileSync('/Users/slayga/.codex/AGENTS.md','x')\"","expected":"block_hard"}
 {"id":"safe_public_get","command":"curl https://example.com/resource","expected":"allow"}
 {"id":"curl_redirect","command":"curl -L https://example.com/resource","expected":"block_method"}
 {"id":"curl_dynamic_url","command":"curl https://example.com/$TOKEN","expected":"block_method"}
@@ -46,3 +46,5 @@
 {"id":"railway_environment_config_read","command":"railway environment config --json","expected":"block_hard"}
 {"id":"railway_variable_list_read","command":"railway --project project --service service variables list --json","expected":"block_hard"}
 {"id":"wrapped_railway_variable_read","command":"env RAILWAY_PROJECT=project railway variables","expected":"block_hard"}
+{"id":"raw_docker_outside_operations_contract","command":"docker ps","expected":"block_method"}
+{"id":"untrusted_workspace_launcher","command":"./workspace status --json","expected":"block_method"}

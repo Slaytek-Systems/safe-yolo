@@ -33,6 +33,19 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual("block_hard", shell["decision"])
         self.assertEqual("block_hard", unknown["decision"])
 
+    def test_audit_failure_is_visible_without_denying_safe_action(self):
+        parent = Path(self.temp.name) / "not-a-directory"
+        parent.write_text("x")
+        response = process_payload(
+            {"tool_name": "Bash", "tool_input": {"command": "git status --short"}},
+            self.engine,
+            pending_store=self.pending,
+            audit_log=parent / "audit.jsonl",
+        )
+        self.assertIsNotNone(response)
+        self.assertNotIn("decision", response)
+        self.assertIn("Audit unavailable", response["hookSpecificOutput"]["additionalContext"])
+
     def test_structured_patch_delete_is_constitutional_red(self):
         decision = evaluate_payload(
             {
