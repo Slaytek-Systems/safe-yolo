@@ -25,6 +25,19 @@ class CodexAdapterTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_task_and_thread_tools_are_classified(self):
+        expected = {
+            "codex_appread_thread": "allow",
+            "codex_appcreate_thread": "allow_report",
+            "codex_appset_thread_archived": "allow_report",
+            "codex_appsend_message_to_thread": "allow",
+            "collaborationspawn_agent": "allow",
+        }
+        for tool_name, decision_name in expected.items():
+            with self.subTest(tool_name=tool_name):
+                decision = evaluate_payload({"tool_name": tool_name, "tool_input": {}}, self.engine)
+                self.assertEqual(decision_name, decision["decision"])
+
     def test_known_web_read_tool_is_allowed(self):
         decision = evaluate_payload({"tool_name": "webrun", "tool_input": {}}, self.engine)
         self.assertEqual("allow", decision["decision"])

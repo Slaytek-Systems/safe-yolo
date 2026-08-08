@@ -20,6 +20,11 @@ WRITE_TOOLS = {"apply_patch", "write", "edit", "multiedit", "multi_edit", "creat
 DELETE_TOOLS = {"delete_file", "remove_file"}
 READ_TOOLS = {"read", "read_file", "readfile", "grep", "search", "rg", "glob", "list", "list_dir", "listdir", "web_search", "websearch", "webrun", "view_image", "update_plan", "request_user_input"}
 SHELL_TOOLS = {"bash", "shell", "exec_command"}
+THREAD_INSPECTION_TOOLS = {"codex_applist_threads", "codex_appread_thread", "codex_applist_projects", "codex_appwait_threads"}
+THREAD_CREATION_TOOLS = {"codex_appcreate_thread"}
+THREAD_LIFECYCLE_TOOLS = {"codex_appset_thread_archived"}
+THREAD_MESSAGE_TOOLS = {"codex_appsend_message_to_thread"}
+COLLABORATION_TOOLS = {"collaborationspawn_agent", "collaborationwait_agent", "collaborationlist_agents"}
 
 
 def _strings(value: Any, key: str = ""):
@@ -91,6 +96,16 @@ def evaluate_payload(payload: dict[str, Any], engine: SafeYoloEngine) -> dict[st
         return result("allow", "codex.workspace_write", "Structured workspace write is permitted.")
     if tool_name in READ_TOOLS:
         return result("allow", "codex.read", "Read-only tool is permitted.")
+    if tool_name in THREAD_INSPECTION_TOOLS:
+        return result("allow", "codex.thread_inspection", "Existing thread inspection is permitted.")
+    if tool_name in THREAD_CREATION_TOOLS:
+        return result("allow_report", "codex.thread_creation", "Creating a user-owned task/thread is permitted and reported.")
+    if tool_name in THREAD_LIFECYCLE_TOOLS:
+        return result("allow_report", "codex.thread_lifecycle", "Reversible thread archival is permitted and reported.")
+    if tool_name in THREAD_MESSAGE_TOOLS:
+        return result("allow", "codex.thread_message", "Messaging an existing thread is permitted.")
+    if tool_name in COLLABORATION_TOOLS:
+        return result("allow", "codex.collaboration", "Collaboration management is permitted.")
     return result("block_hard", "tool.unclassified", "Unclassified tool with side-effect potential is blocked.")
 
 
