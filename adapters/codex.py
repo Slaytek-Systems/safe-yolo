@@ -5,7 +5,7 @@ import json
 import os
 import re
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -104,7 +104,7 @@ def hook_response(decision: dict[str, Any], pending: dict[str, Any] | None = Non
 
 
 def append_audit_record(audit_log: Path, payload: dict[str, Any], decision: dict[str, Any]) -> None:
-    record = {"recorded_at": datetime.now(UTC).isoformat(), "session_id": str(payload.get("session_id") or ""), "turn_id": str(payload.get("turn_id") or ""), "tool_name": str(payload.get("tool_name") or ""), "decision": decision["decision"], "policy_id": decision["policy_id"]}
+    record = {"recorded_at": datetime.now(timezone.utc).isoformat(), "session_id": str(payload.get("session_id") or ""), "turn_id": str(payload.get("turn_id") or ""), "tool_name": str(payload.get("tool_name") or ""), "decision": decision["decision"], "policy_id": decision["policy_id"]}
     audit_log.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(audit_log.parent, 0o700)
     with audit_log.open("a", encoding="utf-8") as handle:

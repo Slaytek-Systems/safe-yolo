@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -31,7 +31,7 @@ class Quarantine:
             "id": identifier,
             "original_path": str(requested),
             "stored_path": str(destination),
-            "quarantined_at": datetime.now(UTC).isoformat(),
+            "quarantined_at": datetime.now(timezone.utc).isoformat(),
             "status": "quarantined",
         }
         self._append(record)
@@ -57,7 +57,7 @@ class Quarantine:
         self._append(
             {
                 **record,
-                "restored_at": datetime.now(UTC).isoformat(),
+                "restored_at": datetime.now(timezone.utc).isoformat(),
                 "status": "restored",
             }
         )
