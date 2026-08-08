@@ -18,7 +18,7 @@ class InstallerTests(unittest.TestCase):
 
     def test_installs_a_verified_version_without_touching_host_config(self):
         installed = install_release(ROOT, self.home)
-        self.assertEqual("1.0.0", installed["version"])
+        self.assertEqual((ROOT / "VERSION").read_text().strip(), installed["version"])
         self.assertEqual([], verify_manifest(installed["release"], installed["manifest_sha256"]))
         self.assertTrue((self.home / "bootstrap.py").is_file())
         self.assertFalse((self.home / "config.toml").exists())

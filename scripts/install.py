@@ -6,8 +6,13 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from scripts.release_manifest import build_manifest, manifest_digest
 
