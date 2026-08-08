@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.safe-yolo.invalid/schemas/request.schema.json",
+  "title": "Safe YOLO normalized request",
+  "type": "object",
+  "required": ["action"],
+  "properties": {
+    "action": {"type": "string"},
+    "session_id": {"type": "string"},
+    "capability_token": {"type": "string"},
+    "harness": {"type": "string"},
+    "targets": {"type": "array", "items": {"type": "string"}},
+    "repository": {},
+    "validation": {"type": "object"},
+    "release_evidence": {"type": "object"}
+  },
+  "additionalProperties": true
+}

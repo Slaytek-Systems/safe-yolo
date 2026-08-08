@@ -1,0 +1,8 @@
+{
+  "description": "Minimum Safe YOLO: native autonomy plus one deterministic Red-consequence pre-tool authority.",
+  "hooks": {
+    "SessionStart": [{"matcher": "startup|resume|clear|compact", "hooks": [{"type": "command", "command": "/usr/bin/python3 /home/dev/.codex/hooks/session_start.py", "additionalContextLimit": 2000}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "/usr/bin/python3 /home/dev/.safe-yolo/adapters/codex_prompt.py"}]}],
+    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "/usr/bin/python3 /home/dev/.safe-yolo/adapters/codex.py", "timeout": 10, "statusMessage": "Checking deterministic Red consequences"}]}]
+  }
+}

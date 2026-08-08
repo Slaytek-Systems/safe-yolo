@@ -1,0 +1,14 @@
+{
+  "$schema": "schemas/release-contract.schema.json",
+  "environment": "production",
+  "deploy_command": ["railway", "up"],
+  "required_gates": ["format", "lint", "typecheck", "test", "build", "fallow"],
+  "browser_journeys": ["authentication", "primary-user-flow", "critical-write-readback"],
+  "require_clean_worktree": true,
+  "require_exact_commit": true,
+  "rollback": {
+    "type": "redeploy_previous_artifact",
+    "must_be_verified": true
+  },
+  "post_deploy": ["healthcheck", "browser-smoke", "error-log-check"]
+}

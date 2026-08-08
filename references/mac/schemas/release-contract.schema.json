@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.safe-yolo.invalid/schemas/release-contract.schema.json",
+  "title": "Safe YOLO release contract",
+  "type": "object",
+  "required": ["environment", "deploy_command", "required_gates", "browser_journeys", "rollback", "post_deploy"],
+  "properties": {
+    "$schema": {"type": "string"},
+    "environment": {"const": "production"},
+    "deploy_command": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "required_gates": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "browser_journeys": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "require_clean_worktree": {"type": "boolean"},
+    "require_exact_commit": {"type": "boolean"},
+    "rollback": {
+      "type": "object",
+      "required": ["type", "must_be_verified"],
+      "properties": {
+        "type": {"type": "string"},
+        "must_be_verified": {"const": true}
+      },
+      "additionalProperties": false
+    },
+    "post_deploy": {"type": "array", "items": {"type": "string"}, "minItems": 1}
+  },
+  "additionalProperties": false
+}
