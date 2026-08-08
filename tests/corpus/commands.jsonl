@@ -11,9 +11,9 @@
 {"id":"forced_refspec","command":"git push origin +HEAD:feature/x","expected":"block_hard"}
 {"id":"delete_refspec","command":"git push origin :feature/x","expected":"block_hard"}
 {"id":"git_c_force_push","command":"git -C /repo push --force origin feature/x","expected":"block_hard"}
-{"id":"protected_redirect","command":"printf harmless > ~/.codex/hooks/probe.py","expected":"require_capability"}
-{"id":"protected_copy","command":"cp /tmp/source ~/.codex/AGENTS.md","expected":"require_capability"}
-{"id":"wrapped_protected_redirect","command":"sh -c 'printf harmless > ~/.codex/hooks/probe.py'","expected":"require_capability"}
+{"id":"protected_redirect","command":"printf harmless > ${CODEX_HOME}/hooks/probe.py","expected":"require_capability"}
+{"id":"protected_copy","command":"cp /tmp/source ${CODEX_HOME}/AGENTS.md","expected":"require_capability"}
+{"id":"wrapped_protected_redirect","command":"sh -c 'printf harmless > ${CODEX_HOME}/hooks/probe.py'","expected":"require_capability"}
 {"id":"python_protected_write","command":"python3 -c \"open('/Users/slayga/.codex/hooks/probe.py','w').write('x')\"","expected":"block_method"}
 {"id":"node_protected_write","command":"node -e \"require('fs').writeFileSync('/Users/slayga/.codex/AGENTS.md','x')\"","expected":"block_method"}
 {"id":"safe_public_get","command":"curl https://example.com/resource","expected":"allow"}
@@ -41,3 +41,8 @@
 {"id":"protected_codex_config_write","command":"printf harmless > ${CODEX_HOME}/config.toml","expected":"require_capability"}
 {"id":"protected_codex_rules_write","command":"cp /tmp/source ${CODEX_HOME}/rules/default.rules","expected":"require_capability"}
 {"id":"preview_deploy","command":"vercel","expected":"allow_report"}
+{"id":"environment_dump","command":"env","expected":"block_hard"}
+{"id":"printenv_dump","command":"printenv","expected":"block_hard"}
+{"id":"railway_environment_config_read","command":"railway environment config --json","expected":"block_hard"}
+{"id":"railway_variable_list_read","command":"railway --project project --service service variables list --json","expected":"block_hard"}
+{"id":"wrapped_railway_variable_read","command":"env RAILWAY_PROJECT=project railway variables","expected":"block_hard"}

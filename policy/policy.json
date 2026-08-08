@@ -49,6 +49,7 @@
   "protected_paths": [
     {"path": "${SAFE_YOLO_HOME}", "action": "harness.modify_policy", "harness": "safe-yolo", "scope": "release"},
     {"path": "${CODEX_HOME}/config.toml", "action": "harness.modify", "harness": "codex", "scope": "config"},
+    {"path": "${CODEX_HOME}/AGENTS.md", "action": "harness.modify", "harness": "codex", "scope": "instructions"},
     {"path": "${CODEX_HOME}/hooks.json", "action": "harness.modify", "harness": "codex", "scope": "hooks"},
     {"path": "${CODEX_HOME}/hooks", "action": "harness.modify", "harness": "codex", "scope": "hooks"},
     {"path": "${CODEX_HOME}/rules", "action": "harness.modify", "harness": "codex", "scope": "rules"},
