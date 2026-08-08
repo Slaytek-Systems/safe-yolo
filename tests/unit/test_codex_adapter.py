@@ -1,0 +1,69 @@
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+from adapters.codex import evaluate_payload, process_payload
+from adapters.codex_prompt import authorize_prompt
+from engine.capabilities import CapabilityStore, PendingMaintenanceStore
+from engine.safe_yolo import SafeYoloEngine
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+class CodexAdapterTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        policy = json.loads((ROOT / "policy" / "policy.json").read_text())
+        self.store = CapabilityStore(Path(self.temp.name) / "capabilities")
+        self.pending = PendingMaintenanceStore(Path(self.temp.name) / "pending")
+        self.engine = SafeYoloEngine(policy, capability_store=self.store, path_variables={
+            "SAFE_YOLO_HOME": "/opt/safe-yolo",
+            "CODEX_HOME": "/home/test/.codex",
+        })
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_shell_and_unknown_side_effects_are_blocked(self):
+        shell = evaluate_payload(
+            {"tool_name": "Bash", "tool_input": {"command": "rm obsolete.txt"}}, self.engine
+        )
+        unknown = evaluate_payload({"tool_name": "future_mutation_tool", "tool_input": {}}, self.engine)
+        self.assertEqual("block_hard", shell["decision"])
+        self.assertEqual("block_hard", unknown["decision"])
+
+    def test_structured_patch_delete_is_constitutional_red(self):
+        decision = evaluate_payload(
+            {
+                "tool_name": "apply_patch",
+                "tool_input": {"patch": "*** Begin Patch\n*** Delete File: /workspace/obsolete.py\n*** End Patch"},
+            },
+            self.engine,
+        )
+        self.assertEqual("block_hard", decision["decision"])
+
+    def test_approval_only_consumes_pending_maintenance_for_current_turn(self):
+        first = {
+            "tool_name": "apply_patch",
+            "session_id": "session-1",
+            "turn_id": "turn-1",
+            "tool_input": {"path": "/home/test/.codex/config.toml"},
+        }
+        denied = process_payload(first, self.engine, pending_store=self.pending)
+        self.assertEqual("block", denied["decision"])
+
+        authorization = authorize_prompt(
+            {"session_id": "session-1", "turn_id": "turn-2", "prompt": "approve"},
+            self.store,
+            self.pending,
+        )
+        self.assertEqual("maintenance", authorization["kind"])
+
+        retry = {**first, "turn_id": "turn-2"}
+        allowed = evaluate_payload(retry, self.engine)
+        self.assertEqual("allow_report", allowed["decision"])
+
+
+if __name__ == "__main__":
+    unittest.main()

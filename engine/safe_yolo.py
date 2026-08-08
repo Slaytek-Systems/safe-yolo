@@ -287,7 +287,13 @@ class SafeYoloEngine:
             request.update({"harness": rule["harness"], "targets": [rule["scope"]]})
         elif action == "harness.modify_policy":
             request.setdefault("policy_ids", context.get("policy_ids") or [])
-        return self.evaluate(request)
+        decision = self.evaluate(request)
+        if decision["decision"] == "require_capability" and action == "harness.modify":
+            return {
+                **decision,
+                "maintenance_request": {"harness": rule["harness"], "scopes": [rule["scope"]]},
+            }
+        return decision
 
     @staticmethod
     def _tokens(command: str) -> list[str]:
