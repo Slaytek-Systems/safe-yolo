@@ -72,6 +72,36 @@ class SafeFeaturePushTests(unittest.TestCase):
     def test_initial_push_allows_head_as_matching_source(self):
         self.assert_push_allowed("git push -u origin HEAD")
 
+    def test_git_dash_c_overrides_context_working_directory(self):
+        seen_cwds = []
+
+        def git_result(git_command, **kwargs):
+            seen_cwds.append(kwargs["cwd"])
+            if git_command[1:] == ["branch", "--show-current"]:
+                return SimpleNamespace(returncode=0, stdout="task/proof\n")
+            if git_command[1:] == ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]:
+                return SimpleNamespace(returncode=128, stdout="")
+            if git_command[1:] == ["status", "--porcelain"]:
+                return SimpleNamespace(returncode=0, stdout="")
+            raise AssertionError(git_command)
+
+        with patch("engine.safe_yolo.subprocess.run", side_effect=git_result):
+            decision = self.engine.inspect_command(
+                "git -C /tmp/disposable-repository push -u origin task/proof",
+                {"cwd": "/task/root"},
+            )
+        self.assertEqual("allow_report", decision["decision"])
+        self.assertEqual(["/tmp/disposable-repository"] * 3, seen_cwds)
+
+    def test_git_dash_c_missing_or_unknown_directory_fails_closed(self):
+        missing = self.engine.inspect_command("git -C", {"cwd": ""})
+        unknown = self.engine.inspect_command(
+            "git -C /definitely/missing/safe-yolo-proof push -u origin task/proof",
+            {"cwd": "/task/root"},
+        )
+        self.assertNotIn(missing["decision"], {"allow", "allow_report"})
+        self.assertNotIn(unknown["decision"], {"allow", "allow_report"})
+
     def test_initial_push_rejects_missing_set_upstream(self):
         self.assert_push_blocked("git push origin task/repair-0160-attestation")
 

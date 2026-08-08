@@ -651,8 +651,25 @@ class SafeYoloEngine:
 
     def _inspect_git(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
         filtered = list(args)
-        if filtered[:1] == ["-C"] and len(filtered) >= 3:
-            filtered = filtered[2:]
+        git_context = dict(context)
+        while filtered and (filtered[0] == "-C" or filtered[0].startswith("-C")):
+            if filtered[0] == "-C":
+                if len(filtered) < 2:
+                    return result("block_method", "git.context_missing", "Git -C requires an explicit working directory.")
+                raw_cwd = filtered[1]
+                filtered = filtered[2:]
+            else:
+                raw_cwd = filtered[0][2:]
+                filtered = filtered[1:]
+                if not raw_cwd:
+                    return result("block_method", "git.context_missing", "Git -C requires an explicit working directory.")
+            effective_cwd = Path(raw_cwd).expanduser()
+            if not effective_cwd.is_absolute():
+                base_cwd = git_context.get("cwd")
+                if not isinstance(base_cwd, str) or not base_cwd:
+                    return result("block_method", "git.context_missing", "Relative Git -C requires a known working directory.")
+                effective_cwd = Path(base_cwd) / effective_cwd
+            git_context["cwd"] = str(effective_cwd.resolve(strict=False))
         if not filtered:
             return result("allow", "git.inspect", "Git inspection is permitted.")
         subcommand = filtered[0]
@@ -674,10 +691,10 @@ class SafeYoloEngine:
             return result("block_hard", "git.delete_ref", "Ref deletion is Red.")
         tag = next((arg for arg in positional if TAG_RE.fullmatch(arg) or "refs/tags/" in arg), None)
         if tag:
-            return self.evaluate({"action": "git.push_tag", "target": tag.removeprefix("refs/tags/"), **context})
-        if self._safe_feature_push(rest, positional, context):
+            return self.evaluate({"action": "git.push_tag", "target": tag.removeprefix("refs/tags/"), **git_context})
+        if self._safe_feature_push(rest, positional, git_context):
             return result("allow_report", "git.push_feature", "Clean feature branch has a matching origin upstream or an exact initial set-upstream push, with no force/broad flags.")
-        return self.evaluate({"action": "git.push_feature", **context})
+        return self.evaluate({"action": "git.push_feature", **git_context})
 
     def _inspect_gh(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
         if args[:2] == ["pr", "create"]:
