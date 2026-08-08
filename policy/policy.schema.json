@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://safe-yolo.invalid/policy.schema.json",
+  "title": "Safe YOLO canonical policy",
+  "type": "object",
+  "required": ["version", "constitutional_red", "actions", "protected_paths"],
+  "properties": {
+    "$schema": {"type": "string"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"},
+    "constitutional_red": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "actions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["classification"],
+        "properties": {
+          "classification": {"enum": ["green", "blue", "amber", "red"]},
+          "capability_override": {"type": "boolean"},
+          "condition_fallback_capability": {"type": "boolean"},
+          "promote_to": {"enum": ["green", "blue", "amber", "red"]},
+          "condition": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "protected_paths": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "action"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "action": {"type": "string", "minLength": 1},
+          "harness": {"type": "string"},
+          "scope": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

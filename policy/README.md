@@ -1,5 +1,9 @@
 # Canonical policy
 
-This directory will hold the portable policy source, schema, constitutional Red list, protected-surface declarations, and approved action classifications.
+`policy.json` is the portable policy source. Host adapters resolve its symbolic protected paths (`${SAFE_YOLO_HOME}`, `${CODEX_HOME}`) and may add host facts, but cannot weaken action classifications.
 
-Policy changes must be accompanied by conformance cases and cannot be applied by an agent running under the policy.
+## Release rule
+
+`deploy.production` is intentionally Amber by default. It becomes Blue only through `external_release_contract`; an exact human-text capability is not a substitute. The future contract verifier must bind external CI/provider evidence to the exact repository, commit/artifact, target environment/service, expiry, and rollback proof.
+
+Raw deployment, destructive migration, and arbitrary shell-composed release paths are not contract-qualified operations.
