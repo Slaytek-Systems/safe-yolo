@@ -14,5 +14,12 @@
     {"path": "${HOME}/.npmrc", "action": "credentials.expose"},
     {"path": "${HOME}/Library/LaunchAgents", "action": "system.modify"}
   ],
-  "restricted_executables": {"security": "credentials.expose"}
+  "restricted_executables": {"security": "credentials.expose"},
+  "remote_maintenance": {
+    "host": "devbox",
+    "commands": [
+      ["git", "-C", "/home/dev/safe-yolo-source", "pull", "--ff-only"],
+      ["python3", "/home/dev/safe-yolo-source/scripts/remote_update.py"]
+    ]
+  }
 }

@@ -391,7 +391,7 @@ class SafeYoloEngine:
             return self.evaluate({"action": str(restricted[executable]), **context})
 
         if executable in REMOTE_EXECUTABLES:
-            return self.evaluate({"action": "remote.execute", **context})
+            return self._inspect_remote(executable, args, context)
 
         if executable in {"rm", "rmdir", "unlink", "shred", "truncate"}:
             return result("block_hard", "filesystem.delete", "Permanent deletion is a constitutional Red action; use quarantine.")
@@ -605,6 +605,21 @@ class SafeYoloEngine:
         if command_args[:1] in (["variable"], ["variables"]) or command_args[:2] == ["environment", "config"]:
             return self.evaluate({"action": "credentials.expose", **context})
         return result("allow", "railway.inspect", "Railway status/list inspection is permitted.")
+
+    def _inspect_remote(self, executable: str, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
+        contract = self.host_contract.get("remote_maintenance") or {}
+        if executable != "ssh" or not contract:
+            return self.evaluate({"action": "remote.execute", **context})
+        remaining = list(args)
+        if remaining[:1] == ["-n"]:
+            remaining = remaining[1:]
+        if not remaining or remaining[0] != contract.get("host"):
+            return self.evaluate({"action": "remote.execute", **context})
+        remote_command = remaining[1:]
+        allowed_commands = contract.get("commands") or []
+        if remote_command in allowed_commands:
+            return result("allow_report", "remote.safe_yolo_maintenance", "Exact verified Safe YOLO maintenance command for devbox is permitted.")
+        return self.evaluate({"action": "remote.execute", **context})
 
     @staticmethod
     def _git_value(args: list[str], cwd: str) -> str | None:

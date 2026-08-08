@@ -35,7 +35,16 @@
         "additionalProperties": false
       }
     },
-    "restricted_executables": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}}
+    "restricted_executables": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}},
+    "remote_maintenance": {
+      "type": "object",
+      "required": ["host", "commands"],
+      "properties": {
+        "host": {"type": "string", "minLength": 1},
+        "commands": {"type": "array", "items": {"type": "array", "items": {"type": "string"}, "minItems": 1}, "minItems": 1}
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }
