@@ -1,0 +1,28 @@
+{
+  "description": "Canonical Safe YOLO: one verified deterministic PreTool authority and exact maintenance approval path.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 /home/dev/.safe-yolo/bootstrap.py --release /home/dev/.safe-yolo/releases/1.0.4 --manifest-sha256 0eda03017a38b23745281002fb98d4d11a26bf357f69df8356a66dfffc4be7be --entry prompt --state-dir /home/dev/.safe-yolo/state"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 /home/dev/.safe-yolo/bootstrap.py --release /home/dev/.safe-yolo/releases/1.0.4 --manifest-sha256 0eda03017a38b23745281002fb98d4d11a26bf357f69df8356a66dfffc4be7be --entry codex --host-contract /home/dev/.safe-yolo/host-contract.json --state-dir /home/dev/.safe-yolo/state",
+            "timeout": 10,
+            "statusMessage": "Checking deterministic Safe YOLO consequences"
+          }
+        ]
+      }
+    ]
+  }
+}
