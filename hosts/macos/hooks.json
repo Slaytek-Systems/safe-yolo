@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 /Users/slayga/.safe-yolo/bootstrap.py --release /Users/slayga/.safe-yolo/releases/1.0.7 --manifest-sha256 d15ca2c69f01af83e910d9dac00f3ee1177f01f05ef61662a6794b62e4521edd --entry prompt --state-dir /Users/slayga/.safe-yolo/state"
+            "command": "/usr/bin/python3 /Users/slayga/.safe-yolo/bootstrap.py --release /Users/slayga/.safe-yolo/releases/1.0.8 --manifest-sha256 a461f8c71411a4d7c254e5265b1d3dd757dae24d2a4c45c2ff621ebd4a3b4fb1 --entry prompt --state-dir /Users/slayga/.safe-yolo/state"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 /Users/slayga/.safe-yolo/bootstrap.py --release /Users/slayga/.safe-yolo/releases/1.0.7 --manifest-sha256 d15ca2c69f01af83e910d9dac00f3ee1177f01f05ef61662a6794b62e4521edd --entry codex --host-contract /Users/slayga/.safe-yolo/host-contract.json --state-dir /Users/slayga/.safe-yolo/state",
+            "command": "/usr/bin/python3 /Users/slayga/.safe-yolo/bootstrap.py --release /Users/slayga/.safe-yolo/releases/1.0.8 --manifest-sha256 a461f8c71411a4d7c254e5265b1d3dd757dae24d2a4c45c2ff621ebd4a3b4fb1 --entry codex --host-contract /Users/slayga/.safe-yolo/host-contract.json --state-dir /Users/slayga/.safe-yolo/state",
             "timeout": 10,
             "statusMessage": "Checking deterministic Safe YOLO consequences"
           }
