@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from adapters.codex import evaluate_payload, process_payload
+from adapters.codex import audit_payload, evaluate_payload, process_payload
 from adapters.codex_prompt import authorize_prompt
 from engine.capabilities import CapabilityStore, PendingMaintenanceStore
 from engine.safe_yolo import SafeYoloEngine
@@ -32,6 +32,16 @@ class CodexAdapterTests(unittest.TestCase):
         unknown = evaluate_payload({"tool_name": "future_mutation_tool", "tool_input": {}}, self.engine)
         self.assertEqual("block_hard", shell["decision"])
         self.assertEqual("block_hard", unknown["decision"])
+
+    def test_audit_only_records_a_block_without_returning_a_hook_block(self):
+        audit = Path(self.temp.name) / "audit.jsonl"
+        decision = audit_payload(
+            {"tool_name": "Bash", "tool_input": {"command": "rm obsolete.txt"}},
+            self.engine,
+            audit,
+        )
+        self.assertEqual("block_hard", decision["decision"])
+        self.assertNotIn("command", audit.read_text())
 
     def test_audit_failure_is_visible_without_denying_safe_action(self):
         parent = Path(self.temp.name) / "not-a-directory"

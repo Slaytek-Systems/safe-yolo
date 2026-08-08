@@ -112,6 +112,13 @@ def append_audit_record(audit_log: Path, payload: dict[str, Any], decision: dict
     os.chmod(audit_log, 0o600)
 
 
+def audit_payload(payload: dict[str, Any], engine: SafeYoloEngine, audit_log: Path) -> dict[str, Any]:
+    """Record the canonical decision without influencing the current hook authority."""
+    decision = evaluate_payload(payload, engine)
+    append_audit_record(audit_log, payload, decision)
+    return decision
+
+
 def process_payload(
     payload: dict[str, Any],
     engine: SafeYoloEngine,
@@ -146,6 +153,7 @@ def main() -> int:
     parser.add_argument("--host-contract", type=Path, default=Path(os.environ["SAFE_YOLO_HOST_CONTRACT"]).expanduser() if os.environ.get("SAFE_YOLO_HOST_CONTRACT") else None)
     parser.add_argument("--state-dir", type=Path, default=Path(os.environ.get("SAFE_YOLO_STATE", "~/.safe-yolo/state")).expanduser())
     parser.add_argument("--explain", action="store_true")
+    parser.add_argument("--audit-only", action="store_true")
     args = parser.parse_args()
     payload = json.load(sys.stdin)
     store = CapabilityStore(args.state_dir / "capabilities")
@@ -154,6 +162,9 @@ def main() -> int:
     engine = SafeYoloEngine.from_file(args.policy, capability_store=store, host_contract=host_contract)
     if args.explain:
         response = evaluate_payload(payload, engine)
+    elif args.audit_only:
+        audit_payload(payload, engine, args.state_dir / "audit.jsonl")
+        response = None
     else:
         response = process_payload(payload, engine, pending_store=pending, audit_log=args.state_dir / "audit.jsonl")
     if response is not None:

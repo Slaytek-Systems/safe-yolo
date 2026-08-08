@@ -51,6 +51,7 @@ def main() -> int:
     parser.add_argument("--manifest-sha256", required=True)
     parser.add_argument("--entry", choices=sorted(ENTRYPOINTS), required=True)
     parser.add_argument("--host-contract", type=Path)
+    parser.add_argument("--audit-only", action="store_true")
     parser.add_argument("--state-dir", type=Path, default=Path(os.environ.get("SAFE_YOLO_STATE", "~/.safe-yolo/state")).expanduser())
     args = parser.parse_args()
     try:
@@ -61,6 +62,8 @@ def main() -> int:
     command = [sys.executable, str(entry), "--state-dir", str(args.state_dir)]
     if args.host_contract is not None:
         command.extend(["--host-contract", str(args.host_contract)])
+    if args.audit_only:
+        command.append("--audit-only")
     environment = os.environ.copy()
     existing_pythonpath = environment.get("PYTHONPATH")
     environment["PYTHONPATH"] = str(args.release) if not existing_pythonpath else f"{args.release}{os.pathsep}{existing_pythonpath}"
