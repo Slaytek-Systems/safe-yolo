@@ -89,9 +89,10 @@ class SafeYoloEngine:
         self.actions = policy["actions"]
         self.path_variables = dict(path_variables or {})
         self.host_contract = dict(host_contract or {})
+        protected_paths = [*policy["protected_paths"], *(self.host_contract.get("protected_paths") or [])]
         self.protected_paths = [
             {**item, "resolved": self._resolve_policy_path(item["path"])}
-            for item in policy["protected_paths"]
+            for item in protected_paths
         ]
         self.capability_store = capability_store
 
@@ -116,6 +117,7 @@ class SafeYoloEngine:
             variables = {
                 "SAFE_YOLO_HOME": os.environ.get("SAFE_YOLO_HOME", str(policy_path.parent.parent)),
                 "CODEX_HOME": os.environ.get("CODEX_HOME", str(Path.home() / ".codex")),
+                "HOME": str(Path.home()),
                 **(path_variables or {}),
             }
             return cls(json.load(handle), capability_store=capability_store, path_variables=variables, host_contract=host_contract)
@@ -382,6 +384,10 @@ class SafeYoloEngine:
 
         if executable == "printenv":
             return self.evaluate({"action": "credentials.expose", **context})
+
+        restricted = self.host_contract.get("restricted_executables") or {}
+        if executable in restricted:
+            return self.evaluate({"action": str(restricted[executable]), **context})
 
         if executable in REMOTE_EXECUTABLES:
             return self.evaluate({"action": "remote.execute", **context})

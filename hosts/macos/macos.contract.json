@@ -1,0 +1,18 @@
+{
+  "$schema": "../../contracts/host-contract.schema.json",
+  "version": "1",
+  "protected_paths": [
+    {"path": "${HOME}/.ssh", "action": "system.modify"},
+    {"path": "${HOME}/.netrc", "action": "credentials.expose"},
+    {"path": "${HOME}/.zshrc", "action": "system.modify"},
+    {"path": "${HOME}/.zprofile", "action": "system.modify"},
+    {"path": "${HOME}/.zshenv", "action": "system.modify"},
+    {"path": "${HOME}/.bash_profile", "action": "system.modify"},
+    {"path": "${HOME}/.bashrc", "action": "system.modify"},
+    {"path": "${HOME}/.profile", "action": "system.modify"},
+    {"path": "${HOME}/.gitconfig", "action": "system.modify"},
+    {"path": "${HOME}/.npmrc", "action": "credentials.expose"},
+    {"path": "${HOME}/Library/LaunchAgents", "action": "system.modify"}
+  ],
+  "restricted_executables": {"security": "credentials.expose"}
+}
