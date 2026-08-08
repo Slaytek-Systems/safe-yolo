@@ -61,7 +61,7 @@ def main() -> int:
     wiring = inspect_codex_wiring(HOME.parent / ".codex" / "config.toml", HOOKS, HOME / "bootstrap.py", receipt["manifest_sha256"])
     if not report["healthy"] or not wiring["healthy"]:
         raise RuntimeError(f"Installed release failed doctor: {[ *report['problems'], *wiring['problems'] ]}")
-    print(json.dumps({"version": version, "release": receipt["release"], "manifest_sha256": receipt["manifest_sha256"], "healthy": True}, sort_keys=True))
+    print(json.dumps({"version": version, "release": str(receipt["release"]), "manifest_sha256": receipt["manifest_sha256"], "healthy": True}, sort_keys=True))
     return 0
 
 
