@@ -29,7 +29,7 @@
 {"id":"remote_shell","command":"ssh production.example.com","expected":"block_hard"}
 {"id":"unknown_bunx","command":"bunx unknown-package --help","expected":"block_method","context":{"local_bins":[]}}
 {"id":"local_bunx","command":"bunx eslint .","expected":"allow","context":{"local_bins":["eslint"]}}
-{"id":"safe_feature_push","command":"git push -u origin HEAD:feature/safe-yolo","expected":"allow_report","context":{"repository":{"remote":"origin","branch":"feature/safe-yolo","target_branch":"feature/safe-yolo","protected":false},"validation":{"passed":true}}}
+{"id":"safe_feature_push","command":"git push -u origin HEAD:feature/safe-yolo","expected":"allow_report"}
 {"id":"tag_push","command":"git push origin v1.2.3","expected":"block_hard"}
 {"id":"full_pr_create","command":"gh pr create --base main --head feature/safe-yolo --title safe-yolo","expected":"allow_report"}
 {"id":"gh_api_write","command":"gh api repos/owner/repo/issues/1 -X PATCH -f state=closed","expected":"require_capability"}

@@ -19,7 +19,7 @@
     "filesystem.quarantine": {"classification": "green"},
     "filesystem.delete": {"classification": "red", "capability_override": false},
     "git.commit": {"classification": "green"},
-    "git.push_feature": {"classification": "blue", "condition": "safe_feature_push"},
+    "git.push_feature": {"classification": "blue"},
     "git.push_tag": {"classification": "red", "capability_override": false},
     "git.push_protected": {"classification": "amber"},
     "git.force_push": {"classification": "red", "capability_override": false},
@@ -53,6 +53,10 @@
     {"path": "${CODEX_HOME}/hooks.json", "action": "harness.modify", "harness": "codex", "scope": "hooks"},
     {"path": "${CODEX_HOME}/hooks", "action": "harness.modify", "harness": "codex", "scope": "hooks"},
     {"path": "${CODEX_HOME}/rules", "action": "harness.modify", "harness": "codex", "scope": "rules"},
-    {"path": "${CODEX_HOME}/auth.json", "action": "credentials.expose", "harness": "codex", "scope": "credentials"}
+    {"path": "${CODEX_HOME}/auth.json", "action": "credentials.expose", "harness": "codex", "scope": "credentials"},
+    {"path": "${HOME}/.cursor/hooks.json", "action": "harness.modify", "harness": "cursor", "scope": "hooks"},
+    {"path": "${HOME}/.cursor/hooks", "action": "harness.modify", "harness": "cursor", "scope": "hooks"},
+    {"path": "${HOME}/.cursor/rules", "action": "harness.modify", "harness": "cursor", "scope": "rules"},
+    {"path": "${HOME}/.cursor/cli-config.json", "action": "harness.modify", "harness": "cursor", "scope": "config"}
   ]
 }

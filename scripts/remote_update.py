@@ -18,6 +18,10 @@ from scripts.install import install_release
 SOURCE = Path("/home/dev/safe-yolo-source")
 HOME = Path("/home/dev/.safe-yolo")
 HOOKS = Path("/home/dev/.codex/hooks.json")
+CURSOR_HOOKS = (
+    Path("/home/dev/.cursor/hooks/safe-yolo-cursor.sh"),
+    Path("/home/dev/.cursor/hooks/safe-yolo-cursor-prompt.sh"),
+)
 PIN_RE = re.compile(r"--release\s+\S+\s+--manifest-sha256\s+[0-9a-f]{64}")
 
 
@@ -44,6 +48,22 @@ def repin_hooks(release: Path, manifest_sha256: str) -> int:
     return replaced
 
 
+def repin_cursor_hooks(release: Path, manifest_sha256: str) -> int:
+    replaced = 0
+    replacement = f"--release {release} --manifest-sha256 {manifest_sha256}"
+    for path in CURSOR_HOOKS:
+        if not path.is_file():
+            continue
+        original = path.read_text()
+        updated, count = PIN_RE.subn(replacement, original)
+        if count:
+            path.write_text(updated)
+            replaced += count
+    if replaced < 1:
+        raise RuntimeError("Expected to repin at least one Cursor Safe YOLO hook.")
+    return replaced
+
+
 def main() -> int:
     if not SOURCE.is_dir() or not HOME.is_dir():
         raise RuntimeError("Expected devbox canonical source and Safe YOLO home directories.")
@@ -56,12 +76,21 @@ def main() -> int:
             shutil.copy2(bootstrap, backup)
         shutil.copy2(source_bootstrap, bootstrap)
     receipt = install_release(SOURCE, HOME)
-    repin_hooks(Path(receipt["release"]), receipt["manifest_sha256"])
-    report = inspect_release(Path(receipt["release"]), receipt["manifest_sha256"])
-    wiring = inspect_codex_wiring(HOME.parent / ".codex" / "config.toml", HOOKS, HOME / "bootstrap.py", receipt["manifest_sha256"])
+    release = Path(receipt["release"])
+    manifest_sha256 = receipt["manifest_sha256"]
+    repin_hooks(release, manifest_sha256)
+    cursor_pins = repin_cursor_hooks(release, manifest_sha256)
+    report = inspect_release(release, manifest_sha256)
+    wiring = inspect_codex_wiring(HOME.parent / ".codex" / "config.toml", HOOKS, HOME / "bootstrap.py", manifest_sha256)
     if not report["healthy"] or not wiring["healthy"]:
         raise RuntimeError(f"Installed release failed doctor: {[ *report['problems'], *wiring['problems'] ]}")
-    print(json.dumps({"version": version, "release": str(receipt["release"]), "manifest_sha256": receipt["manifest_sha256"], "healthy": True}, sort_keys=True))
+    print(json.dumps({
+        "version": version,
+        "release": str(release),
+        "manifest_sha256": manifest_sha256,
+        "cursor_pins": cursor_pins,
+        "healthy": True,
+    }, sort_keys=True))
     return 0
 
 

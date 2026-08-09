@@ -57,10 +57,6 @@ class CodexAdapterTests(unittest.TestCase):
             self.assertEqual("/tmp/disposable-repository", _kwargs["cwd"])
             if command[1:] == ["branch", "--show-current"]:
                 return SimpleNamespace(returncode=0, stdout="task/proof\n")
-            if command[1:] == ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]:
-                return SimpleNamespace(returncode=128, stdout="")
-            if command[1:] == ["status", "--porcelain"]:
-                return SimpleNamespace(returncode=0, stdout="")
             raise AssertionError(command)
 
         with patch("engine.safe_yolo.subprocess.run", side_effect=git_result):
@@ -76,6 +72,7 @@ class CodexAdapterTests(unittest.TestCase):
                 self.engine,
             )
         self.assertEqual("allow_report", decision["decision"])
+        self.assertEqual("git.push_feature", decision["policy_id"])
 
     def test_audit_only_records_a_block_without_returning_a_hook_block(self):
         audit = Path(self.temp.name) / "audit.jsonl"
