@@ -40,6 +40,38 @@ class CodexAdapterTests(unittest.TestCase):
                 decision = evaluate_payload({"tool_name": tool_name, "tool_input": {}}, self.engine)
                 self.assertEqual(decision_name, decision["decision"])
 
+    def test_codex_automation_tool_is_classified_by_operation(self):
+        cases = {
+            "view": ("allow", "codex.automation_inspection"),
+            "update": ("allow_report", "codex.automation_management"),
+            "create": ("allow_report", "codex.automation_management"),
+            "pause": ("allow_report", "codex.automation_management"),
+            "resume": ("allow_report", "codex.automation_management"),
+            "delete": ("require_capability", "records.delete"),
+        }
+        for mode, (decision_name, policy_id) in cases.items():
+            with self.subTest(mode=mode):
+                decision = evaluate_payload(
+                    {
+                        "tool_name": "codex_appautomation_update",
+                        "tool_input": {"mode": mode},
+                    },
+                    self.engine,
+                )
+                self.assertEqual(decision_name, decision["decision"])
+                self.assertEqual(policy_id, decision["policy_id"])
+
+    def test_codex_automation_tool_fails_closed_without_a_known_operation(self):
+        decision = evaluate_payload(
+            {
+                "tool_name": "codex_appautomation_update",
+                "tool_input": {"mode": "replace_everything"},
+            },
+            self.engine,
+        )
+        self.assertEqual("block_hard", decision["decision"])
+        self.assertEqual("codex.automation_operation_unclassified", decision["policy_id"])
+
     def test_known_web_read_tool_is_allowed(self):
         decision = evaluate_payload({"tool_name": "webrun", "tool_input": {}}, self.engine)
         self.assertEqual("allow", decision["decision"])

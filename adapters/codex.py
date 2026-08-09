@@ -24,6 +24,8 @@ THREAD_INSPECTION_TOOLS = {"codex_applist_threads", "codex_appread_thread", "cod
 THREAD_CREATION_TOOLS = {"codex_appcreate_thread"}
 THREAD_LIFECYCLE_TOOLS = {"codex_appset_thread_archived"}
 THREAD_MESSAGE_TOOLS = {"codex_appsend_message_to_thread"}
+AUTOMATION_TOOLS = {"codex_appautomation_update"}
+AUTOMATION_MANAGEMENT_MODES = {"create", "update", "pause", "resume"}
 COLLABORATION_TOOLS = {"collaborationspawn_agent", "collaborationwait_agent", "collaborationlist_agents"}
 
 
@@ -110,6 +112,15 @@ def evaluate_payload(payload: dict[str, Any], engine: SafeYoloEngine) -> dict[st
         return result("allow_report", "codex.thread_lifecycle", "Reversible thread archival is permitted and reported.")
     if tool_name in THREAD_MESSAGE_TOOLS:
         return result("allow", "codex.thread_message", "Messaging an existing thread is permitted.")
+    if tool_name in AUTOMATION_TOOLS:
+        mode = str(tool_input.get("mode") or "").lower() if isinstance(tool_input, dict) else ""
+        if mode == "view":
+            return result("allow", "codex.automation_inspection", "Existing automation inspection is permitted.")
+        if mode in AUTOMATION_MANAGEMENT_MODES:
+            return result("allow_report", "codex.automation_management", "Reversible automation management is permitted and reported.")
+        if mode == "delete":
+            return engine.evaluate({"action": "records.delete", **context})
+        return result("block_hard", "codex.automation_operation_unclassified", "Unclassified automation operation is blocked.")
     if tool_name in COLLABORATION_TOOLS:
         return result("allow", "codex.collaboration", "Collaboration management is permitted.")
     return result("block_hard", "tool.unclassified", "Unclassified tool with side-effect potential is blocked.")
