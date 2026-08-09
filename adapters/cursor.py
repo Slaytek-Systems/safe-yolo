@@ -16,7 +16,6 @@ WRITE_NAMES = {"write", "strreplace", "editnotebook", "edit_notebook"}
 DELETE_NAMES = {"delete"}
 READ_NAMES = {"read", "grep", "glob", "readdir", "list_dir", "listdir", "semsearch", "read_lints", "readlints"}
 SHELL_NAMES = {"shell", "bash"}
-ALLOW_PREFIXES = ("mcp",)
 ALLOW_NAMES = {
     "task",
     "todowrite",
@@ -127,9 +126,17 @@ def evaluate_cursor_payload(payload: dict[str, Any], engine: SafeYoloEngine) -> 
     normalized = normalize_tool_payload(payload)
     tool_name = str(normalized.get("tool_name") or "").lower()
     original = str(payload.get("tool_name") or "").lower()
+    event = str(payload.get("hook_event_name") or "")
 
-    if original in ALLOW_NAMES or tool_name in ALLOW_NAMES or tool_name.startswith(ALLOW_PREFIXES) or original.startswith(ALLOW_PREFIXES):
-        return result("allow", "cursor.passthrough", "Non-mutating or MCP/tool orchestration is permitted.")
+    if event == "beforeMCPExecution":
+        return result(
+            "block_hard",
+            "tool.unclassified",
+            "Cursor MCP execution requires an explicit consequence contract.",
+        )
+
+    if original in ALLOW_NAMES or tool_name in ALLOW_NAMES:
+        return result("allow", "cursor.passthrough", "Non-mutating tool orchestration is permitted.")
 
     if tool_name in READ_NAMES or original in READ_NAMES:
         tool_input = normalized.get("tool_input") or {}
@@ -155,7 +162,7 @@ def evaluate_cursor_payload(payload: dict[str, Any], engine: SafeYoloEngine) -> 
         normalized["tool_name"] = "Shell"
         return evaluate_payload(normalized, engine)
 
-    return result("allow", "cursor.unknown_allow", "Unrecognized Cursor tool without shell/write shape is allowed.")
+    return evaluate_payload(normalized, engine)
 
 
 def cursor_hook_response(
