@@ -88,7 +88,10 @@ class SafeYoloEngine:
     ):
         self.policy = policy
         self.actions = policy["actions"]
-        self.path_variables = dict(path_variables or {})
+        self.path_variables = {
+            "HOME": str(Path.home()),
+            **dict(path_variables or {}),
+        }
         self.host_contract = dict(host_contract or {})
         protected_paths = [*policy["protected_paths"], *(self.host_contract.get("protected_paths") or [])]
         self.protected_paths = [
@@ -196,17 +199,6 @@ class SafeYoloEngine:
         )
 
     def _condition_met(self, condition: str, request: dict[str, Any]) -> bool:
-        if condition == "safe_feature_push":
-            repository = request.get("repository") or {}
-            validation = request.get("validation") or {}
-            branch = repository.get("branch")
-            return bool(
-                repository.get("remote") == "origin"
-                and branch
-                and branch == repository.get("target_branch")
-                and not repository.get("protected", False)
-                and validation.get("passed") is True
-            )
         if condition == "external_release_contract":
             contract = request.get("external_release_contract") or {}
             required = {
@@ -629,25 +621,33 @@ class SafeYoloEngine:
             return None
         return completed.stdout.strip() if completed.returncode == 0 else None
 
-    def _safe_feature_push(self, positional: list[str], context: dict[str, Any]) -> bool:
+    def _push_branch(self, context: dict[str, Any]) -> str | None:
         cwd = context.get("cwd")
         if not isinstance(cwd, str) or not cwd:
-            return False
-        if positional and positional != ["origin"]:
-            return False
-        branch = self._git_value(["branch", "--show-current"], cwd)
-        if not branch or branch in PROTECTED_BRANCHES or branch.startswith("release/"):
-            return False
-        upstream = self._git_value(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd)
-        if upstream != f"origin/{branch}":
-            return False
-        status = self._git_value(["status", "--porcelain"], cwd)
-        return status == ""
+            return None
+        return self._git_value(["branch", "--show-current"], cwd)
 
     def _inspect_git(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
         filtered = list(args)
-        if filtered[:1] == ["-C"] and len(filtered) >= 3:
-            filtered = filtered[2:]
+        git_context = dict(context)
+        while filtered and (filtered[0] == "-C" or filtered[0].startswith("-C")):
+            if filtered[0] == "-C":
+                if len(filtered) < 2:
+                    return result("block_method", "git.context_missing", "Git -C requires an explicit working directory.")
+                raw_cwd = filtered[1]
+                filtered = filtered[2:]
+            else:
+                raw_cwd = filtered[0][2:]
+                filtered = filtered[1:]
+                if not raw_cwd:
+                    return result("block_method", "git.context_missing", "Git -C requires an explicit working directory.")
+            effective_cwd = Path(raw_cwd).expanduser()
+            if not effective_cwd.is_absolute():
+                base_cwd = git_context.get("cwd")
+                if not isinstance(base_cwd, str) or not base_cwd:
+                    return result("block_method", "git.context_missing", "Relative Git -C requires a known working directory.")
+                effective_cwd = Path(base_cwd) / effective_cwd
+            git_context["cwd"] = str(effective_cwd.resolve(strict=False))
         if not filtered:
             return result("allow", "git.inspect", "Git inspection is permitted.")
         subcommand = filtered[0]
@@ -669,10 +669,18 @@ class SafeYoloEngine:
             return result("block_hard", "git.delete_ref", "Ref deletion is Red.")
         tag = next((arg for arg in positional if TAG_RE.fullmatch(arg) or "refs/tags/" in arg), None)
         if tag:
-            return self.evaluate({"action": "git.push_tag", "target": tag.removeprefix("refs/tags/"), **context})
-        if self._safe_feature_push(positional, context):
-            return result("allow_report", "git.push_feature", "Clean feature branch has matching origin upstream and no force/broad flags.")
-        return self.evaluate({"action": "git.push_feature", **context})
+            return self.evaluate({"action": "git.push_tag", "target": tag.removeprefix("refs/tags/"), **git_context})
+        branch = self._push_branch(git_context)
+        cwd = git_context.get("cwd")
+        if isinstance(cwd, str) and cwd and branch is None:
+            return result(
+                "require_capability",
+                "git.push_protected",
+                "Current branch could not be determined for push classification.",
+            )
+        if branch and (branch in PROTECTED_BRANCHES or branch.startswith("release/")):
+            return self.evaluate({"action": "git.push_protected", "target": branch, **git_context})
+        return self.evaluate({"action": "git.push_feature", **git_context})
 
     def _inspect_gh(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
         if args[:2] == ["pr", "create"]:

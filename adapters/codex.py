@@ -63,7 +63,7 @@ def contains_patch_delete(tool_input: Any) -> bool:
     )
 
 
-def request_context(payload: dict[str, Any]) -> dict[str, Any]:
+def request_context(payload: dict[str, Any], shell_input: dict[str, Any] | None = None) -> dict[str, Any]:
     supplied = payload.get("safe_yolo_context") or {}
     context = dict(supplied) if isinstance(supplied, dict) else {}
     scope = turn_scope(payload)
@@ -72,13 +72,19 @@ def request_context(payload: dict[str, Any]) -> dict[str, Any]:
     cwd = payload.get("cwd")
     if isinstance(cwd, str) and cwd:
         context.setdefault("cwd", cwd)
+    workdir = shell_input.get("workdir") if isinstance(shell_input, dict) else None
+    if isinstance(workdir, str) and workdir:
+        effective = Path(workdir).expanduser()
+        if not effective.is_absolute() and isinstance(cwd, str) and cwd:
+            effective = Path(cwd).expanduser() / effective
+        context["cwd"] = str(effective.resolve(strict=False))
     return context
 
 
 def evaluate_payload(payload: dict[str, Any], engine: SafeYoloEngine) -> dict[str, Any]:
     tool_name = str(payload.get("tool_name") or "").lower()
     tool_input = payload.get("tool_input") or {}
-    context = request_context(payload)
+    context = request_context(payload, tool_input if tool_name in SHELL_TOOLS else None)
     if tool_name in SHELL_TOOLS:
         command = tool_input.get("command") or tool_input.get("cmd") if isinstance(tool_input, dict) else ""
         if not isinstance(command, str) or not command.strip():
