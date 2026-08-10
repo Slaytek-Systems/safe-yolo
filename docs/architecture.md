@@ -13,10 +13,10 @@ Safe YOLO—not approval prompts or any single harness sandbox—is the authorit
 
 ## Constitutional law
 
-Every autonomous mutation must either be demonstrably recoverable or bounded by exact authority. Every potentially unrecoverable consequence must be stopped before execution.
+Every valuable asset must be independently recoverable or protected by exact authority. Safe YOLO governs consequences at the closest reliable boundary instead of trying to prove the internal behaviour of every development command.
 
 - `block_hard` is reserved for unrecoverable destruction, credential exposure or exfiltration, privilege escalation, safety-control-plane tampering, and equivalent consequences.
-- `block_method` rejects an opaque or unclassified route while preserving the objective. It is fail-closed but not a declaration that the intended outcome is forbidden.
+- `block_method` rejects an unclassified tool surface or a mechanism that bypasses an asset boundary while preserving the objective. It is fail-closed but not a declaration that the intended outcome is forbidden.
 - `require_capability` represents exact, scoped, expiring authority. The wire name remains stable for adapter compatibility; semantically it is authority, not a generic escape hatch.
 - `allow_report` is autonomous and auditable. It does not ask the operator to babysit routine work.
 
@@ -33,6 +33,7 @@ Risk colours are policy authoring vocabulary. The stable runtime contract is the
 7. Raw production deploy commands are blocked. A release is permitted only through a repository-specific, externally verifiable contract.
 8. Recoverable removal uses the manifest-pinned quarantine helper and records an append-only restore receipt.
 9. A harness is not certified merely because it declares hooks. Its live failure mode and covered tool surfaces must be proved.
+10. Ordinary repository development is autonomous. Safety comes from recoverable local state and independent boundaries around Git history, credentials, production, services, and durable data—not from maintaining an exhaustive command allowlist.
 
 ## Recovery state
 
@@ -42,7 +43,7 @@ The store is append-only, private to the host user, and capped at 1 GiB per host
 
 Shell commands with mutable or unknown effects take one Git workspace checkpoint per session turn. The checkpoint binds the committed HEAD, a binary patch for dirty tracked state, and hashed copies of non-ignored untracked files and symlinks. Multiple shell calls in the turn reuse the original pre-turn state. Known read-only command shapes remain autonomous outside repositories; output redirects are treated as mutations. Mutable shell work outside a committed Git workspace requires an explicit recovery contract and otherwise fails closed.
 
-This workspace checkpoint is not yet sufficient evidence for opaque command execution: ignored files, paths outside the checkout, network calls, and service state are outside its recovery boundary. The source candidate must not be activated until opaque executables are method-blocked or admitted through an explicit effect-and-recovery contract.
+Git checkpoints cover repository state; they do not claim to recover ignored files, paths outside the checkout, network calls, or service state. Those assets require their own host/provider recovery proof. Explicit isolation remains optional for downloaded or intentionally untrusted code, not the default route for ordinary repository work.
 
 Version 1.1.0 remains a source candidate until the adapters pass live hook-failure, checkpoint, non-obstruction, and cross-host conformance probes.
 
@@ -58,6 +59,7 @@ Version 1.1.0 remains a source candidate until the adapters pass live hook-failu
 - No security guarantee against a malicious local account outside Codex’s controlled tool path.
 - No automatic harness update from an agent session.
 - No generic escape hatches, slash-command overrides, or arbitrary command allowlists for Red actions.
+- No universal transaction broker or attempt to model every executable before ordinary development can proceed.
 
 ## Harness certification
 

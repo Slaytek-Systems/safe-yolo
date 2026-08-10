@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 import tomllib
 import sys
 from typing import Any
@@ -11,6 +12,60 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.release_manifest import ENTRYPOINTS, verify_manifest
+
+
+def inspect_macos_asset_recovery(
+    safe_yolo_home: str | Path,
+    *,
+    run: Any = subprocess.run,
+) -> dict[str, Any]:
+    """Report recovery facts without exposing backup destinations or file contents."""
+    problems: list[str] = []
+
+    def tmutil(*args: str) -> subprocess.CompletedProcess[str]:
+        try:
+            return run(["tmutil", *args], capture_output=True, text=True, check=False, timeout=5)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            return subprocess.CompletedProcess(["tmutil", *args], 1, "", type(error).__name__)
+
+    destination = tmutil("destinationinfo")
+    destination_text = f"{destination.stdout}\n{destination.stderr}"
+    destination_configured = (
+        destination.returncode == 0
+        and bool(destination.stdout.strip())
+        and "No destinations configured" not in destination_text
+    )
+    if not destination_configured:
+        problems.append("no macOS backup destination is configured")
+
+    latest = tmutil("latestbackup")
+    completed_backup = latest.returncode == 0 and bool(latest.stdout.strip())
+    if not completed_backup:
+        problems.append("no completed macOS backup is available")
+
+    snapshots = tmutil("listlocalsnapshots", "/")
+    data_snapshots = [
+        line.strip()
+        for line in snapshots.stdout.splitlines()
+        if line.strip().startswith("com.apple.TimeMachine.")
+    ]
+
+    home = Path(safe_yolo_home).expanduser().resolve(strict=False)
+    private_state = True
+    for name in ("state", "backups", "releases"):
+        directory = home / name
+        if not directory.is_dir() or directory.stat().st_mode & 0o077:
+            private_state = False
+            problems.append(f"Safe YOLO {name} must exist and be private to the host user")
+
+    return {
+        "healthy": not problems,
+        "backup_destination_configured": destination_configured,
+        "completed_backup_present": completed_backup,
+        "local_data_snapshot_count": len(data_snapshots),
+        "safe_yolo_state_private": private_state,
+        "problems": problems,
+    }
 
 
 def inspect_release(release_dir: str | Path, expected_manifest_hash: str | None = None) -> dict[str, Any]:
@@ -97,8 +152,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Read-only Safe YOLO release health check.")
     parser.add_argument("--release", type=Path, required=True)
     parser.add_argument("--manifest-sha256")
+    parser.add_argument("--macos-asset-recovery-home", type=Path)
     args = parser.parse_args()
-    print(json.dumps(inspect_release(args.release, args.manifest_sha256), sort_keys=True))
+    report = inspect_release(args.release, args.manifest_sha256)
+    if args.macos_asset_recovery_home is not None:
+        report["asset_recovery"] = inspect_macos_asset_recovery(args.macos_asset_recovery_home)
+    print(json.dumps(report, sort_keys=True))
     return 0
 
 

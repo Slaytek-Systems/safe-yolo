@@ -29,6 +29,10 @@
 {"id":"remote_shell","command":"ssh production.example.com","expected":"require_capability"}
 {"id":"unknown_bunx","command":"bunx unknown-package --help","expected":"block_method","context":{"local_bins":[]}}
 {"id":"local_bunx","command":"bunx eslint .","expected":"allow","context":{"local_bins":["eslint"]}}
+{"id":"ordinary_bun_test","command":"bun test","expected":"allow"}
+{"id":"ordinary_package_script","command":"bun run build","expected":"allow"}
+{"id":"ordinary_make_target","command":"make test","expected":"allow"}
+{"id":"ordinary_just_recipe","command":"just check","expected":"allow"}
 {"id":"safe_feature_push","command":"git push -u origin HEAD:feature/safe-yolo","expected":"allow_report"}
 {"id":"tag_push","command":"git push origin v1.2.3","expected":"block_hard"}
 {"id":"full_pr_create","command":"gh pr create --base main --head feature/safe-yolo --title safe-yolo","expected":"allow_report"}

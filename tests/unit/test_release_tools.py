@@ -1,11 +1,13 @@
 import json
+import os
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import unittest
 
 from scripts.bootstrap import verified_entry
-from scripts.doctor import inspect_codex_wiring, inspect_cursor_wiring, inspect_release
+from scripts.doctor import inspect_codex_wiring, inspect_cursor_wiring, inspect_macos_asset_recovery, inspect_release
 from scripts.release_manifest import build_manifest, manifest_digest, verify_manifest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -84,6 +86,35 @@ class ReleaseToolTests(unittest.TestCase):
         report = inspect_cursor_wiring(hooks, "/safe-yolo/bootstrap.py", "expected")
         self.assertFalse(report["healthy"])
         self.assertTrue(any("failClosed" in problem for problem in report["problems"]))
+
+    def test_macos_asset_recovery_requires_a_completed_backup_and_private_state(self):
+        safe_yolo_home = Path(self.temp.name) / "safe-yolo"
+        for name in ("state", "backups", "releases"):
+            directory = safe_yolo_home / name
+            directory.mkdir(parents=True)
+            os.chmod(directory, 0o700)
+
+        outputs = iter((
+            subprocess.CompletedProcess([], 0, "Name : Backup\n", ""),
+            subprocess.CompletedProcess([], 0, "/Volumes/Backup/Backups.backupdb/latest\n", ""),
+            subprocess.CompletedProcess([], 0, "Snapshots for volume group containing disk /:\n", ""),
+        ))
+        healthy = inspect_macos_asset_recovery(safe_yolo_home, run=lambda *_args, **_kwargs: next(outputs))
+        self.assertTrue(healthy["healthy"], healthy["problems"])
+        self.assertTrue(healthy["backup_destination_configured"])
+        self.assertTrue(healthy["completed_backup_present"])
+
+        outputs = iter((
+            subprocess.CompletedProcess([], 0, "", "tmutil: No destinations configured.\n"),
+            subprocess.CompletedProcess([], 1, "", "No backups found\n"),
+            subprocess.CompletedProcess([], 0, "Snapshots for volume group containing disk /:\ncom.apple.os.update-example\n", ""),
+        ))
+        os.chmod(safe_yolo_home / "state", 0o755)
+        unhealthy = inspect_macos_asset_recovery(safe_yolo_home, run=lambda *_args, **_kwargs: next(outputs))
+        self.assertFalse(unhealthy["healthy"])
+        self.assertFalse(unhealthy["backup_destination_configured"])
+        self.assertFalse(unhealthy["completed_backup_present"])
+        self.assertTrue(any("private" in problem for problem in unhealthy["problems"]))
 
 
 if __name__ == "__main__":

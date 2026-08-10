@@ -25,7 +25,7 @@ Use the richer Mac v0.2 action vocabulary as the starting schema, retain devboxâ
 
 1. Move Mac's safe feature-push constraints (same repository, named non-protected branch, `origin`, no force/broad flags) into common conformance cases.
 2. Keep Fallow as a separate deterministic quality gate, not a safety override. Define when it is required and how its result is recorded.
-3. Preserve Mac's package-manager, inline-interpreter, shebang-script, and opaque-shell method blocks where the consequence cannot be classified.
+3. Remove inherited package-manager and repository-script friction where an independent asset boundary owns the risk. Retain method blocks for inline mutation of protected control-plane paths and explicitly untrusted execution.
 4. Reconcile project-specific workspace launchers into declarative, repository-scoped contracts; do not hard-code one client/project into the global engine.
 
 ## P2 â€” Codex compatibility
@@ -47,3 +47,4 @@ Use the richer Mac v0.2 action vocabulary as the starting schema, retain devboxâ
 - Runtime audit logs, session state, credentials, Codex databases, and caches remain outside source control.
 - No agent-driven self-update path.
 - No generic human-text or slash-command bypass for Red actions.
+- No universal per-command transaction layer; prove recovery and authority at the asset boundary first.
