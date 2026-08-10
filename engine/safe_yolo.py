@@ -72,6 +72,10 @@ SYSTEM_RED_EXECUTABLES = {
     "osascript",
 }
 REMOTE_EXECUTABLES = {"ssh", "scp", "rsync"}
+READ_ONLY_EXECUTABLES = {
+    "cat", "date", "df", "du", "file", "find", "grep", "head", "id", "ls",
+    "pwd", "rg", "stat", "tail", "type", "uname", "wc", "whereis", "which", "whoami",
+}
 
 
 def result(decision: str, policy_id: str, reason: str, **extra: Any) -> dict[str, Any]:
@@ -269,11 +273,15 @@ class SafeYoloEngine:
         except ValueError as error:
             return result("block_method", "shell.unparseable", f"Command could not be safely parsed: {error}")
 
+        all_read_only = True
         for segment in self._segments(tokens):
             inspected = self._inspect_segment(segment, context)
             if inspected["decision"] != "allow":
                 return inspected
-        return result("allow", "shell.ordinary", "No restricted consequence detected.")
+            all_read_only = all_read_only and inspected.get("effect") == "read"
+        if all_read_only:
+            return result("allow", "shell.inspection", "Command is classified as read-only inspection.", effect="read")
+        return result("allow", "shell.ordinary", "No restricted consequence detected.", effect="mutable_or_unknown")
 
     def inspect_path_write(self, raw_path: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
         context = context or {}
@@ -361,6 +369,7 @@ class SafeYoloEngine:
         redirect = self._protected_redirect(tokens, context)
         if redirect:
             return redirect
+        has_output_redirect = any(token and set(token) <= {">"} for token in tokens)
 
         if executable in SHELLS:
             wrapped = self._wrapped_command(args)
@@ -372,6 +381,8 @@ class SafeYoloEngine:
                     "shell.unclassified",
                     "Script effects are not proven; preserve the objective and use a reviewed launcher or direct inspectable command.",
                 )
+            if args[:1] in (["-n"], ["--version"], ["--help"], ["-h"]) and not has_output_redirect:
+                return result("allow", "shell.validation", "Shell validation or help is read-only.", effect="read")
 
         if executable in {"command", "builtin", "exec"} and args:
             return self._inspect_segment(args, context)
@@ -397,6 +408,11 @@ class SafeYoloEngine:
 
         if executable == "find" and any(arg in {"-delete", "-exec", "-execdir", "-ok", "-okdir"} for arg in args):
             return result("block_hard", "filesystem.delete", "Destructive find actions are Red; use a bounded reviewable method.")
+
+        if executable in READ_ONLY_EXECUTABLES and not has_output_redirect:
+            return result("allow", "shell.inspection", f"{executable} is read-only in this command shape.", effect="read")
+        if executable == "sed" and not has_output_redirect and any(arg == "-n" or (arg.startswith("-") and "n" in arg[1:]) for arg in args) and not any(arg == "-i" or arg.startswith("--in-place") for arg in args):
+            return result("allow", "shell.inspection", "sed print-only inspection is read-only.", effect="read")
 
         if executable in {"cp", "mv", "install", "tee"}:
             path_arguments = [arg for arg in args if not arg.startswith("-")]
@@ -428,6 +444,8 @@ class SafeYoloEngine:
                     "shell.unclassified_interpreter",
                     "Interpreter effects are not proven; preserve the objective and use a reviewed launcher, module contract, or structured tool.",
                 )
+            if not has_output_redirect and (args[:1] in (["--version"], ["--help"], ["-h"]) or executable == "node" and args[:1] == ["--check"]):
+                return result("allow", "shell.inspection", "Interpreter inspection or syntax validation is read-only.", effect="read")
         if executable == "bun":
             inline = self._inline_program(executable, args)
             if inline is not None and self._looks_mutating(inline):
@@ -442,7 +460,7 @@ class SafeYoloEngine:
         if tokens[0].startswith("./"):
             return result("block_method", "workspace.lifecycle", "Project launchers require a tracked repository contract.")
         if executable == "git":
-            return self._inspect_git(args, context)
+            return self._inspect_git(args, {**context, "shell_output_redirect": has_output_redirect})
         if executable == "gh":
             return self._inspect_gh(args, context)
         if executable == "core-edge":
@@ -707,13 +725,16 @@ class SafeYoloEngine:
                 effective_cwd = Path(base_cwd) / effective_cwd
             git_context["cwd"] = str(effective_cwd.resolve(strict=False))
         if not filtered:
-            return result("allow", "git.inspect", "Git inspection is permitted.")
+            return result("allow", "git.inspect", "Git inspection is permitted.", effect="read")
         subcommand = filtered[0]
         rest = filtered[1:]
         if subcommand in DESTRUCTIVE_GIT:
             return result("block_hard", f"git.{subcommand}", "Git work loss or history rewrite is Red.")
         if subcommand == "checkout" and any(arg in {"--", "."} for arg in rest):
             return result("block_hard", "git.discard_work", "Checkout cannot discard working-tree changes.")
+        read_only_git = {"diff", "log", "show", "status", "rev-parse", "ls-files", "describe", "merge-base"}
+        if not context.get("shell_output_redirect") and (subcommand in read_only_git or subcommand == "branch" and not any(arg and not arg.startswith("-") for arg in rest)):
+            return result("allow", "git.inspect", "Git inspection is permitted.", effect="read")
         if subcommand != "push":
             return result("allow", "git.ordinary", "Git operation is permitted.")
         if any(arg in FORCE_FLAGS or arg.startswith("--force=") for arg in rest):
@@ -816,7 +837,9 @@ class SafeYoloEngine:
                 return result("block_hard", "network.metadata", "Cloud metadata endpoints are Red.")
             if host in PRIVATE_HOSTS or host.startswith("10.") or host.startswith("192.168.") or host.startswith("172.16."):
                 return result("require_capability", "network.private_read", "Private or local network access requires a scoped capability.")
-        return result("allow", "network.public_read", "Literal credential-free public read is Green.")
+        if any(arg in {"-o", "--output", "-O", "--output-document"} or arg.startswith("--output=") for arg in args):
+            return result("allow", "network.public_download", "Public download writes a local target.", effect="mutable")
+        return result("allow", "network.public_read", "Literal credential-free public read is Green.", effect="read")
 
 
 def main() -> int:

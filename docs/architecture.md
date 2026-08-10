@@ -40,7 +40,9 @@ Structured Codex and Cursor writes checkpoint every exact target before the adap
 
 The store is append-only and capped at 1 GiB per host. Reaching the cap blocks further structured writes rather than deleting recovery evidence or exhausting the disk silently.
 
-Shell-driven mutations do not yet have a general workspace checkpoint. Until that separate tracer is implemented and certified, version 1.1.0 remains a source candidate rather than an activation-ready claim of universal recoverability.
+Shell commands with mutable or unknown effects take one Git workspace checkpoint per session turn. The checkpoint binds the committed HEAD, a binary patch for dirty tracked state, and hashed copies of non-ignored untracked files and symlinks. Multiple shell calls in the turn reuse the original pre-turn state. Known read-only command shapes remain autonomous outside repositories; output redirects are treated as mutations. Mutable shell work outside a committed Git workspace requires an explicit recovery contract and otherwise fails closed.
+
+Version 1.1.0 remains a source candidate until the adapters pass live hook-failure, checkpoint, non-obstruction, and cross-host conformance probes.
 
 ## Trust boundaries
 

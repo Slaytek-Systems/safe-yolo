@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import time
 import uuid
 import sys
@@ -99,14 +100,114 @@ class FileCheckpointStore:
         os.chmod(manifest_path, 0o600)
         return manifest
 
+    def checkpoint_workspace(
+        self,
+        *,
+        cwd: str | Path,
+        session_id: str = "",
+        turn_id: str = "",
+    ) -> dict[str, object]:
+        working = Path(cwd).expanduser().resolve(strict=True)
+        root_result = self._git(["rev-parse", "--show-toplevel"], working)
+        if root_result.returncode != 0 or not root_result.stdout.strip():
+            raise RecoveryUnavailable("Shell mutation requires a Git workspace recovery boundary.")
+        workspace = Path(root_result.stdout.decode("utf-8").strip()).resolve(strict=True)
+        scope = f"{session_id}\0{turn_id}\0{workspace}" if session_id or turn_id else f"{uuid.uuid4().hex}\0{workspace}"
+        identifier = hashlib.sha256(scope.encode("utf-8")).hexdigest()
+        checkpoint = self.root / "workspace-checkpoints" / identifier
+        manifest_path = checkpoint / "manifest.json"
+        if manifest_path.is_file():
+            return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        head = self._git(["rev-parse", "HEAD"], workspace)
+        if head.returncode != 0 or not head.stdout.strip():
+            raise RecoveryUnavailable("Workspace must have a committed HEAD before shell execution.")
+        diff = self._git(["diff", "--binary", "HEAD", "--"], workspace)
+        if diff.returncode != 0:
+            raise RecoveryUnavailable("Tracked workspace state could not be checkpointed.")
+        untracked_result = self._git(["ls-files", "--others", "--exclude-standard", "-z"], workspace)
+        if untracked_result.returncode != 0:
+            raise RecoveryUnavailable("Untracked workspace state could not be enumerated.")
+
+        sources: list[tuple[Path, str]] = []
+        incoming_bytes = len(diff.stdout)
+        for raw in (item for item in untracked_result.stdout.split(b"\0") if item):
+            relative = raw.decode("utf-8", errors="strict")
+            source = (workspace / relative).resolve(strict=False)
+            if workspace not in source.parents:
+                raise RecoveryUnavailable("Untracked recovery target escaped the workspace.")
+            if source.is_symlink():
+                incoming_bytes += len(os.readlink(source).encode("utf-8"))
+            elif source.is_file():
+                size = source.stat().st_size
+                if size > self.max_file_bytes:
+                    raise RecoveryUnavailable(f"Untracked recovery target exceeds {self.max_file_bytes} bytes: {source}")
+                incoming_bytes += size
+            else:
+                raise RecoveryUnavailable(f"Untracked directory or special file requires an explicit contract: {source}")
+            sources.append((source, relative))
+        if self._stored_bytes() + incoming_bytes > self.max_total_bytes:
+            raise RecoveryUnavailable("Recovery store capacity reached; archive checkpoints before further shell use.")
+
+        temporary = checkpoint.with_name(f".{identifier}.{uuid.uuid4().hex}")
+        objects = temporary / "untracked"
+        objects.mkdir(parents=True, mode=0o700)
+        (temporary / "tracked.patch").write_bytes(diff.stdout)
+        records: list[dict[str, object]] = []
+        try:
+            for index, (source, relative) in enumerate(sources):
+                record: dict[str, object] = {"path": relative}
+                if source.is_symlink():
+                    record.update({"kind": "symlink", "link_target": os.readlink(source)})
+                else:
+                    stored = objects / str(index)
+                    shutil.copy2(source, stored)
+                    record.update({"kind": "file", "size": stored.stat().st_size, "sha256": self._sha256(stored), "stored": str(stored.relative_to(temporary))})
+                records.append(record)
+            manifest = {
+                "id": identifier,
+                "kind": "workspace",
+                "created_at": time.time(),
+                "cwd": str(working),
+                "workspace": str(workspace),
+                "head": head.stdout.decode("utf-8").strip(),
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "tracked_patch_sha256": self._sha256(temporary / "tracked.patch"),
+                "untracked": records,
+            }
+            (temporary / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            (self.root / "workspace-checkpoints").mkdir(parents=True, mode=0o700, exist_ok=True)
+            try:
+                os.replace(temporary, checkpoint)
+            except OSError:
+                if not manifest_path.is_file():
+                    raise
+                shutil.rmtree(temporary, ignore_errors=True)
+                return json.loads(manifest_path.read_text(encoding="utf-8"))
+            return manifest
+        except Exception:
+            shutil.rmtree(temporary, ignore_errors=True)
+            raise
+
     def materialize(self, identifier: str, destination: str | Path) -> Path:
         checkpoint = self.root / "checkpoints" / identifier
+        if not checkpoint.is_dir():
+            checkpoint = self.root / "workspace-checkpoints" / identifier
         manifest = json.loads((checkpoint / "manifest.json").read_text(encoding="utf-8"))
         output = Path(destination).expanduser().resolve(strict=False)
         if output.exists():
             raise FileExistsError(f"Recovery materialization destination exists: {output}")
         output.mkdir(parents=True, mode=0o700)
-        for index, record in enumerate(manifest["targets"]):
+        if manifest.get("kind") == "workspace":
+            patch = checkpoint / "tracked.patch"
+            if self._sha256(patch) != manifest["tracked_patch_sha256"]:
+                raise RecoveryUnavailable(f"Workspace patch failed verification: {identifier}")
+            shutil.copy2(patch, output / "tracked.patch")
+            records = manifest.get("untracked") or []
+        else:
+            records = manifest["targets"]
+        for index, record in enumerate(records):
             target = output / str(index)
             target.mkdir(mode=0o700)
             (target / "metadata.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -120,11 +221,12 @@ class FileCheckpointStore:
         return output
 
     def list_checkpoints(self) -> list[dict[str, object]]:
-        manifests = self.root / "checkpoints"
-        if not manifests.exists():
-            return []
         records: list[dict[str, object]] = []
-        for manifest in sorted(manifests.glob("*/manifest.json")):
+        manifests = [
+            *(self.root / "checkpoints").glob("*/manifest.json"),
+            *(self.root / "workspace-checkpoints").glob("*/manifest.json"),
+        ]
+        for manifest in sorted(manifests):
             try:
                 record = json.loads(manifest.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
@@ -134,7 +236,8 @@ class FileCheckpointStore:
                 "created_at": record.get("created_at"),
                 "session_id": record.get("session_id"),
                 "turn_id": record.get("turn_id"),
-                "target_count": len(record.get("targets") or []),
+                "kind": record.get("kind", "paths"),
+                "target_count": len(record.get("targets") or record.get("untracked") or []),
             })
         return records
 
@@ -142,6 +245,13 @@ class FileCheckpointStore:
         if not self.root.exists():
             return 0
         return sum(path.stat().st_size for path in self.root.rglob("*") if path.is_file())
+
+    @staticmethod
+    def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[bytes]:
+        try:
+            return subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=False, timeout=5)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise RecoveryUnavailable(f"Git recovery probe failed ({type(error).__name__}).") from error
 
     @staticmethod
     def _resolve(raw_path: str, cwd: Path) -> Path:

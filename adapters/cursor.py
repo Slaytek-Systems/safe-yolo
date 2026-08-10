@@ -207,26 +207,33 @@ def process_cursor_payload(
     event = str(payload.get("hook_event_name") or "")
     normalized = normalize_tool_payload(payload)
     decision = evaluate_cursor_payload(payload, engine)
-    if recovery_store is not None and decision["decision"] in {"allow", "allow_report"}:
+    if recovery_store is not None and decision["decision"] in {"allow", "allow_report"} and decision.get("effect") != "read":
         tool_name = str(normalized.get("tool_name") or "").lower()
-        if tool_name in WRITE_TOOLS:
+        if tool_name in WRITE_TOOLS or tool_name in SHELL_NAMES:
             context = request_context(normalized)
             cwd = context.get("cwd")
             try:
                 if not isinstance(cwd, str) or not cwd:
-                    raise RecoveryUnavailable("Structured write requires a known working directory.")
-                checkpoint = recovery_store.checkpoint(
-                    candidate_write_paths(normalized.get("tool_input") or {}),
-                    cwd=cwd,
-                    session_id=str(normalized.get("session_id") or ""),
-                    turn_id=str(normalized.get("turn_id") or ""),
-                )
+                    raise RecoveryUnavailable("Mutating tools require a known working directory.")
+                if tool_name in SHELL_NAMES:
+                    checkpoint = recovery_store.checkpoint_workspace(
+                        cwd=cwd,
+                        session_id=str(normalized.get("session_id") or ""),
+                        turn_id=str(normalized.get("turn_id") or ""),
+                    )
+                else:
+                    checkpoint = recovery_store.checkpoint(
+                        candidate_write_paths(normalized.get("tool_input") or {}),
+                        cwd=cwd,
+                        session_id=str(normalized.get("session_id") or ""),
+                        turn_id=str(normalized.get("turn_id") or ""),
+                    )
                 decision = {**decision, "recovery_id": checkpoint["id"]}
             except (OSError, ValueError, RecoveryUnavailable) as error:
                 decision = result(
                     "block_method",
                     "recovery.unavailable",
-                    f"Structured write was not run because its checkpoint failed ({type(error).__name__}).",
+                    f"Tool was not run because its recovery checkpoint failed ({type(error).__name__}).",
                 )
     pending = None
     request = decision.get("maintenance_request")
