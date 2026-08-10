@@ -58,6 +58,25 @@ class MacOSHostFactsTests(unittest.TestCase):
         self.assertEqual("allow_report", decision["decision"])
         self.assertEqual("remote.safe_yolo_inspection", decision["policy_id"])
 
+    def test_exact_proxmox_recovery_inspection_commands_are_allowed(self):
+        host_contract = json.loads((ROOT / "hosts" / "macos" / "macos.contract.json").read_text())
+        engine = SafeYoloEngine(
+            json.loads((ROOT / "policy" / "policy.json").read_text()),
+            path_variables={"HOME": "/Users/test", "SAFE_YOLO_HOME": "/opt/safe-yolo", "CODEX_HOME": "/Users/test/.codex"},
+            host_contract=host_contract,
+        )
+        for command in (
+            "ssh -n slaytek-lab pvesh get /cluster/resources --output-format json",
+            "ssh -n slaytek-lab pvesh get /cluster/backup --output-format json",
+        ):
+            with self.subTest(command=command):
+                decision = engine.inspect_command(command, {})
+                self.assertEqual("allow_report", decision["decision"])
+                self.assertEqual("remote.proxmox_recovery_inspection", decision["policy_id"])
+
+        mutation = engine.inspect_command("ssh -n slaytek-lab pvesh create /cluster/backup", {})
+        self.assertEqual("require_capability", mutation["decision"])
+
     def test_keychain_commands_are_credential_exposure(self):
         decision = self.engine.inspect_command("security find-generic-password -s Codex")
         self.assertEqual("block_hard", decision["decision"])

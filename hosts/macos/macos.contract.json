@@ -37,6 +37,20 @@
       "effect": "maintenance",
       "policy_id": "remote.safe_yolo_maintenance",
       "reason": "Exact manifest-verified Safe YOLO release updater on devbox is permitted and audited."
+    },
+    {
+      "host": "slaytek-lab",
+      "command": ["pvesh", "get", "/cluster/resources", "--output-format", "json"],
+      "effect": "inspection",
+      "policy_id": "remote.proxmox_recovery_inspection",
+      "reason": "Exact read-only Proxmox cluster resource inventory is permitted for recovery certification."
+    },
+    {
+      "host": "slaytek-lab",
+      "command": ["pvesh", "get", "/cluster/backup", "--output-format", "json"],
+      "effect": "inspection",
+      "policy_id": "remote.proxmox_recovery_inspection",
+      "reason": "Exact read-only Proxmox backup job inventory is permitted for recovery certification."
     }
   ]
 }
