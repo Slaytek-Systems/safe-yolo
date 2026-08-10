@@ -100,14 +100,29 @@ class PendingMaintenanceStore:
         self.root.mkdir(parents=True, exist_ok=True)
         os.chmod(self.root, 0o700)
 
-    def request(self, *, session_id: str, harness: str, scopes: list[str], ttl_seconds: int = 15 * 60) -> dict[str, Any]:
-        if not session_id or not harness or not scopes or ttl_seconds <= 0:
+    def request(
+        self,
+        *,
+        session_id: str,
+        harness: str,
+        scopes: list[str],
+        kind: str = "maintenance",
+        ttl_seconds: int = 15 * 60,
+    ) -> dict[str, Any]:
+        if (
+            not session_id
+            or not harness
+            or not scopes
+            or kind not in {"maintenance", "policy_maintenance"}
+            or ttl_seconds <= 0
+        ):
             raise ValueError("Pending maintenance requires session, harness, scopes, and positive TTL.")
         self._prepare_root()
         now = time.time()
         record = {
             "id": secrets.token_urlsafe(24),
             "session_id": session_id,
+            "kind": kind,
             "harness": harness,
             "scopes": sorted(set(scopes)),
             "issued_at": now,
@@ -127,7 +142,11 @@ class PendingMaintenanceStore:
                 record = json.loads(target.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 continue
-            if record.get("session_id") != session_id or record.get("consumed_at") or record.get("expires_at", 0) <= time.time():
+            if (
+                record.get("session_id") != session_id
+                or record.get("consumed_at")
+                or record.get("expires_at", 0) <= time.time()
+            ):
                 continue
             record["consumed_at"] = time.time()
             target.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")

@@ -238,11 +238,15 @@ class SafeYoloEngine:
             capability = self._resolved_capability(request)
             constraints = capability.get("constraints") if capability else {}
             policy_ids = set(request.get("policy_ids") or [])
+            targets = set(request.get("targets") or [])
+            scopes = set(constraints.get("scopes") or [])
             return bool(
                 capability
                 and capability.get("kind") == "policy_maintenance"
-                and policy_ids
-                and policy_ids <= set(constraints.get("policy_ids") or [])
+                and constraints.get("harness") == request.get("harness")
+                and targets
+                and targets <= scopes
+                and (not policy_ids or policy_ids <= set(constraints.get("policy_ids") or []))
             )
         return False
 
@@ -290,15 +294,19 @@ class SafeYoloEngine:
             return result("allow", "filesystem.write", "Write target is not protected.")
         action = rule["action"]
         request = {"action": action, **context}
-        if action == "harness.modify":
+        if action in {"harness.modify", "harness.modify_policy"}:
             request.update({"harness": rule["harness"], "targets": [rule["scope"]]})
-        elif action == "harness.modify_policy":
+        if action == "harness.modify_policy":
             request.setdefault("policy_ids", context.get("policy_ids") or [])
         decision = self.evaluate(request)
-        if decision["decision"] == "require_capability" and action == "harness.modify":
+        if decision["decision"] == "require_capability" and action in {"harness.modify", "harness.modify_policy"}:
             return {
                 **decision,
-                "maintenance_request": {"harness": rule["harness"], "scopes": [rule["scope"]]},
+                "maintenance_request": {
+                    "kind": "policy_maintenance" if action == "harness.modify_policy" else "maintenance",
+                    "harness": rule["harness"],
+                    "scopes": [rule["scope"]],
+                },
             }
         return decision
 

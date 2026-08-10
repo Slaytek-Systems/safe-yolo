@@ -34,7 +34,12 @@ def _copy_release(source: Path, staging: Path) -> None:
     shutil.copy2(source / "VERSION", staging / "VERSION")
 
 
-def install_release(source_dir: str | Path, safe_yolo_home: str | Path) -> dict[str, Any]:
+def install_release(
+    source_dir: str | Path,
+    safe_yolo_home: str | Path,
+    *,
+    allow_bootstrap_mismatch: bool = False,
+) -> dict[str, Any]:
     """Create one immutable versioned release; never changes Codex config or hooks."""
     source = Path(source_dir).resolve()
     home = Path(safe_yolo_home).expanduser().resolve(strict=False)
@@ -47,7 +52,7 @@ def install_release(source_dir: str | Path, safe_yolo_home: str | Path) -> dict[
         raise FileExistsError(f"Safe YOLO release already exists: {target}")
     bootstrap_source = source / "scripts" / "bootstrap.py"
     bootstrap_target = home / "bootstrap.py"
-    if bootstrap_target.exists() and _sha256(bootstrap_target) != _sha256(bootstrap_source):
+    if bootstrap_target.exists() and _sha256(bootstrap_target) != _sha256(bootstrap_source) and not allow_bootstrap_mismatch:
         raise FileExistsError("Existing bootstrap differs; replace it only through explicit maintenance.")
     releases.mkdir(parents=True, exist_ok=True)
     os.chmod(home, 0o700)

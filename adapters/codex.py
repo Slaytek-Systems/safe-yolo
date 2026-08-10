@@ -195,7 +195,12 @@ def process_payload(
     request = decision.get("maintenance_request")
     session_id = str(payload.get("session_id") or "")
     if isinstance(request, dict) and pending_store is not None and session_id:
-        pending = pending_store.request(session_id=session_id, harness=str(request["harness"]), scopes=list(request["scopes"]))
+        pending = pending_store.request(
+            session_id=session_id,
+            kind=str(request.get("kind") or "maintenance"),
+            harness=str(request["harness"]),
+            scopes=list(request["scopes"]),
+        )
     audit_warning = None
     if audit_log is not None:
         try:

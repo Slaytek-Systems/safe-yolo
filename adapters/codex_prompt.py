@@ -32,14 +32,15 @@ def authorize_prompt(
     if pending is None:
         return None
     scoped_session = turn_scope(payload)
+    kind = str(pending.get("kind") or "maintenance")
     store.issue(
-        kind="maintenance",
+        kind=kind,
         session_id=scoped_session,
         constraints={"harness": pending["harness"], "scopes": pending["scopes"]},
         ttl_seconds=TTL_SECONDS,
         user_authorized=True,
     )
-    return {"kind": "maintenance", "harness": pending["harness"], "scopes": pending["scopes"]}
+    return {"kind": kind, "harness": pending["harness"], "scopes": pending["scopes"]}
 
 
 def main() -> int:

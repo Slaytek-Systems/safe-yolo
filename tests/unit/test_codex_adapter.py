@@ -163,6 +163,40 @@ class CodexAdapterTests(unittest.TestCase):
         allowed = evaluate_payload(retry, self.engine)
         self.assertEqual("allow_report", allowed["decision"])
 
+    def test_policy_maintenance_approval_mints_the_stronger_exact_capability(self):
+        first = {
+            "tool_name": "apply_patch",
+            "session_id": "policy-session",
+            "turn_id": "policy-turn-1",
+            "tool_input": {"path": "/opt/safe-yolo/releases/1.1.0/manifest.json"},
+        }
+        denied = process_payload(first, self.engine, pending_store=self.pending)
+        self.assertEqual("block", denied["decision"])
+
+        authorization = authorize_prompt(
+            {"session_id": "policy-session", "turn_id": "policy-turn-2", "prompt": "approve"},
+            self.store,
+            self.pending,
+        )
+        self.assertEqual("policy_maintenance", authorization["kind"])
+
+        allowed = evaluate_payload({**first, "turn_id": "policy-turn-2"}, self.engine)
+        self.assertEqual("allow_report", allowed["decision"])
+
+    def test_generic_maintenance_cannot_authorize_policy_release_changes(self):
+        token = self.store.issue(
+            kind="maintenance",
+            session_id="session",
+            constraints={"harness": "safe-yolo", "scopes": ["release"]},
+            ttl_seconds=60,
+            user_authorized=True,
+        )
+        decision = self.engine.inspect_path_write(
+            "/opt/safe-yolo/releases/1.1.0/policy/policy.json",
+            {"session_id": "session", "capability_token": token},
+        )
+        self.assertEqual("require_capability", decision["decision"])
+
 
 if __name__ == "__main__":
     unittest.main()
