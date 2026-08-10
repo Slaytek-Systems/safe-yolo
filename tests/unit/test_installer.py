@@ -1,5 +1,7 @@
 from pathlib import Path
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -29,6 +31,16 @@ class InstallerTests(unittest.TestCase):
         install_release(ROOT, self.home)
         with self.assertRaises(FileExistsError):
             install_release(ROOT, self.home)
+
+    def test_macos_cutover_script_is_directly_executable_by_python(self):
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "cutover_macos.py"), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("--codex-home", result.stdout)
 
     def test_atomic_macos_cutover_preserves_rollback_and_repins_exact_hooks(self):
         codex = Path(self.temp.name) / "codex"
