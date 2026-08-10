@@ -46,6 +46,9 @@ class FeaturePushTests(unittest.TestCase):
     def test_feature_branch_bare_push_is_allowed(self):
         self.assert_push_allowed("git push")
 
+    def test_initial_feature_push_does_not_require_a_preexisting_upstream(self):
+        self.assert_push_allowed("git push -u origin feat/consequence-kernel")
+
     def test_feature_branch_set_upstream_shapes_are_allowed(self):
         for command in (
             "git push -u origin task/repair-0160-attestation",

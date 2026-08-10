@@ -6,7 +6,7 @@ Safe YOLO deliberately pairs full local autonomy with consequence-based hard bou
 
 ## Status
 
-Codex is active on macOS and devbox through manifest-pinned releases. Cursor has a shared-engine adapter and fail-closed wiring contract; each host still requires live certification after activation. Source state is not activation evidence.
+Codex is active on macOS and devbox through older manifest-pinned releases. Version 1.1.0 is a source candidate with structured-write checkpoints and a Cursor fail-closed wiring contract; it is not activation-ready until shell recovery and live host certification pass. Source state is not activation evidence.
 
 ## Design
 

@@ -7,8 +7,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from adapters.codex import append_audit_record, evaluate_payload
+from adapters.codex import WRITE_TOOLS, append_audit_record, candidate_write_paths, evaluate_payload, request_context
 from engine.capabilities import CapabilityStore, PendingMaintenanceStore
+from engine.recovery import FileCheckpointStore, RecoveryUnavailable
 from engine.safe_yolo import SafeYoloEngine, result
 
 
@@ -201,10 +202,32 @@ def process_cursor_payload(
     *,
     pending_store: PendingMaintenanceStore | None = None,
     audit_log: Path | None = None,
+    recovery_store: FileCheckpointStore | None = None,
 ) -> dict[str, Any]:
     event = str(payload.get("hook_event_name") or "")
     normalized = normalize_tool_payload(payload)
     decision = evaluate_cursor_payload(payload, engine)
+    if recovery_store is not None and decision["decision"] in {"allow", "allow_report"}:
+        tool_name = str(normalized.get("tool_name") or "").lower()
+        if tool_name in WRITE_TOOLS:
+            context = request_context(normalized)
+            cwd = context.get("cwd")
+            try:
+                if not isinstance(cwd, str) or not cwd:
+                    raise RecoveryUnavailable("Structured write requires a known working directory.")
+                checkpoint = recovery_store.checkpoint(
+                    candidate_write_paths(normalized.get("tool_input") or {}),
+                    cwd=cwd,
+                    session_id=str(normalized.get("session_id") or ""),
+                    turn_id=str(normalized.get("turn_id") or ""),
+                )
+                decision = {**decision, "recovery_id": checkpoint["id"]}
+            except (OSError, ValueError, RecoveryUnavailable) as error:
+                decision = result(
+                    "block_method",
+                    "recovery.unavailable",
+                    f"Structured write was not run because its checkpoint failed ({type(error).__name__}).",
+                )
     pending = None
     request = decision.get("maintenance_request")
     session_id = str(normalized.get("session_id") or "")
@@ -259,6 +282,7 @@ def main() -> int:
 
     store = CapabilityStore(args.state_dir / "capabilities")
     pending = PendingMaintenanceStore(args.state_dir / "pending-maintenance")
+    recovery = FileCheckpointStore(args.state_dir / "recovery")
     host_contract = json.loads(args.host_contract.read_text(encoding="utf-8")) if args.host_contract else None
     engine = SafeYoloEngine.from_file(args.policy, capability_store=store, host_contract=host_contract)
 
@@ -277,6 +301,7 @@ def main() -> int:
             engine,
             pending_store=pending,
             audit_log=args.state_dir / "audit.jsonl",
+            recovery_store=recovery,
         )
 
     if response is not None:

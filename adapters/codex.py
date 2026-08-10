@@ -11,6 +11,7 @@ from typing import Any
 
 from adapters.codex_context import turn_scope
 from engine.capabilities import CapabilityStore, PendingMaintenanceStore
+from engine.recovery import FileCheckpointStore, RecoveryUnavailable
 from engine.safe_yolo import SafeYoloEngine, result
 
 
@@ -137,6 +138,8 @@ def hook_response(decision: dict[str, Any], pending: dict[str, Any] | None = Non
 
 def append_audit_record(audit_log: Path, payload: dict[str, Any], decision: dict[str, Any]) -> None:
     record = {"recorded_at": datetime.now(timezone.utc).isoformat(), "session_id": str(payload.get("session_id") or ""), "turn_id": str(payload.get("turn_id") or ""), "tool_name": str(payload.get("tool_name") or ""), "decision": decision["decision"], "policy_id": decision["policy_id"]}
+    if decision.get("recovery_id"):
+        record["recovery_id"] = str(decision["recovery_id"])
     audit_log.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(audit_log.parent, 0o700)
     with audit_log.open("a", encoding="utf-8") as handle:
@@ -157,8 +160,30 @@ def process_payload(
     *,
     pending_store: PendingMaintenanceStore | None = None,
     audit_log: Path | None = None,
+    recovery_store: FileCheckpointStore | None = None,
 ) -> dict[str, str] | None:
     decision = evaluate_payload(payload, engine)
+    if recovery_store is not None and decision["decision"] in {"allow", "allow_report"}:
+        tool_name = str(payload.get("tool_name") or "").lower()
+        if tool_name in WRITE_TOOLS:
+            context = request_context(payload)
+            cwd = context.get("cwd")
+            try:
+                if not isinstance(cwd, str) or not cwd:
+                    raise RecoveryUnavailable("Structured write requires a known working directory.")
+                checkpoint = recovery_store.checkpoint(
+                    candidate_write_paths(payload.get("tool_input") or {}),
+                    cwd=cwd,
+                    session_id=str(payload.get("session_id") or ""),
+                    turn_id=str(payload.get("turn_id") or ""),
+                )
+                decision = {**decision, "recovery_id": checkpoint["id"]}
+            except (OSError, ValueError, RecoveryUnavailable) as error:
+                decision = result(
+                    "block_method",
+                    "recovery.unavailable",
+                    f"Structured write was not run because its checkpoint failed ({type(error).__name__}).",
+                )
     pending = None
     request = decision.get("maintenance_request")
     session_id = str(payload.get("session_id") or "")
@@ -190,6 +215,7 @@ def main() -> int:
     payload = json.load(sys.stdin)
     store = CapabilityStore(args.state_dir / "capabilities")
     pending = PendingMaintenanceStore(args.state_dir / "pending-maintenance")
+    recovery = FileCheckpointStore(args.state_dir / "recovery")
     host_contract = json.loads(args.host_contract.read_text(encoding="utf-8")) if args.host_contract else None
     engine = SafeYoloEngine.from_file(args.policy, capability_store=store, host_contract=host_contract)
     if args.explain:
@@ -198,7 +224,7 @@ def main() -> int:
         audit_payload(payload, engine, args.state_dir / "audit.jsonl")
         response = None
     else:
-        response = process_payload(payload, engine, pending_store=pending, audit_log=args.state_dir / "audit.jsonl")
+        response = process_payload(payload, engine, pending_store=pending, audit_log=args.state_dir / "audit.jsonl", recovery_store=recovery)
     if response is not None:
         json.dump(response, sys.stdout, sort_keys=True)
         sys.stdout.write("\n")

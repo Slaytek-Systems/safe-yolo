@@ -414,6 +414,9 @@ class SafeYoloEngine:
             quarantine = self._inspect_quarantine_command(executable, args, context)
             if quarantine is not None:
                 return quarantine
+            recovery = self._inspect_recovery_command(executable, args, context)
+            if recovery is not None:
+                return recovery
             read_only = (
                 args[:1] in (["--version"], ["--help"], ["-h"])
                 or args[:2] == ["-m", "unittest"]
@@ -487,6 +490,24 @@ class SafeYoloEngine:
         if operation == "list" and len(args) == 2:
             return result("allow_report", "filesystem.quarantine_list", "Quarantine inventory is read-only.")
         return result("block_method", "filesystem.quarantine_usage", "Use exactly: quarantine.py put TARGET, restore ID, or list.")
+
+    @staticmethod
+    def _inspect_recovery_command(
+        executable: str,
+        args: list[str],
+        context: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if executable not in {"python", "python3"} or len(args) < 2:
+            return None
+        script = Path(args[0]).expanduser().resolve(strict=False)
+        active_recovery = Path(__file__).with_name("recovery.py").resolve(strict=True)
+        if script != active_recovery:
+            return None
+        if args[1] == "list" and len(args) == 2:
+            return result("allow_report", "recovery.list", "Recovery checkpoint inventory is read-only.")
+        if args[1] == "materialize" and len(args) == 4:
+            return result("allow_report", "recovery.materialize", "Recovery materializes into a new destination without overwriting current work.")
+        return result("block_method", "recovery.usage", "Use exactly: recovery.py list or materialize ID DESTINATION.")
 
     @staticmethod
     def _inline_program(executable: str, args: list[str]) -> str | None:

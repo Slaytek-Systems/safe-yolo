@@ -34,6 +34,14 @@ Risk colours are policy authoring vocabulary. The stable runtime contract is the
 8. Recoverable removal uses the manifest-pinned quarantine helper and records an append-only restore receipt.
 9. A harness is not certified merely because it declares hooks. Its live failure mode and covered tool surfaces must be proved.
 
+## Recovery state
+
+Structured Codex and Cursor writes checkpoint every exact target before the adapter returns permission. Existing files are copied with size and SHA-256 evidence; absent targets are recorded; symlinks are captured without following them. A failed or oversized checkpoint blocks the write as `recovery.unavailable`. Recovery materialization requires a new empty destination and never overwrites current work.
+
+The store is append-only and capped at 1 GiB per host. Reaching the cap blocks further structured writes rather than deleting recovery evidence or exhausting the disk silently.
+
+Shell-driven mutations do not yet have a general workspace checkpoint. Until that separate tracer is implemented and certified, version 1.1.0 remains a source candidate rather than an activation-ready claim of universal recoverability.
+
 ## Trust boundaries
 
 - Codex’s trusted lifecycle-hook registration is the local bootstrap boundary.
