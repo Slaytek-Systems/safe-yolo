@@ -130,9 +130,9 @@ def evaluate_cursor_payload(payload: dict[str, Any], engine: SafeYoloEngine) -> 
 
     if event == "beforeMCPExecution":
         return result(
-            "block_hard",
+            "block_method",
             "tool.unclassified",
-            "Cursor MCP execution requires an explicit consequence contract.",
+            "Cursor MCP execution requires an explicit consequence mapping before use.",
         )
 
     if original in ALLOW_NAMES or tool_name in ALLOW_NAMES:

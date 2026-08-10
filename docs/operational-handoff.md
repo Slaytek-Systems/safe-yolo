@@ -4,10 +4,10 @@
 
 The baseline is live on both hosts. Do not infer activation from source changes alone: the active Codex hook pin and a live audit record are the authority.
 
-| Host | Active release | Evidence |
+| Host | Observed active release | Current source |
 | --- | --- | --- |
-| macOS (`/Users/slayga`) | `1.0.10` | Manifest `b06de186e90987978cd77622ba54b043f534e1718d80da0938d616bdee544d6a`; canonical hook pin and live `pwd` smoke audited. |
-| devbox (`/home/dev`) | `1.0.11` | Manifest `c6463a59644cb33a0c833d93001b04e7c4b383041e26e9360a49fe1878c9df7a`; remote installer and doctor passed; Navigator verified the repaired live agent path. |
+| macOS (`/Users/slayga`) | `1.0.10`; re-run doctor before changing the pin | `feat/consequence-kernel`, version `1.1.0` candidate |
+| devbox (`/home/dev`) | Exact active pin requires a fresh doctor receipt | Clean `fix/cursor-autonomy-hardening`, version `1.0.17` at the convergence audit |
 
 Both hosts use `approval_policy = "never"` and `sandbox_mode = "danger-full-access"`. Deterministic policy enforcement remains the safety boundary.
 
@@ -16,8 +16,10 @@ Both hosts use `approval_policy = "never"` and `sandbox_mode = "danger-full-acce
 - Normal code, tests, commits, and clean feature-branch pushes proceed without approval prompts.
 - Codex task/thread read, create, archive, message, and collaboration tools are classified rather than fail-closed as unknown.
 - macOS protects credential/system surfaces (`~/.ssh`, shell profiles, LaunchAgents, Keychain access).
-- Destructive filesystem actions, force pushes, secret exposure, control-plane mutation, and unproven production deploys remain hard-blocked.
-- macOS permits only two exact remote Safe YOLO maintenance actions for `devbox`: canonical-source fast-forward pull and the fixed remote updater. Arbitrary SSH remains blocked.
+- Permanent deletion, force pushes, secret exposure, control-plane mutation, and unproven release actions remain hard-blocked.
+- Recoverable removal uses the manifest-pinned quarantine and restore path.
+- macOS permits exact audited devbox inspection and maintenance contracts. Unmatched remote execution requires scoped authority.
+- Opaque interpreters and unknown tools are method-blocked so the objective can continue through a reviewable route.
 
 ## Reopen protocol
 
@@ -34,9 +36,9 @@ Both hosts use `approval_policy = "never"` and `sandbox_mode = "danger-full-acce
 
 `/home/dev/.safe-yolo/releases/1.0.5` is incomplete and inactive. It is approved for reversible quarantine, but do not delete it. Bundle that move with a future devbox maintenance release to avoid a standalone hook-trust cycle.
 
-### Optional future capability: production release contracts
+### Required future capability: production release contracts
 
-Agents intentionally cannot deploy to production yet. A project-specific release contract would permit a deployment only after externally verifiable evidence for the exact target, CI/artifact/commit, rollback path, and post-deploy smoke. Choose the first pilot project before implementing this.
+Agents intentionally cannot deploy or push release tags without a project-specific external release contract proving the exact target, commit/artifact, gates, rollback path, issuer, and expiry. Choose the first pilot project before implementing the evidence broker.
 
 ## Durable source of truth
 

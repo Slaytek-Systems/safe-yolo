@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://safe-yolo.invalid/evaluation-request.schema.json",
+  "title": "Safe YOLO normalized consequence request",
+  "type": "object",
+  "required": ["action"],
+  "properties": {
+    "action": {"type": "string", "minLength": 1},
+    "session_id": {"type": "string"},
+    "turn_id": {"type": "string"},
+    "cwd": {"type": "string"},
+    "target": {"type": "string"},
+    "task_aligned": {"type": "boolean"},
+    "bulk": {"type": "boolean"},
+    "administrative": {"type": "boolean"},
+    "external_release_contract": {"type": "object"}
+  },
+  "additionalProperties": true
+}

@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from scripts.bootstrap import verified_entry
-from scripts.doctor import inspect_codex_wiring, inspect_release
+from scripts.doctor import inspect_codex_wiring, inspect_cursor_wiring, inspect_release
 from scripts.release_manifest import build_manifest, manifest_digest, verify_manifest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -48,6 +48,42 @@ class ReleaseToolTests(unittest.TestCase):
         self.assertTrue(report["healthy"])
         self.assertEqual([], report["problems"])
         self.assertEqual("1.0.0-test", report["version"])
+
+    def test_doctor_reports_healthy_cursor_wiring(self):
+        build_manifest(self.release)
+        digest = manifest_digest(self.release)
+        bootstrap = "/safe-yolo/bootstrap.py"
+        hooks = Path(self.temp.name) / "cursor-hooks.json"
+        hooks.write_text(json.dumps({
+            "version": 1,
+            "hooks": {
+                event: [{
+                    "command": f"python3 {bootstrap} --release {self.release} --manifest-sha256 {digest} --entry {entry}",
+                    "failClosed": True,
+                }]
+                for event, entry in {
+                    "beforeShellExecution": "cursor",
+                    "beforeMCPExecution": "cursor",
+                    "preToolUse": "cursor",
+                    "beforeSubmitPrompt": "cursor_prompt",
+                }.items()
+            },
+        }))
+        report = inspect_cursor_wiring(hooks, bootstrap, digest)
+        self.assertTrue(report["healthy"], report["problems"])
+
+    def test_cursor_doctor_rejects_fail_open_hook(self):
+        hooks = Path(self.temp.name) / "cursor-hooks.json"
+        hooks.write_text(json.dumps({
+            "version": 1,
+            "hooks": {
+                event: [{"command": "untrusted", "failClosed": False}]
+                for event in ("beforeShellExecution", "beforeMCPExecution", "preToolUse", "beforeSubmitPrompt")
+            },
+        }))
+        report = inspect_cursor_wiring(hooks, "/safe-yolo/bootstrap.py", "expected")
+        self.assertFalse(report["healthy"])
+        self.assertTrue(any("failClosed" in problem for problem in report["problems"]))
 
 
 if __name__ == "__main__":

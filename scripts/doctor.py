@@ -53,6 +53,44 @@ def inspect_codex_wiring(
     return {"healthy": not problems, "problems": problems}
 
 
+def inspect_cursor_wiring(
+    hooks_path: str | Path,
+    bootstrap_path: str | Path,
+    manifest_sha256: str,
+) -> dict[str, Any]:
+    """Read-only check for fail-closed, manifest-pinned Cursor consequence hooks."""
+    problems: list[str] = []
+    try:
+        document = json.loads(Path(hooks_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        return {"healthy": False, "problems": [f"hooks unreadable: {type(error).__name__}"]}
+    if document.get("version") != 1:
+        problems.append("Cursor hooks version must be 1")
+    hooks = document.get("hooks") or {}
+    expected = {
+        "beforeShellExecution": "cursor",
+        "beforeMCPExecution": "cursor",
+        "preToolUse": "cursor",
+        "beforeSubmitPrompt": "cursor_prompt",
+    }
+    for event, entry in expected.items():
+        groups = hooks.get(event) or []
+        if len(groups) != 1 or not isinstance(groups[0], dict):
+            problems.append(f"exactly one {event} hook is required")
+            continue
+        hook = groups[0]
+        command = str(hook.get("command") or "")
+        if hook.get("failClosed") is not True:
+            problems.append(f"{event} must set failClosed true")
+        if (
+            str(bootstrap_path) not in command
+            or f"--manifest-sha256 {manifest_sha256}" not in command
+            or f"--entry {entry}" not in command
+        ):
+            problems.append(f"{event} is not pinned to the expected Safe YOLO entry")
+    return {"healthy": not problems, "problems": problems}
+
+
 def main() -> int:
     import argparse
 

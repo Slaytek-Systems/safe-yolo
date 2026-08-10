@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "/usr/bin/python3 ${SAFE_YOLO_BOOTSTRAP} --release ${SAFE_YOLO_RELEASE} --manifest-sha256 ${SAFE_YOLO_MANIFEST_SHA256} --entry cursor --host-contract ${SAFE_YOLO_HOST_CONTRACT}",
+        "failClosed": true
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": "/usr/bin/python3 ${SAFE_YOLO_BOOTSTRAP} --release ${SAFE_YOLO_RELEASE} --manifest-sha256 ${SAFE_YOLO_MANIFEST_SHA256} --entry cursor --host-contract ${SAFE_YOLO_HOST_CONTRACT}",
+        "failClosed": true
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "/usr/bin/python3 ${SAFE_YOLO_BOOTSTRAP} --release ${SAFE_YOLO_RELEASE} --manifest-sha256 ${SAFE_YOLO_MANIFEST_SHA256} --entry cursor --host-contract ${SAFE_YOLO_HOST_CONTRACT}",
+        "failClosed": true
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "/usr/bin/python3 ${SAFE_YOLO_BOOTSTRAP} --release ${SAFE_YOLO_RELEASE} --manifest-sha256 ${SAFE_YOLO_MANIFEST_SHA256} --entry cursor_prompt",
+        "failClosed": true
+      }
+    ]
+  }
+}

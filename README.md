@@ -6,15 +6,15 @@ Safe YOLO deliberately pairs full local autonomy with consequence-based hard bou
 
 ## Status
 
-Bootstrap repository. No host is installed or modified from this repository yet.
+Codex is active on macOS and devbox through manifest-pinned releases. Cursor has a shared-engine adapter and fail-closed wiring contract; each host still requires live certification after activation. Source state is not activation evidence.
 
 ## Design
 
 - `policy/` — portable constitutional policy and protected-surface declarations.
 - `engine/` — deterministic evaluator and scoped capability model.
-- `adapters/codex/` — Codex lifecycle-hook transport.
+- `adapters/` — thin Codex and Cursor lifecycle transports over one consequence engine.
 - `hosts/` — macOS and Linux facts only; never separate policy semantics.
-- `contracts/` — externally verifiable release-contract definitions.
+- `contracts/` — normalized request/decision schemas, host facts, and externally verifiable release contracts.
 - `tests/` — shared conformance corpus, adapter tests, and runtime smoke checks.
 - `scripts/` — explicit operator install and health-check entry points.
 

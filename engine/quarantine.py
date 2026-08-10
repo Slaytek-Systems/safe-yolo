@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import argparse
+import hashlib
 import json
+import os
+import subprocess
 import shutil
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -77,3 +82,56 @@ class Quarantine:
             if record.get("id") == identifier:
                 latest = record
         return latest
+
+    def records(self) -> list[dict[str, str]]:
+        if not self.manifest.exists():
+            return []
+        return [json.loads(line) for line in self.manifest.read_text(encoding="utf-8").splitlines() if line]
+
+
+def workspace_root(cwd: str | Path | None = None) -> Path:
+    working = Path(cwd or Path.cwd()).resolve(strict=True)
+    completed = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=working,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=2,
+    )
+    if completed.returncode == 0 and completed.stdout.strip():
+        return Path(completed.stdout.strip()).resolve(strict=True)
+    return working
+
+
+def quarantine_storage(workspace: Path) -> Path:
+    state = Path(os.environ.get("SAFE_YOLO_STATE", "~/.safe-yolo/state")).expanduser()
+    identity = hashlib.sha256(str(workspace).encode("utf-8")).hexdigest()[:16]
+    return state / "quarantine" / identity
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Recoverable Safe YOLO workspace quarantine.")
+    subparsers = parser.add_subparsers(dest="operation", required=True)
+    put = subparsers.add_parser("put")
+    put.add_argument("target")
+    restore = subparsers.add_parser("restore")
+    restore.add_argument("identifier")
+    subparsers.add_parser("list")
+    args = parser.parse_args(argv)
+
+    workspace = workspace_root()
+    quarantine = Quarantine(quarantine_storage(workspace), workspace)
+    if args.operation == "put":
+        response: object = quarantine.put(args.target)
+    elif args.operation == "restore":
+        response = {"restored_path": str(quarantine.restore(args.identifier))}
+    else:
+        response = quarantine.records()
+    json.dump(response, sys.stdout, sort_keys=True)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

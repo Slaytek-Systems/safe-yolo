@@ -120,10 +120,10 @@ def evaluate_payload(payload: dict[str, Any], engine: SafeYoloEngine) -> dict[st
             return result("allow_report", "codex.automation_management", "Reversible automation management is permitted and reported.")
         if mode == "delete":
             return engine.evaluate({"action": "records.delete", **context})
-        return result("block_hard", "codex.automation_operation_unclassified", "Unclassified automation operation is blocked.")
+        return result("block_method", "codex.automation_operation_unclassified", "Unclassified automation operation requires an adapter update before use.")
     if tool_name in COLLABORATION_TOOLS:
         return result("allow", "codex.collaboration", "Collaboration management is permitted.")
-    return result("block_hard", "tool.unclassified", "Unclassified tool with side-effect potential is blocked.")
+    return result("block_method", "tool.unclassified", "Unclassified tool requires a consequence mapping before use.")
 
 
 def hook_response(decision: dict[str, Any], pending: dict[str, Any] | None = None) -> dict[str, str] | None:

@@ -77,7 +77,7 @@ class FeaturePushTests(unittest.TestCase):
                 {"cwd": "/task/root"},
             )
         self.assertEqual("allow_report", decision["decision"])
-        self.assertEqual(["/tmp/disposable-repository"], seen_cwds)
+        self.assertEqual([str(Path("/tmp/disposable-repository").resolve(strict=False))], seen_cwds)
 
     def test_git_dash_c_missing_or_unknown_directory_fails_closed(self):
         missing = self.engine.inspect_command("git -C", {"cwd": ""})

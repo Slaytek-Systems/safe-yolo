@@ -69,7 +69,7 @@ class CodexAdapterTests(unittest.TestCase):
             },
             self.engine,
         )
-        self.assertEqual("block_hard", decision["decision"])
+        self.assertEqual("block_method", decision["decision"])
         self.assertEqual("codex.automation_operation_unclassified", decision["policy_id"])
 
     def test_known_web_read_tool_is_allowed(self):
@@ -82,11 +82,14 @@ class CodexAdapterTests(unittest.TestCase):
         )
         unknown = evaluate_payload({"tool_name": "future_mutation_tool", "tool_input": {}}, self.engine)
         self.assertEqual("block_hard", shell["decision"])
-        self.assertEqual("block_hard", unknown["decision"])
+        self.assertEqual("block_method", unknown["decision"])
 
     def test_shell_workdir_overrides_task_root_for_git_classification(self):
         def git_result(command, **_kwargs):
-            self.assertEqual("/tmp/disposable-repository", _kwargs["cwd"])
+            self.assertEqual(
+                str(Path("/tmp/disposable-repository").resolve(strict=False)),
+                _kwargs["cwd"],
+            )
             if command[1:] == ["branch", "--show-current"]:
                 return SimpleNamespace(returncode=0, stdout="task/proof\n")
             raise AssertionError(command)

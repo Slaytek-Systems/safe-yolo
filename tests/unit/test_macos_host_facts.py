@@ -42,7 +42,21 @@ class MacOSHostFactsTests(unittest.TestCase):
         blocked = engine.inspect_command("ssh devbox rm -rf /tmp/example", {})
         self.assertEqual("allow_report", allowed["decision"])
         self.assertEqual("remote.safe_yolo_maintenance", allowed["policy_id"])
-        self.assertEqual("block_hard", blocked["decision"])
+        self.assertEqual("require_capability", blocked["decision"])
+
+    def test_exact_devbox_inspection_command_is_allowed(self):
+        host_contract = json.loads((ROOT / "hosts" / "macos" / "macos.contract.json").read_text())
+        engine = SafeYoloEngine(
+            json.loads((ROOT / "policy" / "policy.json").read_text()),
+            path_variables={"HOME": "/Users/test", "SAFE_YOLO_HOME": "/opt/safe-yolo", "CODEX_HOME": "/Users/test/.codex"},
+            host_contract=host_contract,
+        )
+        decision = engine.inspect_command(
+            "ssh -n devbox git -C /home/dev/safe-yolo-source status --short --branch",
+            {},
+        )
+        self.assertEqual("allow_report", decision["decision"])
+        self.assertEqual("remote.safe_yolo_inspection", decision["policy_id"])
 
     def test_keychain_commands_are_credential_exposure(self):
         decision = self.engine.inspect_command("security find-generic-password -s Codex")

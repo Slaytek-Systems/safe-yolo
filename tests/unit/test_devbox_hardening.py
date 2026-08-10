@@ -30,7 +30,7 @@ class DevboxHardeningTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual("require_capability", self.engine.inspect_command(command)["decision"])
 
-    def test_opaque_interpreters_and_untrusted_scripts_fail_closed(self):
+    def test_opaque_interpreters_and_untrusted_scripts_are_method_blocks(self):
         for command in (
             "python3 -c 'print(1)'",
             "node -e 'console.log(1)'",
@@ -39,7 +39,7 @@ class DevboxHardeningTests(unittest.TestCase):
             "bash scripts/task.sh",
         ):
             with self.subTest(command=command):
-                self.assertEqual("block_hard", self.engine.inspect_command(command)["decision"])
+                self.assertEqual("block_method", self.engine.inspect_command(command)["decision"])
         for command in ("python3 --version", "python3 -m unittest tests.test_policy", "node --check app.js", "bash -n check.sh"):
             with self.subTest(command=command):
                 self.assertEqual("allow", self.engine.inspect_command(command)["decision"])

@@ -36,14 +36,20 @@
       }
     },
     "restricted_executables": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}},
-    "remote_maintenance": {
-      "type": "object",
-      "required": ["host", "commands"],
-      "properties": {
-        "host": {"type": "string", "minLength": 1},
-        "commands": {"type": "array", "items": {"type": "array", "items": {"type": "string"}, "minItems": 1}, "minItems": 1}
-      },
-      "additionalProperties": false
+    "remote_commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["host", "command", "effect", "policy_id", "reason"],
+        "properties": {
+          "host": {"type": "string", "minLength": 1},
+          "command": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+          "effect": {"enum": ["inspection", "maintenance"]},
+          "policy_id": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
     }
   },
   "additionalProperties": false

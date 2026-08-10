@@ -19,11 +19,13 @@ class CanonicalPolicyTests(unittest.TestCase):
             self.assertIs(False, actions[action].get("capability_override"))
 
     def test_release_requires_external_contract_not_capability_fallback(self):
-        release = self.policy["actions"]["deploy.production"]
-        self.assertEqual("amber", release["classification"])
-        self.assertEqual("blue", release["promote_to"])
-        self.assertEqual("external_release_contract", release["condition"])
-        self.assertIs(False, release["condition_fallback_capability"])
+        for action in ("deploy.production", "git.push_tag"):
+            with self.subTest(action=action):
+                release = self.policy["actions"][action]
+                self.assertEqual("amber", release["classification"])
+                self.assertEqual("blue", release["promote_to"])
+                self.assertEqual("external_release_contract", release["condition"])
+                self.assertIs(False, release["condition_fallback_capability"])
 
     def test_corpus_ids_are_unique_and_expected_values_are_valid(self):
         cases = [json.loads(line) for line in CORPUS_PATH.read_text().splitlines() if line]

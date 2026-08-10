@@ -39,6 +39,28 @@ class CanonicalEngineTests(unittest.TestCase):
         self.assertEqual("block_hard", blocked["decision"])
         self.assertEqual("allow_report", allowed["decision"])
 
+    def test_tag_push_uses_release_evidence_instead_of_constitutional_override(self):
+        contract = {
+            "issuer": "github-and-provider",
+            "valid": True,
+            "current": True,
+            "repository_match": True,
+            "commit_match": True,
+            "artifact_match": True,
+            "target_match": True,
+            "rollback_verified": True,
+            "gates_passed": True,
+            "expires_at": "2030-01-01T00:00:00Z",
+        }
+        blocked = self.engine.inspect_command("git push origin v1.2.3")
+        allowed = self.engine.inspect_command(
+            "git push origin v1.2.3",
+            {"external_release_contract": contract},
+        )
+        self.assertEqual("block_hard", blocked["decision"])
+        self.assertEqual("allow_report", allowed["decision"])
+        self.assertNotIn("git.push_tag", self.policy["constitutional_red"])
+
     def test_symbolic_control_plane_path_requires_maintenance(self):
         decision = self.engine.inspect_path_write(
             "/home/test/.codex/config.toml", {"session_id": "test"}

@@ -15,11 +15,27 @@
     {"path": "${HOME}/Library/LaunchAgents", "action": "system.modify"}
   ],
   "restricted_executables": {"security": "credentials.expose"},
-  "remote_maintenance": {
-    "host": "devbox",
-    "commands": [
-      ["git", "-C", "/home/dev/safe-yolo-source", "pull", "--ff-only"],
-      ["python3", "/home/dev/safe-yolo-source/scripts/remote_update.py"]
-    ]
-  }
+  "remote_commands": [
+    {
+      "host": "devbox",
+      "command": ["git", "-C", "/home/dev/safe-yolo-source", "status", "--short", "--branch"],
+      "effect": "inspection",
+      "policy_id": "remote.safe_yolo_inspection",
+      "reason": "Exact read-only Safe YOLO source status inspection on devbox is permitted."
+    },
+    {
+      "host": "devbox",
+      "command": ["git", "-C", "/home/dev/safe-yolo-source", "pull", "--ff-only"],
+      "effect": "maintenance",
+      "policy_id": "remote.safe_yolo_maintenance",
+      "reason": "Exact fast-forward-only Safe YOLO source update on devbox is permitted and audited."
+    },
+    {
+      "host": "devbox",
+      "command": ["python3", "/home/dev/safe-yolo-source/scripts/remote_update.py"],
+      "effect": "maintenance",
+      "policy_id": "remote.safe_yolo_maintenance",
+      "reason": "Exact manifest-verified Safe YOLO release updater on devbox is permitted and audited."
+    }
+  ]
 }

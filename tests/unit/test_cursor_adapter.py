@@ -36,7 +36,7 @@ class CursorAdapterTests(unittest.TestCase):
             {"tool_name": "FutureMutationTool", "tool_input": {}},
             self.engine,
         )
-        self.assertEqual("block_hard", decision["decision"])
+        self.assertEqual("block_method", decision["decision"])
         self.assertEqual("tool.unclassified", decision["policy_id"])
 
     def test_mcp_execution_fails_closed_without_an_explicit_contract(self):
@@ -48,7 +48,7 @@ class CursorAdapterTests(unittest.TestCase):
         decision = evaluate_cursor_payload(payload, self.engine)
         response = process_cursor_payload(payload, self.engine, pending_store=self.pending)
 
-        self.assertEqual("block_hard", decision["decision"])
+        self.assertEqual("block_method", decision["decision"])
         self.assertEqual("tool.unclassified", decision["policy_id"])
         self.assertEqual("deny", response["permission"])
 
@@ -63,7 +63,10 @@ class CursorAdapterTests(unittest.TestCase):
 
     def test_feature_push_is_reclassified_after_branch_transition(self):
         def git_result(command, **kwargs):
-            self.assertEqual("/tmp/disposable-repository", kwargs["cwd"])
+            self.assertEqual(
+                str(Path("/tmp/disposable-repository").resolve(strict=False)),
+                kwargs["cwd"],
+            )
             if command[1:] == ["branch", "--show-current"]:
                 return SimpleNamespace(returncode=0, stdout="task/cursor-proof\n")
             raise AssertionError(command)

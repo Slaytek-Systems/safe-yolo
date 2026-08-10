@@ -367,7 +367,11 @@ class SafeYoloEngine:
             if wrapped is not None:
                 return self.inspect_command(wrapped, context)
             if args and not (args[0] in {"-n", "--version", "--help", "-h"}):
-                return result("block_hard", "shell.unclassified", "Untrusted shell script execution is not permitted.")
+                return result(
+                    "block_method",
+                    "shell.unclassified",
+                    "Script effects are not proven; preserve the objective and use a reviewed launcher or direct inspectable command.",
+                )
 
         if executable in {"command", "builtin", "exec"} and args:
             return self._inspect_segment(args, context)
@@ -407,13 +411,20 @@ class SafeYoloEngine:
                     return path_result
 
         if executable in {"python", "python3", "node"}:
+            quarantine = self._inspect_quarantine_command(executable, args, context)
+            if quarantine is not None:
+                return quarantine
             read_only = (
                 args[:1] in (["--version"], ["--help"], ["-h"])
                 or args[:2] == ["-m", "unittest"]
                 or executable == "node" and args[:1] == ["--check"]
             )
             if not read_only:
-                return result("block_hard", "shell.unclassified_interpreter", "Inline or script-backed interpreter execution is not permitted.")
+                return result(
+                    "block_method",
+                    "shell.unclassified_interpreter",
+                    "Interpreter effects are not proven; preserve the objective and use a reviewed launcher, module contract, or structured tool.",
+                )
         if executable == "bun":
             inline = self._inline_program(executable, args)
             if inline is not None and self._looks_mutating(inline):
@@ -452,6 +463,30 @@ class SafeYoloEngine:
                 return result("block_method", "package.remote_execution", f"Package binary is not installed locally: {package}")
 
         return result("allow", "shell.segment", "Segment is permitted.")
+
+    def _inspect_quarantine_command(
+        self,
+        executable: str,
+        args: list[str],
+        context: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if executable not in {"python", "python3"} or len(args) < 2:
+            return None
+        script = Path(args[0]).expanduser().resolve(strict=False)
+        active_quarantine = Path(__file__).with_name("quarantine.py").resolve(strict=True)
+        if script != active_quarantine:
+            return None
+        operation = args[1]
+        if operation == "put" and len(args) == 3:
+            protected = self._protected_rule(args[2], context.get("cwd"))
+            if protected is not None:
+                return self.inspect_path_write(args[2], context)
+            return self.evaluate({"action": "filesystem.quarantine", **context})
+        if operation == "restore" and len(args) == 3:
+            return self.evaluate({"action": "filesystem.restore", **context})
+        if operation == "list" and len(args) == 2:
+            return result("allow_report", "filesystem.quarantine_list", "Quarantine inventory is read-only.")
+        return result("block_method", "filesystem.quarantine_usage", "Use exactly: quarantine.py put TARGET, restore ID, or list.")
 
     @staticmethod
     def _inline_program(executable: str, args: list[str]) -> str | None:
@@ -599,19 +634,21 @@ class SafeYoloEngine:
         return result("allow", "railway.inspect", "Railway status/list inspection is permitted.")
 
     def _inspect_remote(self, executable: str, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
-        contract = self.host_contract.get("remote_maintenance") or {}
-        if executable != "ssh" or not contract:
-            return self.evaluate({"action": "remote.execute", **context})
+        if executable != "ssh":
+            return self.evaluate({"action": "remote.execute", "target": executable, "command": args, **context})
         remaining = list(args)
         if remaining[:1] == ["-n"]:
             remaining = remaining[1:]
-        if not remaining or remaining[0] != contract.get("host"):
-            return self.evaluate({"action": "remote.execute", **context})
+        if not remaining:
+            return self.evaluate({"action": "remote.execute", "target": "ssh", "command": [], **context})
+        host = remaining[0]
         remote_command = remaining[1:]
-        allowed_commands = contract.get("commands") or []
-        if remote_command in allowed_commands:
-            return result("allow_report", "remote.safe_yolo_maintenance", "Exact verified Safe YOLO maintenance command for devbox is permitted.")
-        return self.evaluate({"action": "remote.execute", **context})
+        for contract in self.host_contract.get("remote_commands") or []:
+            if host != contract.get("host") or remote_command != contract.get("command"):
+                continue
+            effect = contract.get("effect")
+            return result("allow_report", str(contract["policy_id"]), str(contract["reason"]), effect=effect)
+        return self.evaluate({"action": "remote.execute", "target": host, "command": remote_command, **context})
 
     @staticmethod
     def _git_value(args: list[str], cwd: str) -> str | None:
