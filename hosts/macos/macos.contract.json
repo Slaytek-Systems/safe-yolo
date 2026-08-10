@@ -1,6 +1,7 @@
 {
   "$schema": "../../contracts/host-contract.schema.json",
   "version": "1",
+  "development_role": "control_terminal",
   "protected_paths": [
     {"path": "${HOME}/.ssh", "action": "system.modify"},
     {"path": "${HOME}/.netrc", "action": "credentials.expose"},

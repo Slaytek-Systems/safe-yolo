@@ -116,6 +116,26 @@ class ReleaseToolTests(unittest.TestCase):
         self.assertFalse(unhealthy["completed_backup_present"])
         self.assertTrue(any("private" in problem for problem in unhealthy["problems"]))
 
+    def test_control_terminal_reports_backup_gap_without_failing_host_health(self):
+        safe_yolo_home = Path(self.temp.name) / "control-safe-yolo"
+        for name in ("state", "backups", "releases"):
+            directory = safe_yolo_home / name
+            directory.mkdir(parents=True)
+            os.chmod(directory, 0o700)
+        outputs = iter((
+            subprocess.CompletedProcess([], 0, "", "tmutil: No destinations configured.\n"),
+            subprocess.CompletedProcess([], 1, "", "No backups found\n"),
+            subprocess.CompletedProcess([], 0, "Snapshots for volume group containing disk /:\n", ""),
+        ))
+        report = inspect_macos_asset_recovery(
+            safe_yolo_home,
+            development_role="control_terminal",
+            run=lambda *_args, **_kwargs: next(outputs),
+        )
+        self.assertTrue(report["healthy"], report["problems"])
+        self.assertFalse(report["host_backup_ready"])
+        self.assertEqual("control_terminal", report["development_role"])
+
 
 if __name__ == "__main__":
     unittest.main()

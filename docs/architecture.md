@@ -34,6 +34,7 @@ Risk colours are policy authoring vocabulary. The stable runtime contract is the
 8. Recoverable removal uses the manifest-pinned quarantine helper and records an append-only restore receipt.
 9. A harness is not certified merely because it declares hooks. Its live failure mode and covered tool surfaces must be proved.
 10. Ordinary repository development is autonomous. Safety comes from recoverable local state and independent boundaries around Git history, credentials, production, services, and durable data—not from maintaining an exhaustive command allowlist.
+11. Each host declares whether it is the primary development authority or a control terminal. A control terminal cannot be the sole durable holder of completed agent work.
 
 ## Recovery state
 

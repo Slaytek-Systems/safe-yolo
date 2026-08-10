@@ -1,6 +1,7 @@
 {
   "$schema": "../../contracts/host-contract.schema.json",
   "version": "1",
+  "development_role": "primary_development",
   "operations_root": "/home/dev/devbox-ops",
   "workspaces_root": "/home/dev/workspaces",
   "workspace_lifecycle": ["identity", "start", "status", "doctor", "stop", "attach", "explain", "check", "reconcile", "restart", "logs", "infra", "up", "down"],

@@ -17,6 +17,7 @@ from scripts.release_manifest import ENTRYPOINTS, verify_manifest
 def inspect_macos_asset_recovery(
     safe_yolo_home: str | Path,
     *,
+    development_role: str = "primary_development",
     run: Any = subprocess.run,
 ) -> dict[str, Any]:
     """Report recovery facts without exposing backup destinations or file contents."""
@@ -35,12 +36,13 @@ def inspect_macos_asset_recovery(
         and bool(destination.stdout.strip())
         and "No destinations configured" not in destination_text
     )
-    if not destination_configured:
+    host_backup_required = development_role == "primary_development"
+    if host_backup_required and not destination_configured:
         problems.append("no macOS backup destination is configured")
 
     latest = tmutil("latestbackup")
     completed_backup = latest.returncode == 0 and bool(latest.stdout.strip())
-    if not completed_backup:
+    if host_backup_required and not completed_backup:
         problems.append("no completed macOS backup is available")
 
     snapshots = tmutil("listlocalsnapshots", "/")
@@ -60,6 +62,9 @@ def inspect_macos_asset_recovery(
 
     return {
         "healthy": not problems,
+        "development_role": development_role,
+        "host_backup_required": host_backup_required,
+        "host_backup_ready": destination_configured and completed_backup,
         "backup_destination_configured": destination_configured,
         "completed_backup_present": completed_backup,
         "local_data_snapshot_count": len(data_snapshots),
@@ -153,10 +158,14 @@ def main() -> int:
     parser.add_argument("--release", type=Path, required=True)
     parser.add_argument("--manifest-sha256")
     parser.add_argument("--macos-asset-recovery-home", type=Path)
+    parser.add_argument("--development-role", choices=("primary_development", "control_terminal"), default="primary_development")
     args = parser.parse_args()
     report = inspect_release(args.release, args.manifest_sha256)
     if args.macos_asset_recovery_home is not None:
-        report["asset_recovery"] = inspect_macos_asset_recovery(args.macos_asset_recovery_home)
+        report["asset_recovery"] = inspect_macos_asset_recovery(
+            args.macos_asset_recovery_home,
+            development_role=args.development_role,
+        )
     print(json.dumps(report, sort_keys=True))
     return 0
 

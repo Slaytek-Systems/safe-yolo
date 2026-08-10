@@ -6,6 +6,7 @@
   "required": ["version"],
   "properties": {
     "version": {"type": "string"},
+    "development_role": {"enum": ["primary_development", "control_terminal"]},
     "operations_root": {"type": "string", "minLength": 1},
     "workspaces_root": {"type": "string", "minLength": 1},
     "workspace_lifecycle": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},

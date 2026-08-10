@@ -63,6 +63,12 @@ class MacOSHostFactsTests(unittest.TestCase):
         self.assertEqual("block_hard", decision["decision"])
         self.assertEqual("credentials.expose", decision["policy_id"])
 
+    def test_hosts_declare_one_primary_development_authority(self):
+        mac = json.loads((ROOT / "hosts" / "macos" / "macos.contract.json").read_text())
+        devbox = json.loads((ROOT / "hosts" / "linux" / "devbox.contract.example.json").read_text())
+        self.assertEqual("control_terminal", mac["development_role"])
+        self.assertEqual("primary_development", devbox["development_role"])
+
 
 if __name__ == "__main__":
     unittest.main()
