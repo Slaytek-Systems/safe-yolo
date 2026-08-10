@@ -81,7 +81,7 @@ class RecoveryTests(unittest.TestCase):
             manifest = json.loads(manifests[0].read_text(encoding="utf-8"))
             self.assertEqual("session", manifest["session_id"])
             self.assertEqual("turn", manifest["turn_id"])
-            self.assertEqual(str(target.resolve()), manifest["targets"][0]["path"])
+            self.assertEqual(str(workspace.resolve() / target.name), manifest["targets"][0]["path"])
 
     def test_checkpoint_failure_blocks_the_write_without_exposing_paths(self):
         class FailingStore:
@@ -146,6 +146,24 @@ class RecoveryTests(unittest.TestCase):
                 store.checkpoint(["large.txt"], cwd=workspace)
             self.assertFalse((root / "state" / "checkpoints").exists())
 
+    def test_structured_symlink_write_and_external_workspace_symlink_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            outside = root / "outside.txt"
+            outside.write_text("outside\n", encoding="utf-8")
+            link = workspace / "link.txt"
+            link.symlink_to(outside)
+            store = FileCheckpointStore(root / "state")
+            with self.assertRaises(RecoveryUnavailable):
+                store.checkpoint(["link.txt"], cwd=workspace)
+
+            repo = self.make_repo(root)
+            (repo / "escape-link").symlink_to(outside)
+            with self.assertRaises(RecoveryUnavailable):
+                store.checkpoint_workspace(cwd=repo, session_id="session", turn_id="turn")
+
     def test_workspace_checkpoint_preserves_dirty_tracked_and_untracked_state(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -155,6 +173,10 @@ class RecoveryTests(unittest.TestCase):
             store = FileCheckpointStore(root / "state")
 
             checkpoint = store.checkpoint_workspace(cwd=repo, session_id="session", turn_id="turn")
+            self.assertEqual(0o700, (root / "state").stat().st_mode & 0o777)
+            checkpoint_root = root / "state" / "workspace-checkpoints" / str(checkpoint["id"])
+            self.assertEqual(0o600, (checkpoint_root / "manifest.json").stat().st_mode & 0o777)
+            self.assertEqual(0o600, (checkpoint_root / "tracked.patch").stat().st_mode & 0o777)
             (repo / "tracked.txt").write_text("agent accident\n", encoding="utf-8")
             (repo / "untracked.txt").write_text("overwritten\n", encoding="utf-8")
             materialized = store.materialize(str(checkpoint["id"]), root / "recovered")
@@ -206,7 +228,7 @@ class RecoveryTests(unittest.TestCase):
                 "CODEX_HOME": "/home/test/.codex",
             })
             store = FileCheckpointStore(root / "state")
-            for command in ("pwd", "ls", "rg needle .", "sed -n 1,5p example.txt"):
+            for command in ("pwd", "ls", "rg needle .", "find . -name '*.txt'", "date +%s"):
                 with self.subTest(command=command):
                     response = process_payload(
                         {"cwd": str(root), "tool_name": "shell", "tool_input": {"command": command}},
@@ -217,6 +239,23 @@ class RecoveryTests(unittest.TestCase):
             self.assertFalse((root / "state").exists())
 
             for command in ("git status --short > status.txt", "sed -n 1,5p example.txt > excerpt.txt"):
+                with self.subTest(command=command):
+                    response = process_payload(
+                        {"cwd": str(root), "tool_name": "shell", "tool_input": {"command": command}},
+                        engine,
+                        recovery_store=store,
+                    )
+                    self.assertEqual("block", response["decision"])
+                    self.assertIn("recovery.unavailable", response["reason"])
+
+            exploit_shapes = (
+                "rg --pre 'touch escaped.txt' needle .",
+                "sed -n -e 'w escaped.txt' example.txt",
+                "find . -fprint escaped.txt",
+                "git branch -m escaped",
+                "git diff --output=escaped.txt",
+            )
+            for command in exploit_shapes:
                 with self.subTest(command=command):
                     response = process_payload(
                         {"cwd": str(root), "tool_name": "shell", "tool_input": {"command": command}},

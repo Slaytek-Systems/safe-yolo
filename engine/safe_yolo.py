@@ -73,8 +73,8 @@ SYSTEM_RED_EXECUTABLES = {
 }
 REMOTE_EXECUTABLES = {"ssh", "scp", "rsync"}
 READ_ONLY_EXECUTABLES = {
-    "cat", "date", "df", "du", "file", "find", "grep", "head", "id", "ls",
-    "pwd", "rg", "stat", "tail", "type", "uname", "wc", "whereis", "which", "whoami",
+    "cat", "df", "du", "file", "grep", "head", "id", "ls", "pwd", "stat",
+    "tail", "type", "uname", "wc", "whereis", "which", "whoami",
 }
 
 
@@ -411,8 +411,13 @@ class SafeYoloEngine:
 
         if executable in READ_ONLY_EXECUTABLES and not has_output_redirect:
             return result("allow", "shell.inspection", f"{executable} is read-only in this command shape.", effect="read")
-        if executable == "sed" and not has_output_redirect and any(arg == "-n" or (arg.startswith("-") and "n" in arg[1:]) for arg in args) and not any(arg == "-i" or arg.startswith("--in-place") for arg in args):
-            return result("allow", "shell.inspection", "sed print-only inspection is read-only.", effect="read")
+        if executable == "rg" and not has_output_redirect and not any(arg == "--pre" or arg.startswith("--pre=") for arg in args):
+            return result("allow", "shell.inspection", "ripgrep inspection has no executable preprocessor.", effect="read")
+        find_writes = {"-fprint", "-fprint0", "-fprintf", "-fls"}
+        if executable == "find" and not has_output_redirect and not any(arg in find_writes for arg in args):
+            return result("allow", "shell.inspection", "find command has no write or execution action.", effect="read")
+        if executable == "date" and not has_output_redirect and (not args or all(arg.startswith("+") for arg in args)):
+            return result("allow", "shell.inspection", "date display is read-only.", effect="read")
 
         if executable in {"cp", "mv", "install", "tee"}:
             path_arguments = [arg for arg in args if not arg.startswith("-")]
@@ -733,7 +738,9 @@ class SafeYoloEngine:
         if subcommand == "checkout" and any(arg in {"--", "."} for arg in rest):
             return result("block_hard", "git.discard_work", "Checkout cannot discard working-tree changes.")
         read_only_git = {"diff", "log", "show", "status", "rev-parse", "ls-files", "describe", "merge-base"}
-        if not context.get("shell_output_redirect") and (subcommand in read_only_git or subcommand == "branch" and not any(arg and not arg.startswith("-") for arg in rest)):
+        git_output_or_exec = any(arg in {"--ext-diff", "--textconv"} or arg == "--output" or arg.startswith("--output=") for arg in rest)
+        branch_inspection = subcommand == "branch" and (not rest or rest == ["--show-current"])
+        if not context.get("shell_output_redirect") and not git_output_or_exec and (subcommand in read_only_git or branch_inspection):
             return result("allow", "git.inspect", "Git inspection is permitted.", effect="read")
         if subcommand != "push":
             return result("allow", "git.ordinary", "Git operation is permitted.")

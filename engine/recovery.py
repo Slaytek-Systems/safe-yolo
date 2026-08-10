@@ -45,7 +45,9 @@ class FileCheckpointStore:
             raise RecoveryUnavailable("Structured write has no exact recovery targets.")
         incoming_bytes = 0
         for target in resolved:
-            if target.is_file() and not target.is_symlink():
+            if target.is_symlink():
+                raise RecoveryUnavailable(f"Structured writes through symlinks require an explicit contract: {target}")
+            if target.is_file():
                 size = target.stat().st_size
                 if size > self.max_file_bytes:
                     raise RecoveryUnavailable(f"Recovery target exceeds {self.max_file_bytes} bytes: {target}")
@@ -55,6 +57,7 @@ class FileCheckpointStore:
         if self._stored_bytes() + incoming_bytes > self.max_total_bytes:
             raise RecoveryUnavailable("Recovery store capacity reached; archive checkpoints before further writes.")
 
+        self._secure_store_root()
         identifier = uuid.uuid4().hex
         checkpoint = self.root / "checkpoints" / identifier
         objects = checkpoint / "objects"
@@ -133,10 +136,14 @@ class FileCheckpointStore:
         incoming_bytes = len(diff.stdout)
         for raw in (item for item in untracked_result.stdout.split(b"\0") if item):
             relative = raw.decode("utf-8", errors="strict")
-            source = (workspace / relative).resolve(strict=False)
-            if workspace not in source.parents:
+            relative_path = Path(relative)
+            if relative_path.is_absolute() or ".." in relative_path.parts:
                 raise RecoveryUnavailable("Untracked recovery target escaped the workspace.")
+            source = workspace / relative_path
             if source.is_symlink():
+                resolved_target = source.resolve(strict=False)
+                if resolved_target != workspace and workspace not in resolved_target.parents:
+                    raise RecoveryUnavailable("Untracked symlink target escaped the workspace.")
                 incoming_bytes += len(os.readlink(source).encode("utf-8"))
             elif source.is_file():
                 size = source.stat().st_size
@@ -150,9 +157,12 @@ class FileCheckpointStore:
             raise RecoveryUnavailable("Recovery store capacity reached; archive checkpoints before further shell use.")
 
         temporary = checkpoint.with_name(f".{identifier}.{uuid.uuid4().hex}")
+        self._secure_store_root()
         objects = temporary / "untracked"
         objects.mkdir(parents=True, mode=0o700)
-        (temporary / "tracked.patch").write_bytes(diff.stdout)
+        tracked_patch = temporary / "tracked.patch"
+        tracked_patch.write_bytes(diff.stdout)
+        os.chmod(tracked_patch, 0o600)
         records: list[dict[str, object]] = []
         try:
             for index, (source, relative) in enumerate(sources):
@@ -176,8 +186,12 @@ class FileCheckpointStore:
                 "tracked_patch_sha256": self._sha256(temporary / "tracked.patch"),
                 "untracked": records,
             }
-            (temporary / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            temporary_manifest = temporary / "manifest.json"
+            temporary_manifest.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            os.chmod(temporary_manifest, 0o600)
             (self.root / "workspace-checkpoints").mkdir(parents=True, mode=0o700, exist_ok=True)
+            os.chmod(self.root / "workspace-checkpoints", 0o700)
+            os.chmod(temporary, 0o700)
             try:
                 os.replace(temporary, checkpoint)
             except OSError:
@@ -246,6 +260,10 @@ class FileCheckpointStore:
             return 0
         return sum(path.stat().st_size for path in self.root.rglob("*") if path.is_file())
 
+    def _secure_store_root(self) -> None:
+        self.root.mkdir(parents=True, mode=0o700, exist_ok=True)
+        os.chmod(self.root, 0o700)
+
     @staticmethod
     def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[bytes]:
         try:
@@ -258,7 +276,7 @@ class FileCheckpointStore:
         candidate = Path(raw_path).expanduser()
         if not candidate.is_absolute():
             candidate = cwd / candidate
-        return candidate.resolve(strict=False)
+        return Path(os.path.abspath(candidate))
 
     @staticmethod
     def _sha256(path: Path) -> str:

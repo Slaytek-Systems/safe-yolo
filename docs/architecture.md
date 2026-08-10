@@ -36,11 +36,13 @@ Risk colours are policy authoring vocabulary. The stable runtime contract is the
 
 ## Recovery state
 
-Structured Codex and Cursor writes checkpoint every exact target before the adapter returns permission. Existing files are copied with size and SHA-256 evidence; absent targets are recorded; symlinks are captured without following them. A failed or oversized checkpoint blocks the write as `recovery.unavailable`. Recovery materialization requires a new empty destination and never overwrites current work.
+Structured Codex and Cursor writes checkpoint every exact target before the adapter returns permission. Existing files are copied with size and SHA-256 evidence and absent targets are recorded. Structured writes through symlinks fail closed because the apparent path is not the mutated object. A failed or oversized checkpoint blocks the write as `recovery.unavailable`. Recovery materialization requires a new empty destination and never overwrites current work.
 
-The store is append-only and capped at 1 GiB per host. Reaching the cap blocks further structured writes rather than deleting recovery evidence or exhausting the disk silently.
+The store is append-only, private to the host user, and capped at 1 GiB per host. Reaching the cap blocks further structured writes rather than deleting recovery evidence or exhausting the disk silently.
 
 Shell commands with mutable or unknown effects take one Git workspace checkpoint per session turn. The checkpoint binds the committed HEAD, a binary patch for dirty tracked state, and hashed copies of non-ignored untracked files and symlinks. Multiple shell calls in the turn reuse the original pre-turn state. Known read-only command shapes remain autonomous outside repositories; output redirects are treated as mutations. Mutable shell work outside a committed Git workspace requires an explicit recovery contract and otherwise fails closed.
+
+This workspace checkpoint is not yet sufficient evidence for opaque command execution: ignored files, paths outside the checkout, network calls, and service state are outside its recovery boundary. The source candidate must not be activated until opaque executables are method-blocked or admitted through an explicit effect-and-recovery contract.
 
 Version 1.1.0 remains a source candidate until the adapters pass live hook-failure, checkpoint, non-obstruction, and cross-host conformance probes.
 
