@@ -28,6 +28,30 @@ THREAD_MESSAGE_TOOLS = {"codex_appsend_message_to_thread"}
 AUTOMATION_TOOLS = {"codex_appautomation_update"}
 AUTOMATION_MANAGEMENT_MODES = {"create", "update", "pause", "resume"}
 COLLABORATION_TOOLS = {"collaborationspawn_agent", "collaborationwait_agent", "collaborationlist_agents"}
+NODE_REPL_JS_TOOLS = {"mcp__node_repl__js"}
+NODE_REPL_RESET_TOOLS = {"mcp__node_repl__js_reset"}
+COMPUTER_USE_OBSERVATION_METHODS = {"get_app_state", "list_apps", "scroll"}
+COMPUTER_USE_ACTION_METHODS = {
+    "click",
+    "drag",
+    "perform_secondary_action",
+    "press_key",
+    "select_text",
+    "set_value",
+    "type_text",
+}
+JS_CALL_RE = re.compile(r"(?<![\w$])([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\(")
+JS_IMPORT_RE = re.compile(r"\bimport\s*\(\s*(['\"])([^'\"]+)\1\s*\)")
+ALLOWED_COMPUTER_USE_IMPORTS = {"@oai/sky", "node:fs/promises", "node:url"}
+ALLOWED_COMPUTER_USE_HELPER_CALLS = {
+    "import",
+    "JSON.stringify",
+    "nodeRepl.write",
+    "nodeRepl.emitImage",
+    "fs.readFile",
+    "fileURLToPath",
+}
+JS_CONTROL_KEYWORDS = {"if"}
 
 
 def _strings(value: Any, key: str = ""):
@@ -63,6 +87,123 @@ def contains_patch_delete(tool_input: Any) -> bool:
         for key, value in _strings(tool_input)
         if key in {"patch", "input", "command"}
         for line in value.splitlines()
+    )
+
+
+def _mask_js_literals(code: str) -> str:
+    """Mask strings and comments so call discovery cannot be confused by their text."""
+    output = list(code)
+    index = 0
+    while index < len(code):
+        if code.startswith("//", index):
+            end = code.find("\n", index + 2)
+            end = len(code) if end < 0 else end
+            for position in range(index, end):
+                output[position] = " "
+            index = end
+            continue
+        if code.startswith("/*", index):
+            end = code.find("*/", index + 2)
+            end = len(code) if end < 0 else end + 2
+            for position in range(index, end):
+                output[position] = " "
+            index = end
+            continue
+        if code[index] in {"'", '"', "`"}:
+            quote = code[index]
+            output[index] = " "
+            index += 1
+            while index < len(code):
+                output[index] = " "
+                if code[index] == "\\":
+                    index += 2
+                    continue
+                if code[index] == quote:
+                    index += 1
+                    break
+                index += 1
+            continue
+        index += 1
+    return "".join(output)
+
+
+def classify_node_repl(tool_input: Any) -> dict[str, Any]:
+    code = tool_input.get("code") if isinstance(tool_input, dict) else None
+    if not isinstance(code, str) or not code.strip() or "`" in code:
+        return result(
+            "block_method",
+            "codex.node_repl_code_unclassified",
+            "Node REPL code requires a narrow recognized Computer Use mapping.",
+        )
+
+    masked = _mask_js_literals(code)
+    if re.search(r"\b(?:sky|nodeRepl|fs)\s*\[", masked):
+        return result(
+            "block_method",
+            "codex.node_repl_code_unclassified",
+            "Computed runtime method access is not classified.",
+        )
+
+    imports = [match.group(2) for match in JS_IMPORT_RE.finditer(code)]
+    import_call_count = len(re.findall(r"\bimport\s*\(", masked))
+    if import_call_count != len(imports) or any(
+        module not in ALLOWED_COMPUTER_USE_IMPORTS for module in imports
+    ):
+        return result(
+            "block_method",
+            "codex.node_repl_code_unclassified",
+            "Only the documented Computer Use imports are classified.",
+        )
+
+    calls = set(JS_CALL_RE.findall(masked))
+    sky_calls = {call for call in calls if call.startswith("sky.")}
+    sky_methods = {call.split(".", 1)[1] for call in sky_calls}
+    known_sky_methods = COMPUTER_USE_OBSERVATION_METHODS | COMPUTER_USE_ACTION_METHODS
+    allowed_calls = {
+        *(f"sky.{method}" for method in known_sky_methods),
+        *ALLOWED_COMPUTER_USE_HELPER_CALLS,
+        *JS_CONTROL_KEYWORDS,
+    }
+    if calls - allowed_calls:
+        return result(
+            "block_method",
+            "codex.node_repl_code_unclassified",
+            "Node REPL call is outside the documented Computer Use surface.",
+        )
+
+    if not sky_methods:
+        if imports == ["@oai/sky"] and calls <= {"import"}:
+            return result(
+                "allow",
+                "codex.computer_use_bootstrap",
+                "The documented Computer Use runtime bootstrap is permitted.",
+            )
+        return result(
+            "block_method",
+            "codex.node_repl_code_unclassified",
+            "Generic Node REPL execution is not a Computer Use action.",
+        )
+
+    if "fs.readFile" in calls and not (
+        "fileURLToPath" in calls
+        and re.search(r"fs\.readFile\s*\(\s*fileURLToPath\s*\([^)]*\.screenshot\.url", code)
+    ):
+        return result(
+            "block_method",
+            "codex.node_repl_code_unclassified",
+            "File reads are classified only for emitting a Computer Use screenshot.",
+        )
+
+    if sky_methods & COMPUTER_USE_ACTION_METHODS:
+        return result(
+            "allow_report",
+            "codex.computer_use_action",
+            "Recognized Computer Use actions are permitted and reported; action-time confirmation policy still applies.",
+        )
+    return result(
+        "allow",
+        "codex.computer_use_observation",
+        "Read-only Computer Use observation and navigation are permitted.",
     )
 
 
@@ -122,6 +263,10 @@ def evaluate_payload(payload: dict[str, Any], engine: SafeYoloEngine) -> dict[st
         if mode == "delete":
             return engine.evaluate({"action": "records.delete", **context})
         return result("block_method", "codex.automation_operation_unclassified", "Unclassified automation operation requires an adapter update before use.")
+    if tool_name in NODE_REPL_JS_TOOLS:
+        return classify_node_repl(tool_input)
+    if tool_name in NODE_REPL_RESET_TOOLS:
+        return result("allow_report", "codex.node_repl_reset", "Resetting ephemeral Node REPL state is permitted and reported.")
     if tool_name in COLLABORATION_TOOLS:
         return result("allow", "codex.collaboration", "Collaboration management is permitted.")
     return result("block_method", "tool.unclassified", "Unclassified tool requires a consequence mapping before use.")

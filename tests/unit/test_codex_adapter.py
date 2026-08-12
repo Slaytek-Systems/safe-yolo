@@ -76,6 +76,92 @@ class CodexAdapterTests(unittest.TestCase):
         decision = evaluate_payload({"tool_name": "webrun", "tool_input": {}}, self.engine)
         self.assertEqual("allow", decision["decision"])
 
+    def test_computer_use_bootstrap_and_observation_are_allowed(self):
+        cases = [
+            'globalThis.sky = (await import("@oai/sky")).sky;',
+            (
+                'globalThis.sky = (await import("@oai/sky")).sky; '
+                'var apps = await sky.list_apps(); nodeRepl.write(JSON.stringify(apps));'
+            ),
+            'var apps = await sky.list_apps(); nodeRepl.write(JSON.stringify(apps));',
+            'var state = await sky.get_app_state({ app: "Google Chrome" }); nodeRepl.write(state.text);',
+            'await sky.scroll({ app: "Google Chrome", element_index: 42, direction: "down", pages: 1 });',
+        ]
+        for code in cases:
+            with self.subTest(code=code):
+                decision = evaluate_payload(
+                    {
+                        "tool_name": "mcp__node_repl__js",
+                        "tool_input": {"code": code},
+                    },
+                    self.engine,
+                )
+                self.assertEqual("allow", decision["decision"])
+                self.assertTrue(decision["policy_id"].startswith("codex.computer_use_"))
+
+    def test_computer_use_ui_mutations_are_allowed_and_reported(self):
+        decision = evaluate_payload(
+            {
+                "tool_name": "mcp__node_repl__js",
+                "tool_input": {
+                    "code": (
+                        'await sky.click({ app: "Google Chrome", element_index: 42 }); '
+                        'nodeRepl.write((await sky.get_app_state({ app: "Google Chrome" })).text);'
+                    )
+                },
+            },
+            self.engine,
+        )
+        self.assertEqual("allow_report", decision["decision"])
+        self.assertEqual("codex.computer_use_action", decision["policy_id"])
+
+    def test_computer_use_screenshot_emission_is_limited_to_screenshot_url(self):
+        decision = evaluate_payload(
+            {
+                "tool_name": "mcp__node_repl__js",
+                "tool_input": {
+                    "code": (
+                        'var fs = await import("node:fs/promises"); '
+                        'var { fileURLToPath } = await import("node:url"); '
+                        'var state = await sky.get_app_state({ app: "Google Chrome" }); '
+                        'if (state.screenshot) { await nodeRepl.emitImage({ '
+                        'bytes: await fs.readFile(fileURLToPath(state.screenshot.url)), '
+                        'mimeType: "image/png" }); }'
+                    )
+                },
+            },
+            self.engine,
+        )
+        self.assertEqual("allow", decision["decision"])
+        self.assertEqual("codex.computer_use_observation", decision["policy_id"])
+
+    def test_node_repl_fails_closed_for_arbitrary_or_unknown_code(self):
+        cases = [
+            'var fs = await import("node:fs/promises"); await fs.writeFile("/tmp/x", "x");',
+            'await fetch("https://example.com/mutate", { method: "POST" });',
+            'await sky.execute_script({ code: "danger" });',
+            'sky["click"]({ app: "Google Chrome", element_index: 42 });',
+        ]
+        for code in cases:
+            with self.subTest(code=code):
+                decision = evaluate_payload(
+                    {
+                        "tool_name": "mcp__node_repl__js",
+                        "tool_input": {"code": code},
+                    },
+                    self.engine,
+                )
+                self.assertEqual("block_method", decision["decision"])
+                self.assertEqual("codex.node_repl_code_unclassified", decision["policy_id"])
+
+    def test_node_repl_reset_is_reversible_runtime_management(self):
+        decision = evaluate_payload(
+            {"tool_name": "mcp__node_repl__js_reset", "tool_input": {}},
+            self.engine,
+        )
+        self.assertEqual("allow_report", decision["decision"])
+        self.assertEqual("codex.node_repl_reset", decision["policy_id"])
+
     def test_shell_and_unknown_side_effects_are_blocked(self):
         shell = evaluate_payload(
             {"tool_name": "Bash", "tool_input": {"command": "rm obsolete.txt"}}, self.engine
