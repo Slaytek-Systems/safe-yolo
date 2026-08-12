@@ -33,8 +33,11 @@ class InstallerTests(unittest.TestCase):
             install_release(ROOT, self.home)
 
     def test_macos_cutover_script_is_directly_executable_by_python(self):
+        script = ROOT / "scripts" / "cutover_macos.py"
+        self.assertTrue(script.stat().st_mode & 0o111)
+        self.assertEqual("#!/usr/bin/env python3", script.read_text(encoding="utf-8").splitlines()[0])
         result = subprocess.run(
-            [sys.executable, str(ROOT / "scripts" / "cutover_macos.py"), "--help"],
+            [str(script), "--help"],
             capture_output=True,
             text=True,
             check=False,

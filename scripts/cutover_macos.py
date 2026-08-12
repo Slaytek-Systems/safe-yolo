@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Atomically cut macOS Codex over to one verified Safe YOLO release."""
 
 from __future__ import annotations
