@@ -64,7 +64,11 @@ def normalize_tool_payload(payload: dict[str, Any]) -> dict[str, Any]:
         event != "beforeMCPExecution" and "command" in payload and "tool_name" not in payload
     ):
         command = payload.get("command") or ""
-        cwd = payload.get("cwd") or ""
+        cwd = payload.get("cwd") or payload.get("working_directory") or ""
+        if not cwd:
+            tool_input_hint = payload.get("tool_input")
+            if isinstance(tool_input_hint, dict):
+                cwd = tool_input_hint.get("working_directory") or tool_input_hint.get("workdir") or ""
         tool_input: dict[str, Any] = {"command": command}
         if isinstance(cwd, str) and cwd:
             tool_input["workdir"] = cwd
@@ -129,6 +133,15 @@ def evaluate_cursor_payload(payload: dict[str, Any], engine: SafeYoloEngine) -> 
     event = str(payload.get("hook_event_name") or "")
 
     if event == "beforeMCPExecution":
+        # Collaborative browser preview tools (Cursor shared browser tab) are
+        # scoped to an agent-driven browser the user can watch; approved by
+        # Matt 2026-08-16. Tool names arrive both fully-prefixed and stripped.
+        if original.startswith(("t3-code-preview", "preview_")):
+            return result(
+                "allow",
+                "cursor.collaborative_browser",
+                "Collaborative browser preview tool is permitted.",
+            )
         return result(
             "block_hard",
             "tool.unclassified",

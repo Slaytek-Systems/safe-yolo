@@ -49,6 +49,7 @@ AUTH_FLAGS = {
     "--proxy-user",
 }
 PRIVATE_HOSTS = {"localhost", "0.0.0.0", "127.0.0.1", "::1"}
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 METADATA_HOSTS = {"169.254.169.254", "metadata.google.internal"}
 SECRET_RE = re.compile(
     r"(?:sk-[A-Za-z0-9_-]{20,}|github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,})"
@@ -423,7 +424,7 @@ class SafeYoloEngine:
 
         if executable in {"docker", "docker-compose"}:
             return self._inspect_docker(context)
-        if tokens[0] == "./workspace":
+        if self._is_workspace_launcher(tokens, args, context):
             return self._inspect_workspace_launcher(args, context)
         if tokens[0].startswith("./"):
             return result("block_method", "workspace.lifecycle", "Project launchers require a tracked repository contract.")
@@ -535,37 +536,111 @@ class SafeYoloEngine:
             return result("block_method", "docker.workspace_contract", "Raw Docker is reserved for the approved operations workspace.")
         return result("allow", "docker.operations_workspace", "Docker operation is within the approved operations workspace.")
 
-    def _inspect_workspace_launcher(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
+    @staticmethod
+    def _workspace_command_args(args: list[str]) -> tuple[str | None, list[str]]:
+        repo = None
+        remaining: list[str] = []
+        index = 0
+        while index < len(args):
+            arg = args[index]
+            if arg == "--repo" and index + 1 < len(args):
+                repo = args[index + 1]
+                index += 2
+                continue
+            if arg.startswith("--repo="):
+                repo = arg.split("=", 1)[1]
+                index += 1
+                continue
+            remaining.append(arg)
+            index += 1
+        return repo, remaining
+
+    def _workspace_root(self) -> Path | None:
         workspaces_root = self.host_contract.get("workspaces_root")
-        cwd_value = context.get("cwd")
-        if not workspaces_root or not cwd_value:
-            return result("block_method", "workspace.lifecycle", "Workspace launcher requires an approved host contract.")
+        if not workspaces_root:
+            return None
         try:
-            root = Path(str(workspaces_root)).expanduser().resolve(strict=False)
-            cwd = Path(str(cwd_value)).expanduser().resolve(strict=False)
-            relative = cwd.relative_to(root)
-        except (OSError, ValueError):
+            return Path(str(workspaces_root)).expanduser().resolve(strict=False)
+        except OSError:
+            return None
+
+    def _resolve_workspace_checkout(self, raw: str | None, cwd: str | None) -> Path | None:
+        if not isinstance(raw, str) or not raw:
+            return None
+        try:
+            candidate = Path(raw).expanduser()
+            if not candidate.is_absolute():
+                base = Path(cwd).expanduser() if isinstance(cwd, str) and cwd else Path.cwd()
+                candidate = base / candidate
+            return candidate.resolve(strict=False)
+        except OSError:
+            return None
+
+    def _workspace_relative(self, checkout: Path) -> str | None:
+        root = self._workspace_root()
+        if root is None:
+            return None
+        try:
+            return str(checkout.relative_to(root))
+        except ValueError:
+            return None
+
+    def _is_workspace_launcher(self, tokens: list[str], args: list[str], context: dict[str, Any]) -> bool:
+        if tokens[0] == "./workspace":
+            return True
+        if Path(tokens[0]).name != "workspace":
+            return False
+        repo_flag, command_args = self._workspace_command_args(args)
+        checkout = self._resolve_workspace_checkout(repo_flag, context.get("cwd") if isinstance(context.get("cwd"), str) else None)
+        if checkout is None:
+            checkout = self._resolve_workspace_checkout(context.get("cwd") if isinstance(context.get("cwd"), str) else None, None)
+        if checkout is None or self._workspace_relative(checkout) is None:
+            return False
+        lifecycle = command_args[0] if command_args else ""
+        allowed_lifecycle = set(self.host_contract.get("workspace_lifecycle") or [])
+        if lifecycle in allowed_lifecycle:
+            return True
+        relative = self._workspace_relative(checkout)
+        return any(
+            item.get("workspace") == relative and item.get("command") == command_args
+            for item in (self.host_contract.get("workspace_commands") or [])
+        )
+
+    def _inspect_workspace_launcher(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
+        if self._workspace_root() is None:
+            return result("block_method", "workspace.lifecycle", "Workspace launcher requires an approved host contract.")
+        repo_flag, command_args = self._workspace_command_args(args)
+        cwd_value = context.get("cwd") if isinstance(context.get("cwd"), str) else None
+        checkout = self._resolve_workspace_checkout(repo_flag, cwd_value) or self._resolve_workspace_checkout(cwd_value, None)
+        if checkout is None:
+            return result(
+                "block_method",
+                "workspace.lifecycle",
+                "Workspace launcher requires cwd or --repo under the approved workspace root.",
+            )
+        relative = self._workspace_relative(checkout)
+        if relative is None:
             return result("block_method", "workspace.lifecycle", "Workspace launcher is outside the approved workspace root.")
-        launcher = cwd / "workspace"
+        launcher = checkout / "workspace"
         if not launcher.is_file() or launcher.is_symlink():
             return result("block_method", "workspace.untrusted_launcher", "Workspace launcher must be a real tracked file.")
-        lifecycle = args[0] if args else ""
+        lifecycle = command_args[0] if command_args else ""
         allowed_lifecycle = set(self.host_contract.get("workspace_lifecycle") or [])
         command_contracts = self.host_contract.get("workspace_commands") or []
         contract = next(
             (
                 item
                 for item in command_contracts
-                if item.get("workspace") == str(relative) and item.get("command") == args
+                if item.get("workspace") == relative and item.get("command") == command_args
             ),
             None,
         )
         if lifecycle not in allowed_lifecycle and contract is None:
             return result("block_method", "workspace.lifecycle", "Unknown workspace lifecycle command requires direct review.")
         checks = (
-            ["git", "-C", str(cwd), "ls-files", "--error-unmatch", "workspace"],
-            ["git", "-C", str(cwd), "diff", "--quiet", "--", "workspace"],
-            ["git", "-C", str(cwd), "diff", "--cached", "--quiet", "--", "workspace"],
+            ["git", "-C", str(checkout), "ls-files", "--error-unmatch", "workspace"],
+            ["git", "-C", str(checkout), "diff", "--quiet", "--", "workspace"],
+            ["git", "-C", str(checkout), "diff", "--cached", "--quiet", "--", "workspace"],
         )
         try:
             if any(subprocess.run(check, capture_output=True, check=False, timeout=2).returncode != 0 for check in checks):
@@ -756,6 +831,13 @@ class SafeYoloEngine:
             host = (parsed.hostname or "").lower()
             if host in METADATA_HOSTS:
                 return result("block_hard", "network.metadata", "Cloud metadata endpoints are Red.")
+            if host in LOOPBACK_HOSTS:
+                registered = {int(port) for port in (self.host_contract.get("workspace_loopback_ports") or [])}
+                port = parsed.port
+                if port is None:
+                    port = 443 if parsed.scheme == "https" else 80
+                if port in registered:
+                    return result("allow", "network.workspace_loopback", "Loopback read of a registered workspace port is permitted.")
             if host in PRIVATE_HOSTS or host.startswith("10.") or host.startswith("192.168.") or host.startswith("172.16."):
                 return result("require_capability", "network.private_read", "Private or local network access requires a scoped capability.")
         return result("allow", "network.public_read", "Literal credential-free public read is Green.")

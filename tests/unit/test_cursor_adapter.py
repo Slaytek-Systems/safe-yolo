@@ -100,6 +100,35 @@ class CursorAdapterTests(unittest.TestCase):
         self.assertEqual("require_capability", decision["decision"])
         self.assertEqual("git.push_protected", decision["policy_id"])
 
+    def test_shell_working_directory_is_accepted_as_cwd(self):
+        clean = SimpleNamespace(returncode=0)
+        checkout = Path(self.temp.name) / "workspaces" / "client" / "repos" / "app"
+        checkout.mkdir(parents=True)
+        (checkout / "workspace").write_text("#!/usr/bin/env bash\n")
+        engine = SafeYoloEngine(
+            json.loads((ROOT / "policy" / "policy.json").read_text()),
+            capability_store=self.store,
+            path_variables={
+                "SAFE_YOLO_HOME": "/opt/safe-yolo",
+                "CODEX_HOME": "/home/test/.codex",
+            },
+            host_contract={
+                "version": "1",
+                "workspaces_root": str(checkout.parents[2]),
+                "workspace_lifecycle": ["status"],
+            },
+        )
+        with patch("engine.safe_yolo.subprocess.run", return_value=clean):
+            decision = evaluate_cursor_payload(
+                {
+                    "hook_event_name": "beforeShellExecution",
+                    "command": "./workspace status --json",
+                    "working_directory": str(checkout),
+                },
+                engine,
+            )
+        self.assertEqual("allow", decision["decision"], decision)
+
 
 if __name__ == "__main__":
     unittest.main()
