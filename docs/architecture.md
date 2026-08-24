@@ -20,6 +20,7 @@ Safe YOLO—not approval prompts or the native Codex sandbox—is the authoritat
 5. A canonical conformance corpus produces equivalent decisions across macOS and Linux.
 6. Host adapters declare facts (paths, service managers, launchers); they cannot weaken common policy.
 7. Raw production deploy commands are blocked. A release is permitted only through a repository-specific, externally verifiable contract.
+8. Raw Git force pushes remain constitutional Red. A named stack manager may own a separately reviewed Blue action only when its default preserves lease checks, stale-remote rejection, repository verification, and explicit merge authority; bypass flags remain blocked.
 
 ## Trust boundaries
 

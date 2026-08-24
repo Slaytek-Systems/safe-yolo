@@ -8,6 +8,10 @@
 {"id":"find_delete","command":"find . -name '*.tmp' -delete","expected":"block_hard"}
 {"id":"substitution_rm","command":"echo $(rm obsolete.txt)","expected":"block_hard"}
 {"id":"force_push","command":"git push --force-with-lease origin feature/x","expected":"block_hard"}
+{"id":"graphite_submit_force","command":"gt submit --force","expected":"block_hard","context":{"cwd":"/repo"}}
+{"id":"graphite_submit_no_verify","command":"gt submit --no-verify","expected":"block_hard","context":{"cwd":"/repo"}}
+{"id":"graphite_sync_force","command":"gt sync --force","expected":"block_hard","context":{"cwd":"/repo"}}
+{"id":"graphite_submit_merge_when_ready","command":"gt submit --merge-when-ready","expected":"require_capability","context":{"cwd":"/repo"}}
 {"id":"forced_refspec","command":"git push origin +HEAD:feature/x","expected":"block_hard"}
 {"id":"delete_refspec","command":"git push origin :feature/x","expected":"block_hard"}
 {"id":"git_c_force_push","command":"git -C /repo push --force origin feature/x","expected":"block_hard"}

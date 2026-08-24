@@ -24,6 +24,7 @@ DECISIONS = {
 SHELLS = {"bash", "sh", "zsh", "fish"}
 DESTRUCTIVE_GIT = {"reset", "rebase", "restore", "clean"}
 FORCE_FLAGS = {"--force", "--force-with-lease", "-f"}
+GRAPHITE_STACK_COMMANDS = {"modify", "restack", "submit", "ss", "sync"}
 PROTECTED_BRANCHES = {"main", "master", "production", "prod"}
 NETWORK_WRITE_FLAGS = {
     "-d",
@@ -430,6 +431,8 @@ class SafeYoloEngine:
             return result("block_method", "workspace.lifecycle", "Project launchers require a tracked repository contract.")
         if executable == "git":
             return self._inspect_git(args, context)
+        if executable == "gt":
+            return self._inspect_graphite(args, context)
         if executable == "gh":
             return self._inspect_gh(args, context)
         if executable == "core-edge":
@@ -733,7 +736,7 @@ class SafeYoloEngine:
             return result("block_hard", "git.discard_work", "Checkout cannot discard working-tree changes.")
         if subcommand != "push":
             return result("allow", "git.ordinary", "Git operation is permitted.")
-        if any(arg in FORCE_FLAGS or arg.startswith("--force=") for arg in rest):
+        if any(arg in FORCE_FLAGS or arg.startswith(("--force=", "--force-with-lease=")) for arg in rest):
             return result("block_hard", "git.force_push", "Force push is always Red.")
         if any(arg.startswith("+") for arg in rest):
             return result("block_hard", "git.force_push", "Forced refspecs are always Red.")
@@ -756,6 +759,77 @@ class SafeYoloEngine:
         if branch and (branch in PROTECTED_BRANCHES or branch.startswith("release/")):
             return self.evaluate({"action": "git.push_protected", "target": branch, **git_context})
         return self.evaluate({"action": "git.push_feature", **git_context})
+
+    def _inspect_graphite(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
+        graphite_context = dict(context)
+        cwd = self._flag_value(args, "--cwd")
+        if not cwd:
+            cwd = next((arg.split("=", 1)[1] for arg in args if arg.startswith("--cwd=")), "")
+        if cwd:
+            effective_cwd = Path(cwd).expanduser()
+            if not effective_cwd.is_absolute():
+                base_cwd = graphite_context.get("cwd")
+                if not isinstance(base_cwd, str) or not base_cwd:
+                    return result("block_method", "graphite.context_missing", "Relative Graphite --cwd requires a known working directory.")
+                effective_cwd = Path(base_cwd).expanduser() / effective_cwd
+            graphite_context["cwd"] = str(effective_cwd.resolve(strict=False))
+
+        command = ""
+        index = 0
+        while index < len(args):
+            arg = args[index]
+            if arg == "--cwd":
+                index += 2
+                continue
+            if arg.startswith("--cwd=") or arg.startswith("-"):
+                index += 1
+                continue
+            command = arg
+            break
+
+        if any(arg == "--no-verify" or arg.startswith("--no-verify=") or arg == "--verify=false" for arg in args):
+            return result("block_hard", "graphite.bypass_verification", "Graphite may not disable repository verification hooks.")
+        if command in {"submit", "ss"} and any(
+            arg in {"--force", "-f", "--ignore-out-of-sync-trunk"}
+            or arg.startswith(("--force=", "--ignore-out-of-sync-trunk="))
+            or (arg.startswith("-") and not arg.startswith("--") and "f" in arg[1:])
+            for arg in args
+        ):
+            return result("block_hard", "graphite.unsafe_submit", "Graphite submit overrides that remove the lease or ignore trunk synchronization are blocked.")
+        if command == "sync" and any(
+            arg in {"--force", "-f", "--delete-all", "-d"}
+            or arg.startswith(("--force=", "--delete-all="))
+            or (arg.startswith("-") and not arg.startswith("--") and any(flag in arg[1:] for flag in "fd"))
+            for arg in args
+        ):
+            return result("block_hard", "graphite.unsafe_sync", "Graphite sync may not skip branch overwrite or deletion confirmations.")
+        if command == "modify" and any(arg == "--interactive-rebase" or arg.startswith("--interactive-rebase=") for arg in args):
+            return result("block_hard", "graphite.interactive_rebase", "Interactive history surgery is outside the reviewed Graphite stack workflow.")
+        if command in {"submit", "ss"} and any(
+            arg in {"--merge-when-ready", "-m"} or arg.startswith("--merge-when-ready=")
+            or (arg.startswith("-") and not arg.startswith("--") and "m" in arg[1:])
+            for arg in args
+        ):
+            return self.evaluate({"action": "github.pr_merge", **graphite_context})
+
+        if command not in GRAPHITE_STACK_COMMANDS:
+            return result("allow", "graphite.ordinary", "Graphite inspection and ordinary topology commands are permitted.")
+
+        working_directory = graphite_context.get("cwd")
+        if not isinstance(working_directory, str) or not working_directory:
+            return result("block_method", "graphite.context_missing", "Graphite stack mutation requires a known repository working directory.")
+        repository_root = self._git_value(["rev-parse", "--show-toplevel"], working_directory)
+        if not repository_root:
+            return result("block_method", "graphite.context_missing", "Graphite stack mutation requires a verified Git repository.")
+
+        branch = self._flag_value(args, "--branch") or self._flag_value(args, "--into")
+        if not branch and command != "sync":
+            branch = self._push_branch(graphite_context) or ""
+        if command != "sync" and not branch:
+            return result("require_capability", "git.push_protected", "Graphite stack branch could not be determined.")
+        if branch and (branch in PROTECTED_BRANCHES or branch.startswith("release/")):
+            return self.evaluate({"action": "git.push_protected", "target": branch, **graphite_context})
+        return self.evaluate({"action": "git.graphite_stack", "operation": command, **graphite_context})
 
     def _inspect_gh(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
         if args[:2] == ["pr", "create"]:

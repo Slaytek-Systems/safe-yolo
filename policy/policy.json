@@ -19,6 +19,7 @@
     "filesystem.quarantine": {"classification": "green"},
     "filesystem.delete": {"classification": "red", "capability_override": false},
     "git.commit": {"classification": "green"},
+    "git.graphite_stack": {"classification": "blue"},
     "git.push_feature": {"classification": "blue"},
     "git.push_tag": {"classification": "red", "capability_override": false},
     "git.push_protected": {"classification": "amber"},
