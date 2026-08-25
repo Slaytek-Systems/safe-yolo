@@ -705,6 +705,44 @@ class SafeYoloEngine:
             return None
         return self._git_value(["branch", "--show-current"], cwd)
 
+    @staticmethod
+    def _push_target_branch(refspec: str, current_branch: str | None) -> str:
+        destination = refspec.split(":", 1)[1] if ":" in refspec else refspec
+        if destination == "HEAD":
+            destination = current_branch or ""
+        return destination.removeprefix("refs/heads/")
+
+    def _protected_push_exception(
+        self,
+        rest: list[str],
+        context: dict[str, Any],
+        current_branch: str | None,
+    ) -> dict[str, Any] | None:
+        cwd = context.get("cwd")
+        if not isinstance(cwd, str) or not cwd or not current_branch:
+            return None
+        for contract in self.host_contract.get("git_protected_push_exceptions") or []:
+            if not isinstance(contract, dict):
+                continue
+            remote = contract.get("remote")
+            branch = contract.get("branch")
+            repository = contract.get("repository")
+            if not all(isinstance(value, str) and value for value in (remote, branch, repository)):
+                continue
+            if current_branch != branch or rest != [remote, branch]:
+                continue
+            repository_root = self._git_value(["rev-parse", "--show-toplevel"], cwd)
+            if not repository_root:
+                return None
+            if Path(repository_root).resolve(strict=False) != Path(repository).expanduser().resolve(strict=False):
+                continue
+            return result(
+                "allow_report",
+                str(contract.get("policy_id") or "git.protected_push_exception"),
+                str(contract.get("reason") or "Exact host-contracted protected push is permitted."),
+            )
+        return None
+
     def _inspect_git(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
         filtered = list(args)
         git_context = dict(context)
@@ -745,6 +783,8 @@ class SafeYoloEngine:
         positional = [arg for arg in rest if not arg.startswith("-")]
         if any(arg.startswith(":") or arg.endswith(":") for arg in positional):
             return result("block_hard", "git.delete_ref", "Ref deletion is Red.")
+        if len(positional) > 2:
+            return result("block_hard", "git.unsafe_push", "Multi-ref push shapes are blocked.")
         tag = next((arg for arg in positional if TAG_RE.fullmatch(arg) or "refs/tags/" in arg), None)
         if tag:
             return self.evaluate({"action": "git.push_tag", "target": tag.removeprefix("refs/tags/"), **git_context})
@@ -756,8 +796,21 @@ class SafeYoloEngine:
                 "git.push_protected",
                 "Current branch could not be determined for push classification.",
             )
-        if branch and (branch in PROTECTED_BRANCHES or branch.startswith("release/")):
-            return self.evaluate({"action": "git.push_protected", "target": branch, **git_context})
+        exception = self._protected_push_exception(rest, git_context, branch)
+        if exception is not None:
+            return exception
+        refspecs = positional[1:]
+        target_branches = [self._push_target_branch(refspec, branch) for refspec in refspecs]
+        protected_target = next(
+            (
+                target
+                for target in [branch or "", *target_branches]
+                if target in PROTECTED_BRANCHES or target.startswith("release/")
+            ),
+            "",
+        )
+        if protected_target:
+            return self.evaluate({"action": "git.push_protected", "target": protected_target, **git_context})
         return self.evaluate({"action": "git.push_feature", **git_context})
 
     def _inspect_graphite(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
