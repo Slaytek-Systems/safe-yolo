@@ -1,7 +1,9 @@
-import unittest
+import json
 from pathlib import Path
+import tempfile
+import unittest
 
-from scripts.remote_update import repin_command_text
+from scripts.remote_update import install_host_contract, repin_command_text
 
 
 class RemoteUpdatePinTests(unittest.TestCase):
@@ -44,6 +46,39 @@ exec /usr/bin/python3 /home/dev/.safe-yolo/bootstrap.py \\
             updated,
         )
         self.assertIn("--entry cursor", updated)
+
+    def test_installs_reviewed_host_contract_atomically_with_backup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.json"
+            target = root / "live" / "host-contract.json"
+            backups = root / "backups"
+            source.write_text(json.dumps({"version": "1", "git_protected_push_exceptions": []}))
+            target.parent.mkdir()
+            target.write_text(json.dumps({"version": "old"}))
+
+            changed = install_host_contract(source, target, backups, "1.0.21")
+
+            self.assertTrue(changed)
+            self.assertEqual(json.loads(source.read_text()), json.loads(target.read_text()))
+            self.assertEqual(
+                {"version": "old"},
+                json.loads((backups / "host-contract.json.pre-1.0.21").read_text()),
+            )
+            self.assertEqual(0o600, target.stat().st_mode & 0o777)
+
+    def test_invalid_host_contract_does_not_replace_live_contract(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.json"
+            target = root / "host-contract.json"
+            source.write_text("not json")
+            target.write_text(json.dumps({"version": "live"}))
+
+            with self.assertRaises(ValueError):
+                install_host_contract(source, target, root / "backups", "1.0.21")
+
+            self.assertEqual({"version": "live"}, json.loads(target.read_text()))
 
 
 if __name__ == "__main__":

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,12 +21,48 @@ from scripts.release_manifest import manifest_digest
 SOURCE = Path("/home/dev/safe-yolo-source")
 HOME = Path("/home/dev/.safe-yolo")
 HOOKS = Path("/home/dev/.codex/hooks.json")
+HOST_CONTRACT_SOURCE = Path("/home/dev/devbox-ops/config/safe-yolo-host-contract.json")
+HOST_CONTRACT = HOME / "host-contract.json"
 CURSOR_HOOKS = (
     Path("/home/dev/.cursor/hooks/safe-yolo-cursor.sh"),
     Path("/home/dev/.cursor/hooks/safe-yolo-cursor-prompt.sh"),
 )
 RELEASE_PIN_RE = re.compile(r"(--release\s+)\S+")
 MANIFEST_PIN_RE = re.compile(r"(--manifest-sha256\s+)[0-9a-f]{64}")
+
+
+def install_host_contract(
+    source: Path,
+    target: Path,
+    backup_dir: Path,
+    version: str,
+) -> bool:
+    raw = source.read_bytes()
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ValueError("Reviewed host contract must be valid JSON.") from error
+    if not isinstance(document, dict) or not isinstance(document.get("version"), str) or not document["version"]:
+        raise ValueError("Reviewed host contract must be a versioned JSON object.")
+    if target.is_file() and target.read_bytes() == raw:
+        os.chmod(target, 0o600)
+        return False
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(backup_dir, 0o700)
+    if target.exists():
+        backup = backup_dir / f"host-contract.json.pre-{version}"
+        if not backup.exists():
+            shutil.copy2(target, backup)
+            os.chmod(backup, 0o600)
+
+    with tempfile.TemporaryDirectory(dir=target.parent, prefix=".host-contract.") as temporary:
+        staging = Path(temporary) / target.name
+        staging.write_bytes(raw)
+        os.chmod(staging, 0o600)
+        os.replace(staging, target)
+    return True
 
 
 def repin_command_text(text: str, release: Path, manifest_sha256: str) -> tuple[str, int]:
@@ -87,8 +125,8 @@ def ensure_release(version: str) -> dict[str, str]:
 
 
 def main() -> int:
-    if not SOURCE.is_dir() or not HOME.is_dir():
-        raise RuntimeError("Expected devbox canonical source and Safe YOLO home directories.")
+    if not SOURCE.is_dir() or not HOME.is_dir() or not HOST_CONTRACT_SOURCE.is_file():
+        raise RuntimeError("Expected devbox canonical source, host contract, and Safe YOLO home paths.")
     version = (SOURCE / "VERSION").read_text().strip()
     receipt = ensure_release(version)
     release = Path(receipt["release"])
@@ -105,6 +143,12 @@ def main() -> int:
             shutil.copy2(bootstrap, backup)
         shutil.copy2(source_bootstrap, bootstrap)
 
+    host_contract_updated = install_host_contract(
+        HOST_CONTRACT_SOURCE,
+        HOST_CONTRACT,
+        HOME / "backups",
+        version,
+    )
     repin_hooks(release, manifest_sha256)
     cursor_pins = repin_cursor_hooks(release, manifest_sha256)
     wiring = inspect_codex_wiring(
@@ -120,6 +164,7 @@ def main() -> int:
         "release": str(release),
         "manifest_sha256": manifest_sha256,
         "cursor_pins": cursor_pins,
+        "host_contract_updated": host_contract_updated,
         "healthy": True,
     }, sort_keys=True))
     return 0
