@@ -60,15 +60,17 @@ def repin_hooks(release: Path, manifest_sha256: str) -> int:
 
 def repin_cursor_hooks(release: Path, manifest_sha256: str) -> int:
     replaced = 0
+    present = 0
     for path in CURSOR_HOOKS:
         if not path.is_file():
             continue
+        present += 1
         original = path.read_text()
         updated, count = repin_command_text(original, release, manifest_sha256)
         if count:
             path.write_text(updated)
             replaced += count
-    if replaced < 1:
+    if present and replaced < 1:
         raise RuntimeError("Expected to repin at least one Cursor Safe YOLO hook.")
     return replaced
 

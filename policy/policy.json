@@ -56,6 +56,7 @@
     {"path": "${CODEX_HOME}/auth.json", "action": "credentials.expose", "harness": "codex", "scope": "credentials"},
     {"path": "${HOME}/.cursor/hooks.json", "action": "harness.modify", "harness": "cursor", "scope": "hooks"},
     {"path": "${HOME}/.cursor/hooks", "action": "harness.modify", "harness": "cursor", "scope": "hooks"},
+    {"path": "${HOME}/.cursor/mcp.json", "action": "harness.modify", "harness": "cursor", "scope": "config"},
     {"path": "${HOME}/.cursor/rules", "action": "harness.modify", "harness": "cursor", "scope": "rules"},
     {"path": "${HOME}/.cursor/cli-config.json", "action": "harness.modify", "harness": "cursor", "scope": "config"}
   ]

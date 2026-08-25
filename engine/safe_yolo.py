@@ -444,7 +444,7 @@ class SafeYoloEngine:
         if executable in {"docker", "docker-compose"}:
             return self._inspect_docker(context)
         if self._is_workspace_launcher(tokens, args, context):
-            return self._inspect_workspace_launcher(args, context)
+            return self._inspect_workspace_launcher(tokens[0], args, context)
         if tokens[0].startswith("./"):
             return result("block_method", "workspace.lifecycle", "Project launchers require a tracked repository contract.")
         if executable == "git":
@@ -625,12 +625,23 @@ class SafeYoloEngine:
             for item in (self.host_contract.get("workspace_commands") or [])
         )
 
-    def _inspect_workspace_launcher(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
+    def _inspect_workspace_launcher(self, executable: str, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
         if self._workspace_root() is None:
             return result("block_method", "workspace.lifecycle", "Workspace launcher requires an approved host contract.")
         repo_flag, command_args = self._workspace_command_args(args)
         cwd_value = context.get("cwd") if isinstance(context.get("cwd"), str) else None
-        checkout = self._resolve_workspace_checkout(repo_flag, cwd_value) or self._resolve_workspace_checkout(cwd_value, None)
+        cwd_checkout = self._resolve_workspace_checkout(cwd_value, None)
+        repo_checkout = self._resolve_workspace_checkout(repo_flag, cwd_value)
+        if executable.startswith("./"):
+            if cwd_checkout is None or (repo_checkout is not None and repo_checkout != cwd_checkout):
+                return result(
+                    "block_method",
+                    "workspace.untrusted_launcher",
+                    "Relative workspace launcher must be verified in its actual working directory.",
+                )
+            checkout = cwd_checkout
+        else:
+            checkout = repo_checkout or cwd_checkout
         if checkout is None:
             return result(
                 "block_method",

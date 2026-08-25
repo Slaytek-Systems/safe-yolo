@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from engine.safe_yolo import SafeYoloEngine, result
 WRITE_NAMES = {"write", "strreplace", "editnotebook", "edit_notebook"}
 DELETE_NAMES = {"delete"}
 READ_NAMES = {"read", "grep", "glob", "readdir", "list_dir", "listdir", "semsearch", "read_lints", "readlints"}
+SEARCH_NAMES = {"grep", "glob", "semsearch"}
 SHELL_NAMES = {"shell", "bash"}
 ALLOW_NAMES = {
     "task",
@@ -26,8 +28,16 @@ ALLOW_NAMES = {
     "generateimage",
     "websearch",
     "searchconversations",
-    "fetchmcpresource",
-    "getmcptools",
+}
+COLLABORATIVE_BROWSER_NAMES = {
+    "preview_click",
+    "preview_evaluate",
+    "preview_navigate",
+    "preview_open",
+    "preview_press",
+    "preview_snapshot",
+    "preview_status",
+    "preview_wait_for",
 }
 
 
@@ -134,7 +144,7 @@ def evaluate_cursor_payload(payload: dict[str, Any], engine: SafeYoloEngine) -> 
         # Collaborative browser preview tools (Cursor shared browser tab) are
         # scoped to an agent-driven browser the user can watch; approved by
         # Matt 2026-08-16. Tool names arrive both fully-prefixed and stripped.
-        if original.startswith(("t3-code-preview", "preview_")):
+        if original in COLLABORATIVE_BROWSER_NAMES:
             return result(
                 "allow",
                 "cursor.collaborative_browser",
@@ -159,6 +169,23 @@ def evaluate_cursor_payload(payload: dict[str, Any], engine: SafeYoloEngine) -> 
             if rule is not None and rule.get("action") in {"credentials.expose", "credentials.read"}:
                 context = {key: normalized[key] for key in ("session_id", "cwd") if key in normalized}
                 return engine.evaluate({"action": rule["action"], **context})
+        if tool_name in SEARCH_NAMES or original in SEARCH_NAMES:
+            raw_scope = path or str(normalized.get("cwd") or "")
+            wildcard = re.search(r"[?*[]", raw_scope)
+            if wildcard:
+                raw_scope = raw_scope[: wildcard.start()].rstrip("/") or "/"
+            if raw_scope:
+                scope = Path(raw_scope).expanduser()
+                if not scope.is_absolute():
+                    scope = Path(str(normalized.get("cwd") or Path.cwd())) / scope
+                scope = scope.resolve(strict=False)
+                for item in engine.protected_paths:
+                    if item.get("action") not in {"credentials.expose", "credentials.read"}:
+                        continue
+                    protected = item["resolved"]
+                    if scope == protected or scope in protected.parents:
+                        context = {key: normalized[key] for key in ("session_id", "cwd") if key in normalized}
+                        return engine.evaluate({"action": item["action"], **context})
         return result("allow", "cursor.read", "Ordinary read/search is permitted.")
 
     if tool_name in DELETE_NAMES or original in DELETE_NAMES or tool_name == "delete_file":

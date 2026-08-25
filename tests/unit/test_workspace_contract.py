@@ -54,22 +54,23 @@ class WorkspaceContractTests(unittest.TestCase):
     def test_missing_cwd_does_not_claim_the_host_contract_is_absent(self):
         decision = self.engine.inspect_command("./workspace status --json", {})
         self.assertEqual("block_method", decision["decision"])
-        self.assertEqual("workspace.lifecycle", decision["policy_id"])
-        self.assertIn("cwd or --repo", decision["reason"])
+        self.assertEqual("workspace.untrusted_launcher", decision["policy_id"])
+        self.assertIn("actual working directory", decision["reason"])
         self.assertNotIn("approved host contract", decision["reason"])
 
-    def test_repo_flag_allows_lifecycle_when_hook_cwd_is_missing(self):
+    def test_repo_flag_allows_global_lifecycle_but_not_a_relative_launcher_mismatch(self):
         clean = SimpleNamespace(returncode=0)
         with patch("engine.safe_yolo.subprocess.run", return_value=clean):
             relative = self.engine.inspect_command(
                 f"./workspace --repo {self.checkout} status --json",
-                {},
+                {"cwd": str(self.operations)},
             )
             global_command = self.engine.inspect_command(
                 f"workspace --repo {self.checkout} status --json",
                 {"cwd": str(self.operations)},
             )
-        self.assertEqual("allow", relative["decision"], relative)
+        self.assertEqual("block_method", relative["decision"], relative)
+        self.assertEqual("workspace.untrusted_launcher", relative["policy_id"])
         self.assertEqual("allow", global_command["decision"], global_command)
 
     def test_global_workspace_from_operations_root_remains_ordinary(self):
