@@ -721,6 +721,17 @@ class SafeYoloEngine:
             return None
         return self._git_value(["branch", "--show-current"], cwd)
 
+    @staticmethod
+    def _protected_push_target(positional: list[str]) -> str | None:
+        # The first positional is the remote. Remaining values are refspecs.
+        # A refspec without ':' updates a remote ref of the same name.
+        for refspec in positional[1:]:
+            destination = refspec.split(":", 1)[1] if ":" in refspec else refspec
+            destination = destination.removeprefix("refs/heads/")
+            if destination in PROTECTED_BRANCHES or destination.startswith("release/"):
+                return destination
+        return None
+
     def _inspect_git(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
         filtered = list(args)
         git_context = dict(context)
@@ -764,6 +775,9 @@ class SafeYoloEngine:
         tag = next((arg for arg in positional if TAG_RE.fullmatch(arg) or "refs/tags/" in arg), None)
         if tag:
             return self.evaluate({"action": "git.push_tag", "target": tag.removeprefix("refs/tags/"), **git_context})
+        protected_target = self._protected_push_target(positional)
+        if protected_target:
+            return self.evaluate({"action": "git.push_protected", "target": protected_target, **git_context})
         branch = self._push_branch(git_context)
         cwd = git_context.get("cwd")
         if isinstance(cwd, str) and cwd and branch is None:

@@ -25,11 +25,9 @@ ALLOW_NAMES = {
     "switchmode",
     "generateimage",
     "websearch",
-    "webfetch",
     "searchconversations",
     "fetchmcpresource",
     "getmcptools",
-    "callmcptool",
 }
 
 

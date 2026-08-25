@@ -99,6 +99,18 @@ class FeaturePushTests(unittest.TestCase):
                 self.assertEqual("require_capability", decision["decision"])
                 self.assertEqual("git.push_protected", decision["policy_id"])
 
+    def test_feature_checkout_cannot_target_a_protected_remote_ref(self):
+        for command in (
+            "git push origin main",
+            "git push origin HEAD:main",
+            "git push origin HEAD:refs/heads/main",
+            "git push origin task/proof:release/1.2.3",
+        ):
+            with self.subTest(command=command):
+                decision = self.inspect_push(command, branch="task/proof")
+                self.assertEqual("require_capability", decision["decision"])
+                self.assertEqual("git.push_protected", decision["policy_id"])
+
     def test_unknown_branch_with_cwd_fails_closed(self):
         decision = self.inspect_push("git push", branch=None)
         self.assertEqual("require_capability", decision["decision"])

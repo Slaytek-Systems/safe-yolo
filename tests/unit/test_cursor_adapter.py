@@ -52,6 +52,16 @@ class CursorAdapterTests(unittest.TestCase):
         self.assertEqual("tool.unclassified", decision["policy_id"])
         self.assertEqual("deny", response["permission"])
 
+    def test_mcp_and_network_passthrough_names_fail_closed_in_pre_tool_use(self):
+        for tool_name in ("CallMcpTool", "WebFetch"):
+            with self.subTest(tool_name=tool_name):
+                decision = evaluate_cursor_payload(
+                    {"hook_event_name": "preToolUse", "tool_name": tool_name, "tool_input": {}},
+                    self.engine,
+                )
+                self.assertEqual("block_hard", decision["decision"])
+                self.assertEqual("tool.unclassified", decision["policy_id"])
+
     def test_known_non_mutating_cursor_orchestration_remains_allowed(self):
         for tool_name in ("Task", "TodoWrite", "Await", "WebSearch"):
             with self.subTest(tool_name=tool_name):
