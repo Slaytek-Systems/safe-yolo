@@ -13,6 +13,7 @@ class CanonicalEngineTests(unittest.TestCase):
         self.engine = SafeYoloEngine(self.policy, path_variables={
             "SAFE_YOLO_HOME": "/opt/safe-yolo",
             "CODEX_HOME": "/home/test/.codex",
+            "HOME": "/home/test",
         })
 
     def test_constitutional_red_cannot_be_overridden(self):
@@ -42,6 +43,13 @@ class CanonicalEngineTests(unittest.TestCase):
     def test_symbolic_control_plane_path_requires_maintenance(self):
         decision = self.engine.inspect_path_write(
             "/home/test/.codex/config.toml", {"session_id": "test"}
+        )
+        self.assertEqual("require_capability", decision["decision"])
+        self.assertEqual("harness.modify", decision["policy_id"])
+
+    def test_cursor_mcp_configuration_requires_maintenance(self):
+        decision = self.engine.inspect_path_write(
+            "/home/test/.cursor/mcp.json", {"session_id": "test"}
         )
         self.assertEqual("require_capability", decision["decision"])
         self.assertEqual("harness.modify", decision["policy_id"])

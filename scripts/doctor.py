@@ -53,6 +53,29 @@ def inspect_codex_wiring(
     return {"healthy": not problems, "problems": problems}
 
 
+def inspect_cursor_wiring(
+    hook_paths: tuple[Path, ...],
+    manifest_sha256: str,
+) -> dict[str, Any]:
+    """Check every installed Cursor hook against the active manifest and entrypoint."""
+    problems: list[str] = []
+    for path in hook_paths:
+        if not path.is_file():
+            continue
+        try:
+            command = path.read_text(encoding="utf-8")
+        except OSError as error:
+            problems.append(f"{path.name} unreadable: {type(error).__name__}")
+            continue
+        expected_entry = "cursor_prompt" if "prompt" in path.name else "cursor"
+        if (
+            f"--manifest-sha256 {manifest_sha256}" not in command
+            or f"--entry {expected_entry}" not in command
+        ):
+            problems.append(f"{path.name} is not pinned to the expected Safe YOLO release")
+    return {"healthy": not problems, "problems": problems}
+
+
 def main() -> int:
     import argparse
 
