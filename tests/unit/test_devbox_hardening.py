@@ -98,6 +98,9 @@ class DevboxHardeningTests(unittest.TestCase):
             f"printf '%s\\n' '{command}' > /tmp/safe-yolo-command.txt",
             f"perl -e 'exec \"/home/dev/devbox-ops/bin/tracked-\" . \"validation\", \"devbox-ops\", \"{sha}\", \"validation/test-gh-prm.sh\"'",
             f"ruby -e 'exec \"/home/dev/devbox-ops/bin/tracked-\" + \"validation\", \"devbox-ops\", \"{sha}\", \"validation/test-gh-prm.sh\"'",
+            f"awk 'BEGIN {{ p=\"/home/dev/devbox-ops/bin/tracked-\" \"validation\"; system(p \" devbox-ops {sha} validation/test-gh-prm.sh\") }}'",
+            f"/home/dev/devbox-ops/bin/tracked-\"validation\" devbox-ops {sha} validation/test-gh-prm.sh",
+            f"/home/dev/devbox-ops/bin/tracked-\\validation devbox-ops {sha} validation/test-gh-prm.sh",
             f"dash -c '/home/dev/devbox-ops/bin/tracked-\"validation\" devbox-ops {sha} validation/test-gh-prm.sh'",
             f"busybox sh -c '/home/dev/devbox-ops/bin/tracked-\"validation\" devbox-ops {sha} validation/test-gh-prm.sh'",
         )

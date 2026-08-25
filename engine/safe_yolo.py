@@ -79,6 +79,11 @@ TRACKED_VALIDATION_EXECUTABLE = "/home/dev/devbox-ops/bin/tracked-validation"
 TRACKED_VALIDATION_OPERATIONS_ROOT = "/home/dev/devbox-ops"
 TRACKED_VALIDATION_REPOSITORY = "devbox-ops"
 TRACKED_VALIDATION_PATH = "validation/test-gh-prm.sh"
+TRACKED_VALIDATION_COMMAND_RE = re.compile(
+    rf"{re.escape(TRACKED_VALIDATION_EXECUTABLE)} "
+    rf"{TRACKED_VALIDATION_REPOSITORY} [0-9a-f]{{40}} "
+    rf"{re.escape(TRACKED_VALIDATION_PATH)}$"
+)
 TRACKED_VALIDATION_SAFE_MENTION_EXECUTABLES = {"echo", "grep", "printf"}
 TRACKED_VALIDATION_WRAPPERS = {
     "bash",
@@ -104,9 +109,13 @@ TRACKED_VALIDATION_SHA_RE = re.compile(r"[0-9a-f]{40}$")
 OPAQUE_INTERPRETERS = {
     "R",
     "Rscript",
+    "awk",
+    "gawk",
     "groovy",
     "lua",
     "luajit",
+    "mawk",
+    "nawk",
     "node",
     "perl",
     "php",
@@ -391,7 +400,7 @@ class SafeYoloEngine:
         if re.search(r"(?:\||\|&)\s*(?:bash|sh|zsh|fish|python|python3|node|bun)\b", command):
             return result("block_method", "shell.piped_interpreter", "Piped interpreter input is not inspectable enough for Safe YOLO.")
 
-        tracked_validation = self._inspect_tracked_validation(tokens)
+        tracked_validation = self._inspect_tracked_validation(command, tokens)
         if tracked_validation is not None:
             return tracked_validation
 
@@ -435,7 +444,7 @@ class SafeYoloEngine:
             index += 1
         return False
 
-    def _inspect_tracked_validation(self, tokens: list[str]) -> dict[str, Any] | None:
+    def _inspect_tracked_validation(self, command: str, tokens: list[str]) -> dict[str, Any] | None:
         if not tokens:
             return None
         executable = tokens[0]
@@ -487,6 +496,7 @@ class SafeYoloEngine:
             repository_id == TRACKED_VALIDATION_REPOSITORY
             and TRACKED_VALIDATION_SHA_RE.fullmatch(commit_sha)
             and validation_path == TRACKED_VALIDATION_PATH
+            and TRACKED_VALIDATION_COMMAND_RE.fullmatch(command)
         ):
             return result(
                 "block_method",
