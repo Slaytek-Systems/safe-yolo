@@ -19,6 +19,8 @@ class SafeFeaturePushTests(unittest.TestCase):
 
     def test_clean_feature_branch_with_matching_origin_upstream_is_reportable(self):
         def git_result(command, **_kwargs):
+            if command[1:] == ["config", "--get", "alias.push"]:
+                return SimpleNamespace(returncode=1, stdout="")
             if command[1:] == ["branch", "--show-current"]:
                 return SimpleNamespace(returncode=0, stdout="task/fix-sandbox-sql-bootstrap\n")
             if command[1:] == ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]:

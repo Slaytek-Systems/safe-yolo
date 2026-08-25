@@ -74,6 +74,7 @@ SYSTEM_RED_EXECUTABLES = {
 }
 REMOTE_EXECUTABLES = {"ssh", "scp", "rsync"}
 TRACKED_VALIDATION_NAME = "tracked-validation"
+TRACKED_VALIDATION_SAFE_MENTION_EXECUTABLES = {"echo", "grep", "printf", "rg"}
 TRACKED_VALIDATION_WRAPPERS = {
     "bash",
     "builtin",
@@ -97,6 +98,25 @@ TRACKED_VALIDATION_WRAPPERS = {
 TRACKED_VALIDATION_REPOSITORY_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 TRACKED_VALIDATION_SHA_RE = re.compile(r"[0-9a-f]{40}$")
 TRACKED_VALIDATION_PATH_RE = re.compile(r"validation/[A-Za-z0-9._/-]+\.sh$")
+DANGEROUS_GIT_ENVIRONMENT = {
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_ASKPASS",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_DIR",
+    "GIT_EDITOR",
+    "GIT_EXEC_PATH",
+    "GIT_EXTERNAL_DIFF",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PAGER",
+    "GIT_PROXY_COMMAND",
+    "GIT_SEQUENCE_EDITOR",
+    "GIT_SSH",
+    "GIT_SSH_COMMAND",
+    "GIT_WORK_TREE",
+}
 
 
 def result(decision: str, policy_id: str, reason: str, **extra: Any) -> dict[str, Any]:
@@ -362,6 +382,9 @@ class SafeYoloEngine:
             if operations_root
             else None
         )
+        canonical_mentioned = bool(
+            canonical_executable and any(canonical_executable in token for token in tokens)
+        )
         wrapped_name = (
             executable_name in TRACKED_VALIDATION_WRAPPERS
             and any(
@@ -371,7 +394,11 @@ class SafeYoloEngine:
             )
         )
         if executable != canonical_executable:
-            if executable_name == TRACKED_VALIDATION_NAME or wrapped_name:
+            unsafe_mention = (
+                canonical_mentioned
+                and executable_name not in TRACKED_VALIDATION_SAFE_MENTION_EXECUTABLES
+            )
+            if executable_name == TRACKED_VALIDATION_NAME or wrapped_name or unsafe_mention:
                 return result(
                     "block_method",
                     "tracked_validation.invocation",
@@ -509,6 +536,22 @@ class SafeYoloEngine:
             )
         executable = Path(raw_executable).name
         args = tokens[1:]
+
+        if executable == "git":
+            assigned_names = {
+                token.split("=", 1)[0]
+                for token in original_tokens
+                if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", token)
+            }
+            if assigned_names & DANGEROUS_GIT_ENVIRONMENT or any(
+                name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
+                for name in assigned_names
+            ):
+                return result(
+                    "block_method",
+                    "git.dynamic_configuration",
+                    "Git execution-affecting environment configuration is not permitted.",
+                )
 
         if executable == TRACKED_VALIDATION_NAME:
             return result(
@@ -802,12 +845,47 @@ class SafeYoloEngine:
 
     def _inspect_git(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
         filtered = list(args)
-        if filtered[:1] == ["-C"] and len(filtered) >= 3:
-            filtered = filtered[2:]
+        git_cwd = context.get("cwd")
+        while filtered:
+            option = filtered[0]
+            if option == "-C" and len(filtered) >= 2:
+                candidate_cwd = Path(filtered[1]).expanduser()
+                if not candidate_cwd.is_absolute():
+                    candidate_cwd = Path(str(git_cwd)) / candidate_cwd if git_cwd else Path.cwd() / candidate_cwd
+                git_cwd = str(candidate_cwd.resolve(strict=False))
+                filtered = filtered[2:]
+                continue
+            if option in {"--no-pager", "--paginate", "-P", "-p", "--literal-pathspecs", "--no-literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs"}:
+                filtered = filtered[1:]
+                continue
+            if (
+                option == "-c"
+                or option.startswith("-c")
+                or option.startswith("--config-env")
+                or option.startswith("--exec-path")
+                or option.startswith("--git-dir")
+                or option.startswith("--work-tree")
+                or option.startswith("--namespace")
+                or option.startswith("--super-prefix")
+            ):
+                return result(
+                    "block_method",
+                    "git.dynamic_configuration",
+                    "Git command or executable configuration is not permitted.",
+                )
+            break
         if not filtered:
             return result("allow", "git.inspect", "Git inspection is permitted.")
         subcommand = filtered[0]
         rest = filtered[1:]
+        if isinstance(git_cwd, str) and git_cwd:
+            configured_alias = self._git_value(["config", "--get", f"alias.{subcommand}"], git_cwd)
+            if configured_alias:
+                return result(
+                    "block_method",
+                    "git.alias_execution",
+                    "Configured Git aliases are not inspectable enough for Safe YOLO.",
+                )
         if subcommand in DESTRUCTIVE_GIT:
             return result("block_hard", f"git.{subcommand}", "Git work loss or history rewrite is Red.")
         if subcommand == "checkout" and any(arg in {"--", "."} for arg in rest):
@@ -826,7 +904,8 @@ class SafeYoloEngine:
         tag = next((arg for arg in positional if TAG_RE.fullmatch(arg) or "refs/tags/" in arg), None)
         if tag:
             return self.evaluate({"action": "git.push_tag", "target": tag.removeprefix("refs/tags/"), **context})
-        if self._safe_feature_push(positional, context):
+        git_context = {**context, "cwd": git_cwd} if git_cwd else context
+        if self._safe_feature_push(positional, git_context):
             return result("allow_report", "git.push_feature", "Clean feature branch has matching origin upstream and no force/broad flags.")
         return self.evaluate({"action": "git.push_feature", **context})
 

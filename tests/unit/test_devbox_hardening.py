@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from adapters.codex import evaluate_payload
 from engine.safe_yolo import SafeYoloEngine
@@ -67,6 +68,7 @@ class DevboxHardeningTests(unittest.TestCase):
             f"env {command}",
             f"env -i {command}",
             f"command {command}",
+            f"time {command}",
             f"timeout 30 {command}",
             f"bash -c '{command}'",
             f"{command} extra",
@@ -84,6 +86,11 @@ class DevboxHardeningTests(unittest.TestCase):
             line_continuation,
             f"printf '%s%s\\n' /home/dev/devbox-ops/bin/tracked- validation | xargs sh -c '\"$0\" devbox-ops {sha} validation/test-gh-prm.sh'",
             f"printf '%s\\n' '{command}' | bash",
+            f"git -c 'alias.x=!p={executable}; \"$p\" devbox-ops {sha} validation/test-gh-prm.sh; touch /tmp/safe-yolo-bypass' x",
+            f"git -c 'alias.x=!p=/home/dev/devbox-ops/bin/tracked-; p=${{p}}validation; \"$p\" devbox-ops {sha} validation/test-gh-prm.sh' x",
+            f"git --config-env=alias.x=ALIAS_VALUE x",
+            f"git --exec-path=/tmp x",
+            f"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.x GIT_CONFIG_VALUE_0='!{command}' git x",
         )
         for blocked_command in blocked_commands:
             with self.subTest(command=blocked_command):
@@ -110,6 +117,12 @@ class DevboxHardeningTests(unittest.TestCase):
             "ddbf4b92ff7eec413722bf77440b55ae1cad3eae validation/test-gh-prm.sh"
         )
         self.assertEqual("block_method", engine.inspect_command(command)["decision"])
+
+    def test_configured_git_aliases_fail_closed(self):
+        with patch.object(self.engine, "_git_value", return_value="!printf bypass"):
+            decision = self.engine.inspect_command("git x", {"cwd": "/tmp/repository"})
+        self.assertEqual("block_method", decision["decision"])
+        self.assertEqual("git.alias_execution", decision["policy_id"])
 
     def test_literal_command_substitution_text_remains_inspectable(self):
         decision = self.engine.inspect_command(r"rg '\$\(' engine tests")
