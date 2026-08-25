@@ -132,6 +132,7 @@ DANGEROUS_GIT_ENVIRONMENT = {
     "GIT_CONFIG",
     "GIT_CONFIG_COUNT",
     "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_PARAMETERS",
     "GIT_CONFIG_SYSTEM",
     "GIT_DIR",
     "GIT_EDITOR",
@@ -395,10 +396,6 @@ class SafeYoloEngine:
         if any(self._token_embeds_secret(token) for token in tokens):
             return result("block_hard", "credentials.expose", "Command embeds a credential-like value.")
         contains_dynamic_shell_expansion = self._contains_dynamic_shell_expansion(command)
-        if re.search(r"\bcurl\b[^|]*(?:\||\|&)\s*(?:bash|sh|zsh|fish|python|python3|node|bun)\b", command):
-            return result("block_hard", "network.remote_execution", "Remote content cannot be piped into an interpreter.")
-        if re.search(r"(?:\||\|&)\s*(?:bash|sh|zsh|fish|python|python3|node|bun)\b", command):
-            return result("block_method", "shell.piped_interpreter", "Piped interpreter input is not inspectable enough for Safe YOLO.")
 
         tracked_validation = self._inspect_tracked_validation(command, tokens)
         if tracked_validation is not None:
@@ -622,8 +619,24 @@ class SafeYoloEngine:
                 "shell.dynamic_executable",
                 "Dynamic executable names are not inspectable enough for Safe YOLO.",
             )
-        executable = Path(raw_executable).name
+        executable = raw_executable if raw_executable == "." else Path(raw_executable).name
         args = tokens[1:]
+
+        if executable in {"export", "setenv", "declare", "typeset"}:
+            exported_names = {
+                token.split("=", 1)[0]
+                for token in args
+                if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:=.*)?", token)
+            }
+            if exported_names & DANGEROUS_GIT_ENVIRONMENT or any(
+                name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
+                for name in exported_names
+            ):
+                return result(
+                    "block_method",
+                    "git.dynamic_configuration",
+                    "Git execution-affecting environment configuration is not permitted.",
+                )
 
         if executable == "git":
             assigned_names = {
@@ -663,7 +676,7 @@ class SafeYoloEngine:
                         "Tracked validation requires the exact canonical executable with no wrapper.",
                     )
                 return wrapped_result
-            if args and not (args[0] in {"-n", "--version", "--help", "-h"}):
+            if not args or args[0] not in {"-n", "--version", "--help", "-h"}:
                 return result("block_hard", "shell.unclassified", "Untrusted shell script execution is not permitted.")
 
         if executable in {"command", "builtin", "exec"} and args:
@@ -727,6 +740,8 @@ class SafeYoloEngine:
             if not read_only:
                 return result("block_hard", "shell.unclassified_interpreter", "Inline or script-backed interpreter execution is not permitted.")
         if executable == "bun":
+            if not args or args[:1] == ["-"]:
+                return result("block_hard", "shell.unclassified_interpreter", "Interpreter stdin execution is not permitted.")
             inline = self._inline_program(executable, args)
             if inline is not None and self._looks_mutating(inline):
                 if self._mentions_protected_path(inline):

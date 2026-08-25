@@ -41,9 +41,23 @@ class DevboxHardeningTests(unittest.TestCase):
             "python3 scripts/task.py",
             "node scripts/task.js",
             "bash scripts/task.sh",
+            "echo hi | /bin/bash",
+            "echo hi | /bin/sh",
+            "echo hi | dash",
+            "cat /tmp/x | command bash",
+            "printf code | bun",
         ):
             with self.subTest(command=command):
                 self.assertEqual("block_hard", self.engine.inspect_command(command)["decision"])
+        for command in (
+            ". /tmp/untrusted.sh",
+            "command . /tmp/untrusted.sh",
+            "builtin . /tmp/untrusted.sh",
+        ):
+            with self.subTest(command=command):
+                decision = self.engine.inspect_command(command)
+                self.assertEqual("block_method", decision["decision"])
+                self.assertEqual("shell.dynamic_execution", decision["policy_id"])
         for command in ("python3 --version", "python3 -m unittest tests.test_policy", "node --check app.js", "bash -n check.sh"):
             with self.subTest(command=command):
                 self.assertEqual("allow", self.engine.inspect_command(command)["decision"])
@@ -149,9 +163,29 @@ class DevboxHardeningTests(unittest.TestCase):
         self.assertEqual("block_method", decision["decision"])
         self.assertEqual("git.alias_execution", decision["policy_id"])
 
+    def test_git_execution_environment_fails_closed_across_shell_segments(self):
+        for command in (
+            "GIT_CONFIG_PARAMETERS=\"'core.pager=python3'\" git log",
+            "export GIT_PAGER=python3; git log",
+            "export GIT_PAGER=python3 && git log",
+            "bash -c 'export GIT_PAGER=python3; git log'",
+            "setenv GIT_SSH_COMMAND python3; git fetch",
+        ):
+            with self.subTest(command=command):
+                decision = self.engine.inspect_command(command)
+                self.assertEqual("block_method", decision["decision"])
+                self.assertEqual("git.dynamic_configuration", decision["policy_id"])
+
     def test_literal_command_substitution_text_remains_inspectable(self):
         decision = self.engine.inspect_command(r"rg '\$\(' engine tests")
         self.assertEqual("allow", decision["decision"])
+        for command in (
+            "rg -F '| bash' engine tests",
+            "grep -F '| /bin/sh' engine/safe_yolo.py",
+            "printf '%s\\n' '| dash'",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual("allow", self.engine.inspect_command(command)["decision"])
 
     def test_file_backed_network_uploads_are_red(self):
         for command in (
