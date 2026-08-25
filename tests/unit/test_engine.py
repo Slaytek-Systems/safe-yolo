@@ -59,6 +59,10 @@ class CanonicalEngineTests(unittest.TestCase):
             f"printf 'task{synthetic_credential}'",
             f"git add docs/architecture/codex-task-session-operating-model.md {synthetic_credential}",
             f"printf 'codex-task-session-operating-model.md{synthetic_credential}'",
+            f"git add /tmp/{synthetic_credential}/codex-task-session-operating-model.md",
+            f"git add /tmp/x{synthetic_credential}/codex-task-session-operating-model.md",
+            f"printf 'FILE=/tmp/{synthetic_credential}/codex-task-session-operating-model.md'",
+            f"git add docs/codex-task-session-operating-model.md/{synthetic_credential}",
         )
         for command in blocked_commands:
             with self.subTest(command=command):
@@ -68,6 +72,10 @@ class CanonicalEngineTests(unittest.TestCase):
 
         ordinary_path = "git add docs/architecture/codex-task-session-operating-model.md"
         allowed = self.engine.inspect_command(ordinary_path)
+        self.assertEqual("allow", allowed["decision"])
+
+        absolute_path = "git add /tmp/docs/codex-task-session-operating-model.md"
+        allowed = self.engine.inspect_command(absolute_path)
         self.assertEqual("allow", allowed["decision"])
 
 

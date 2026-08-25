@@ -53,7 +53,7 @@ METADATA_HOSTS = {"169.254.169.254", "metadata.google.internal"}
 SECRET_RE = re.compile(
     r"(?:sk-[A-Za-z0-9_-]{20,}|github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,})"
 )
-BENIGN_CREDENTIAL_LIKE_BASENAMES = {"codex-task-session-operating-model.md"}
+BENIGN_CREDENTIAL_LIKE_PATH_COMPONENTS = {"codex-task-session-operating-model.md"}
 TAG_RE = re.compile(r"(?:refs/tags/)?v?\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$")
 SYSTEM_RED_EXECUTABLES = {
     "sudo",
@@ -275,11 +275,7 @@ class SafeYoloEngine:
                 return result("block_hard", "credentials.expose", "Command embeds a credential-like value.")
             return result("block_method", "shell.unparseable", f"Command could not be safely parsed: {error}")
 
-        if any(
-            SECRET_RE.search(token)
-            for token in tokens
-            if Path(token).name not in BENIGN_CREDENTIAL_LIKE_BASENAMES
-        ):
+        if any(self._token_embeds_secret(token) for token in tokens):
             return result("block_hard", "credentials.expose", "Command embeds a credential-like value.")
         if re.search(r"\bcurl\b[^|]*(?:\||\|&)\s*(?:bash|sh|zsh|fish|python|python3|node|bun)\b", command):
             return result("block_hard", "network.remote_execution", "Remote content cannot be piped into an interpreter.")
@@ -289,6 +285,14 @@ class SafeYoloEngine:
             if inspected["decision"] != "allow":
                 return inspected
         return result("allow", "shell.ordinary", "No restricted consequence detected.")
+
+    @staticmethod
+    def _token_embeds_secret(token: str) -> bool:
+        return any(
+            SECRET_RE.search(component)
+            for component in token.split("/")
+            if component not in BENIGN_CREDENTIAL_LIKE_PATH_COMPONENTS
+        )
 
     def inspect_path_write(self, raw_path: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
         context = context or {}
