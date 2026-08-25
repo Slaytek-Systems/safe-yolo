@@ -75,17 +75,24 @@ SYSTEM_RED_EXECUTABLES = {
 REMOTE_EXECUTABLES = {"ssh", "scp", "rsync"}
 TRACKED_VALIDATION_NAME = "tracked-validation"
 TRACKED_VALIDATION_WRAPPERS = {
+    "bash",
     "builtin",
     "chrt",
     "command",
     "env",
+    "eval",
     "exec",
+    "fish",
     "ionice",
     "nice",
     "nohup",
+    "parallel",
     "setsid",
+    "sh",
     "stdbuf",
     "timeout",
+    "xargs",
+    "zsh",
 }
 TRACKED_VALIDATION_REPOSITORY_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 TRACKED_VALIDATION_SHA_RE = re.compile(r"[0-9a-f]{40}$")
@@ -294,9 +301,11 @@ class SafeYoloEngine:
 
         if any(self._token_embeds_secret(token) for token in tokens):
             return result("block_hard", "credentials.expose", "Command embeds a credential-like value.")
-        contains_command_substitution = self._contains_command_substitution(command)
+        contains_dynamic_shell_expansion = self._contains_dynamic_shell_expansion(command)
         if re.search(r"\bcurl\b[^|]*(?:\||\|&)\s*(?:bash|sh|zsh|fish|python|python3|node|bun)\b", command):
             return result("block_hard", "network.remote_execution", "Remote content cannot be piped into an interpreter.")
+        if re.search(r"(?:\||\|&)\s*(?:bash|sh|zsh|fish|python|python3|node|bun)\b", command):
+            return result("block_method", "shell.piped_interpreter", "Piped interpreter input is not inspectable enough for Safe YOLO.")
 
         tracked_validation = self._inspect_tracked_validation(tokens)
         if tracked_validation is not None:
@@ -306,12 +315,12 @@ class SafeYoloEngine:
             inspected = self._inspect_segment(segment, context)
             if inspected["decision"] != "allow":
                 return inspected
-        if contains_command_substitution:
-            return result("block_method", "shell.dynamic_execution", "Command substitution is not inspectable enough for Safe YOLO.")
+        if contains_dynamic_shell_expansion:
+            return result("block_method", "shell.dynamic_execution", "Dynamic shell expansion is not inspectable enough for Safe YOLO.")
         return result("allow", "shell.ordinary", "No restricted consequence detected.")
 
     @staticmethod
-    def _contains_command_substitution(command: str) -> bool:
+    def _contains_dynamic_shell_expansion(command: str) -> bool:
         quote: str | None = None
         escaped = False
         index = 0
@@ -321,6 +330,8 @@ class SafeYoloEngine:
                 escaped = False
                 index += 1
                 continue
+            if character == "\\" and command[index + 1:index + 2] == "\n" and quote != "'":
+                return True
             if character == "\\" and quote != "'":
                 escaped = True
                 index += 1
@@ -351,15 +362,16 @@ class SafeYoloEngine:
             if operations_root
             else None
         )
-        canonical_mentioned = bool(
-            canonical_executable and any(canonical_executable in token for token in tokens)
-        )
         wrapped_name = (
             executable_name in TRACKED_VALIDATION_WRAPPERS
-            and any(Path(token).name == TRACKED_VALIDATION_NAME for token in tokens[1:])
+            and any(
+                Path(token).name == TRACKED_VALIDATION_NAME
+                or bool(canonical_executable and canonical_executable in token)
+                for token in tokens[1:]
+            )
         )
         if executable != canonical_executable:
-            if executable_name == TRACKED_VALIDATION_NAME or canonical_mentioned or wrapped_name:
+            if executable_name == TRACKED_VALIDATION_NAME or wrapped_name:
                 return result(
                     "block_method",
                     "tracked_validation.invocation",
@@ -488,7 +500,14 @@ class SafeYoloEngine:
                 return self.evaluate({"action": "credentials.expose", **context})
             return result("allow", "shell.environment", "Environment assignment only.")
 
-        executable = Path(tokens[0]).name
+        raw_executable = tokens[0]
+        if any(character in raw_executable for character in "$*?[]{}"):
+            return result(
+                "block_method",
+                "shell.dynamic_executable",
+                "Dynamic executable names are not inspectable enough for Safe YOLO.",
+            )
+        executable = Path(raw_executable).name
         args = tokens[1:]
 
         if executable == TRACKED_VALIDATION_NAME:
@@ -528,8 +547,13 @@ class SafeYoloEngine:
         if executable in {"rm", "rmdir", "unlink", "shred", "truncate"}:
             return result("block_hard", "filesystem.delete", "Permanent deletion is a constitutional Red action; use quarantine.")
 
-        if executable == "xargs" and any(Path(arg).name in {"rm", "rmdir", "unlink", "shred"} for arg in args):
-            return result("block_hard", "filesystem.delete", "xargs cannot invoke permanent deletion; use quarantine.")
+        if executable == "xargs":
+            if any(Path(arg).name in {"rm", "rmdir", "unlink", "shred"} for arg in args):
+                return result("block_hard", "filesystem.delete", "xargs cannot invoke permanent deletion; use quarantine.")
+            return result("block_method", "shell.dynamic_execution", "xargs command construction is not inspectable enough for Safe YOLO.")
+
+        if executable in {"eval", "source", "."}:
+            return result("block_method", "shell.dynamic_execution", "Dynamic shell evaluation is not inspectable enough for Safe YOLO.")
 
         if executable == "find" and any(arg in {"-delete", "-exec", "-execdir", "-ok", "-okdir"} for arg in args):
             return result("block_hard", "filesystem.delete", "Destructive find actions are Red; use a bounded reviewable method.")

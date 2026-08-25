@@ -56,6 +56,11 @@ class DevboxHardeningTests(unittest.TestCase):
         self.assertEqual("allow_report", decision["decision"])
         self.assertEqual("tracked_validation.exact", decision["policy_id"])
 
+        line_continuation = (
+            "/home/dev/devbox-ops/bin/tracked-" + "\\" + "\n"
+            + f"validation devbox-ops {sha} validation/test-gh-prm.sh"
+        )
+
         blocked_commands = (
             f"bin/tracked-validation devbox-ops {sha} validation/test-gh-prm.sh",
             f"/tmp/tracked-validation devbox-ops {sha} validation/test-gh-prm.sh",
@@ -74,6 +79,11 @@ class DevboxHardeningTests(unittest.TestCase):
             f"{executable} $(printf devbox-ops) {sha} validation/test-gh-prm.sh",
             f"$(printf {executable}) devbox-ops {sha} validation/test-gh-prm.sh",
             f"`printf {executable}` devbox-ops {sha} validation/test-gh-prm.sh",
+            f"/home/dev/devbox-ops/bin/tracked-${{UNSET:-validation}} devbox-ops {sha} validation/test-gh-prm.sh",
+            f"/home/dev/devbox-ops/bin/tracked-validatio? devbox-ops {sha} validation/test-gh-prm.sh",
+            line_continuation,
+            f"printf '%s%s\\n' /home/dev/devbox-ops/bin/tracked- validation | xargs sh -c '\"$0\" devbox-ops {sha} validation/test-gh-prm.sh'",
+            f"printf '%s\\n' '{command}' | bash",
         )
         for blocked_command in blocked_commands:
             with self.subTest(command=blocked_command):
@@ -81,6 +91,13 @@ class DevboxHardeningTests(unittest.TestCase):
                     self.engine.inspect_command(blocked_command)["decision"],
                     {"allow", "allow_report"},
                 )
+
+        for harmless_mention in (
+            f"rg {executable} engine tests",
+            f"printf '%s\\n' {executable}",
+        ):
+            with self.subTest(command=harmless_mention):
+                self.assertEqual("allow", self.engine.inspect_command(harmless_mention)["decision"])
 
     def test_tracked_validation_fails_closed_without_an_operations_root(self):
         policy = json.loads((ROOT / "policy" / "policy.json").read_text())
