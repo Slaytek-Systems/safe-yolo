@@ -73,6 +73,23 @@ SYSTEM_RED_EXECUTABLES = {
     "osascript",
 }
 REMOTE_EXECUTABLES = {"ssh", "scp", "rsync"}
+TRACKED_VALIDATION_NAME = "tracked-validation"
+TRACKED_VALIDATION_WRAPPERS = {
+    "builtin",
+    "chrt",
+    "command",
+    "env",
+    "exec",
+    "ionice",
+    "nice",
+    "nohup",
+    "setsid",
+    "stdbuf",
+    "timeout",
+}
+TRACKED_VALIDATION_REPOSITORY_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+TRACKED_VALIDATION_SHA_RE = re.compile(r"[0-9a-f]{40}$")
+TRACKED_VALIDATION_PATH_RE = re.compile(r"validation/[A-Za-z0-9._/-]+\.sh$")
 
 
 def result(decision: str, policy_id: str, reason: str, **extra: Any) -> dict[str, Any]:
@@ -277,14 +294,103 @@ class SafeYoloEngine:
 
         if any(self._token_embeds_secret(token) for token in tokens):
             return result("block_hard", "credentials.expose", "Command embeds a credential-like value.")
+        contains_command_substitution = self._contains_command_substitution(command)
         if re.search(r"\bcurl\b[^|]*(?:\||\|&)\s*(?:bash|sh|zsh|fish|python|python3|node|bun)\b", command):
             return result("block_hard", "network.remote_execution", "Remote content cannot be piped into an interpreter.")
+
+        tracked_validation = self._inspect_tracked_validation(tokens)
+        if tracked_validation is not None:
+            return tracked_validation
 
         for segment in self._segments(tokens):
             inspected = self._inspect_segment(segment, context)
             if inspected["decision"] != "allow":
                 return inspected
+        if contains_command_substitution:
+            return result("block_method", "shell.dynamic_execution", "Command substitution is not inspectable enough for Safe YOLO.")
         return result("allow", "shell.ordinary", "No restricted consequence detected.")
+
+    @staticmethod
+    def _contains_command_substitution(command: str) -> bool:
+        quote: str | None = None
+        escaped = False
+        index = 0
+        while index < len(command):
+            character = command[index]
+            if escaped:
+                escaped = False
+                index += 1
+                continue
+            if character == "\\" and quote != "'":
+                escaped = True
+                index += 1
+                continue
+            if character == "'":
+                quote = None if quote == "'" else "'" if quote is None else quote
+                index += 1
+                continue
+            if character == '"':
+                quote = None if quote == '"' else '"' if quote is None else quote
+                index += 1
+                continue
+            if quote != "'" and character == "`":
+                return True
+            if quote != "'" and character == "$" and command[index + 1:index + 2] == "(":
+                return True
+            index += 1
+        return False
+
+    def _inspect_tracked_validation(self, tokens: list[str]) -> dict[str, Any] | None:
+        if not tokens:
+            return None
+        executable = tokens[0]
+        executable_name = Path(executable).name
+        operations_root = self.host_contract.get("operations_root")
+        canonical_executable = (
+            str(Path(str(operations_root)).expanduser().resolve(strict=False) / "bin" / TRACKED_VALIDATION_NAME)
+            if operations_root
+            else None
+        )
+        canonical_mentioned = bool(
+            canonical_executable and any(canonical_executable in token for token in tokens)
+        )
+        wrapped_name = (
+            executable_name in TRACKED_VALIDATION_WRAPPERS
+            and any(Path(token).name == TRACKED_VALIDATION_NAME for token in tokens[1:])
+        )
+        if executable != canonical_executable:
+            if executable_name == TRACKED_VALIDATION_NAME or canonical_mentioned or wrapped_name:
+                return result(
+                    "block_method",
+                    "tracked_validation.invocation",
+                    "Tracked validation requires the exact canonical executable with no wrapper.",
+                )
+            return None
+        if len(tokens) != 4:
+            return result(
+                "block_method",
+                "tracked_validation.arguments",
+                "Tracked validation requires exactly repository, commit, and validation-path arguments.",
+            )
+        repository_id, commit_sha, validation_path = tokens[1:]
+        valid_path = bool(TRACKED_VALIDATION_PATH_RE.fullmatch(validation_path))
+        valid_path = valid_path and "//" not in validation_path
+        valid_path = valid_path and all(part not in {"", ".", ".."} for part in validation_path.split("/"))
+        if not (
+            TRACKED_VALIDATION_REPOSITORY_RE.fullmatch(repository_id)
+            and TRACKED_VALIDATION_SHA_RE.fullmatch(commit_sha)
+            and valid_path
+        ):
+            return result(
+                "block_method",
+                "tracked_validation.arguments",
+                "Tracked validation arguments do not match the reviewed literal grammar.",
+            )
+        return result(
+            "allow_report",
+            "tracked_validation.exact",
+            "Exact canonical tracked-validation invocation is permitted; the runner enforces registry authorization.",
+        )
 
     @staticmethod
     def _token_embeds_secret(token: str) -> bool:
@@ -384,6 +490,13 @@ class SafeYoloEngine:
 
         executable = Path(tokens[0]).name
         args = tokens[1:]
+
+        if executable == TRACKED_VALIDATION_NAME:
+            return result(
+                "block_method",
+                "tracked_validation.invocation",
+                "Tracked validation requires direct canonical invocation with no wrapper.",
+            )
 
         redirect = self._protected_redirect(tokens, context)
         if redirect:

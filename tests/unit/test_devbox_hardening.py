@@ -12,10 +12,14 @@ class DevboxHardeningTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         policy = json.loads((ROOT / "policy" / "policy.json").read_text())
-        cls.engine = SafeYoloEngine(policy, path_variables={
-            "SAFE_YOLO_HOME": "/opt/safe-yolo",
-            "CODEX_HOME": "/home/test/.codex",
-        })
+        cls.engine = SafeYoloEngine(
+            policy,
+            path_variables={
+                "SAFE_YOLO_HOME": "/opt/safe-yolo",
+                "CODEX_HOME": "/home/test/.codex",
+            },
+            host_contract={"operations_root": "/home/dev/devbox-ops"},
+        )
 
     def test_protected_shell_write_forms_require_maintenance(self):
         for command in (
@@ -43,6 +47,56 @@ class DevboxHardeningTests(unittest.TestCase):
         for command in ("python3 --version", "python3 -m unittest tests.test_policy", "node --check app.js", "bash -n check.sh"):
             with self.subTest(command=command):
                 self.assertEqual("allow", self.engine.inspect_command(command)["decision"])
+
+    def test_tracked_validation_allows_only_the_exact_literal_grammar(self):
+        executable = "/home/dev/devbox-ops/bin/tracked-validation"
+        sha = "ddbf4b92ff7eec413722bf77440b55ae1cad3eae"
+        command = f"{executable} devbox-ops {sha} validation/test-gh-prm.sh"
+        decision = self.engine.inspect_command(command)
+        self.assertEqual("allow_report", decision["decision"])
+        self.assertEqual("tracked_validation.exact", decision["policy_id"])
+
+        blocked_commands = (
+            f"bin/tracked-validation devbox-ops {sha} validation/test-gh-prm.sh",
+            f"/tmp/tracked-validation devbox-ops {sha} validation/test-gh-prm.sh",
+            f"env {command}",
+            f"env -i {command}",
+            f"command {command}",
+            f"timeout 30 {command}",
+            f"bash -c '{command}'",
+            f"{command} extra",
+            f"{executable} devbox-ops {sha[:12]} validation/test-gh-prm.sh",
+            f"{executable} devbox-ops {sha.upper()} validation/test-gh-prm.sh",
+            f"{executable} devbox-ops {sha} validation/../test-gh-prm.sh",
+            f"{command} && true",
+            f"{command} | tee receipt.txt",
+            f"{command} > receipt.txt",
+            f"{executable} $(printf devbox-ops) {sha} validation/test-gh-prm.sh",
+            f"$(printf {executable}) devbox-ops {sha} validation/test-gh-prm.sh",
+            f"`printf {executable}` devbox-ops {sha} validation/test-gh-prm.sh",
+        )
+        for blocked_command in blocked_commands:
+            with self.subTest(command=blocked_command):
+                self.assertNotIn(
+                    self.engine.inspect_command(blocked_command)["decision"],
+                    {"allow", "allow_report"},
+                )
+
+    def test_tracked_validation_fails_closed_without_an_operations_root(self):
+        policy = json.loads((ROOT / "policy" / "policy.json").read_text())
+        engine = SafeYoloEngine(policy, path_variables={
+            "SAFE_YOLO_HOME": "/opt/safe-yolo",
+            "CODEX_HOME": "/home/test/.codex",
+        })
+        command = (
+            "/home/dev/devbox-ops/bin/tracked-validation devbox-ops "
+            "ddbf4b92ff7eec413722bf77440b55ae1cad3eae validation/test-gh-prm.sh"
+        )
+        self.assertEqual("block_method", engine.inspect_command(command)["decision"])
+
+    def test_literal_command_substitution_text_remains_inspectable(self):
+        decision = self.engine.inspect_command(r"rg '\$\(' engine tests")
+        self.assertEqual("allow", decision["decision"])
 
     def test_file_backed_network_uploads_are_red(self):
         for command in (
