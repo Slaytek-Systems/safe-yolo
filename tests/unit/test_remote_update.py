@@ -77,6 +77,21 @@ exec /usr/bin/python3 /home/dev/.safe-yolo/bootstrap.py \\
         self.assertIn("--release /home/dev/.safe-yolo/releases/1.0.16", updated)
         self.assertIn("--manifest-sha256 " + ("d" * 64), updated)
 
+    def test_cursor_repin_rejects_a_partially_unpinnable_hook_set_atomically(self):
+        with TemporaryDirectory() as tmpdir:
+            valid = Path(tmpdir) / "safe-yolo-cursor.sh"
+            invalid = Path(tmpdir) / "safe-yolo-cursor-prompt.sh"
+            original = (
+                "--release /home/dev/.safe-yolo/releases/1.0.14 "
+                "--manifest-sha256 " + ("a" * 64) + " --entry cursor\n"
+            )
+            valid.write_text(original)
+            invalid.write_text("#!/usr/bin/env bash\nexit 2\n")
+            with patch("scripts.remote_update.CURSOR_HOOKS", (valid, invalid)):
+                with self.assertRaises(RuntimeError):
+                    repin_cursor_hooks(Path("/safe-yolo/releases/new"), "e" * 64)
+            self.assertEqual(original, valid.read_text())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -63,15 +63,17 @@ class CursorAdapterTests(unittest.TestCase):
                 self.assertEqual("tool.unclassified", decision["policy_id"])
 
     def test_only_known_collaborative_browser_tools_are_allowed(self):
-        allowed = evaluate_cursor_payload(
-            {"hook_event_name": "beforeMCPExecution", "tool_name": "preview_open", "tool_input": {}},
-            self.engine,
-        )
+        for tool_name in ("preview_open", "t3-code-preview_preview_open"):
+            with self.subTest(tool_name=tool_name):
+                allowed = evaluate_cursor_payload(
+                    {"hook_event_name": "beforeMCPExecution", "tool_name": tool_name, "tool_input": {}},
+                    self.engine,
+                )
+                self.assertEqual("allow", allowed["decision"])
         blocked = evaluate_cursor_payload(
             {"hook_event_name": "beforeMCPExecution", "tool_name": "preview_run_command", "tool_input": {}},
             self.engine,
         )
-        self.assertEqual("allow", allowed["decision"])
         self.assertEqual("block_hard", blocked["decision"])
 
     def test_search_cannot_cover_a_parent_of_protected_credentials(self):

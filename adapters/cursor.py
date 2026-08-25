@@ -39,6 +39,11 @@ COLLABORATIVE_BROWSER_NAMES = {
     "preview_status",
     "preview_wait_for",
 }
+COLLABORATIVE_BROWSER_NAMES |= {
+    f"t3-code-preview{separator}{name}"
+    for separator in ("_", ".", "/", ":", "-")
+    for name in tuple(COLLABORATIVE_BROWSER_NAMES)
+}
 
 
 def _load_stdin() -> dict[str, Any]:

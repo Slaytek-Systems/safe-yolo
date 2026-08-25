@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.doctor import inspect_codex_wiring, inspect_release
+from scripts.doctor import inspect_codex_wiring, inspect_cursor_wiring, inspect_release
 from scripts.install import install_release
 from scripts.release_manifest import manifest_digest
 
@@ -59,20 +59,18 @@ def repin_hooks(release: Path, manifest_sha256: str) -> int:
 
 
 def repin_cursor_hooks(release: Path, manifest_sha256: str) -> int:
-    replaced = 0
-    present = 0
+    updates: list[tuple[Path, str]] = []
     for path in CURSOR_HOOKS:
         if not path.is_file():
             continue
-        present += 1
         original = path.read_text()
         updated, count = repin_command_text(original, release, manifest_sha256)
-        if count:
-            path.write_text(updated)
-            replaced += count
-    if present and replaced < 1:
-        raise RuntimeError("Expected to repin at least one Cursor Safe YOLO hook.")
-    return replaced
+        if count != 1:
+            raise RuntimeError(f"Expected to repin Cursor Safe YOLO hook: {path.name}")
+        updates.append((path, updated))
+    for path, updated in updates:
+        path.write_text(updated)
+    return len(updates)
 
 
 def ensure_release(version: str) -> dict[str, str]:
@@ -117,6 +115,9 @@ def main() -> int:
     )
     if not wiring["healthy"]:
         raise RuntimeError(f"Installed release failed doctor: {wiring['problems']}")
+    cursor_wiring = inspect_cursor_wiring(CURSOR_HOOKS, manifest_sha256)
+    if not cursor_wiring["healthy"]:
+        raise RuntimeError(f"Installed Cursor hooks failed doctor: {cursor_wiring['problems']}")
     print(json.dumps({
         "version": version,
         "release": str(release),

@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from scripts.bootstrap import verified_entry
-from scripts.doctor import inspect_codex_wiring, inspect_release
+from scripts.doctor import inspect_codex_wiring, inspect_cursor_wiring, inspect_release
 from scripts.release_manifest import build_manifest, manifest_digest, verify_manifest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -48,6 +48,18 @@ class ReleaseToolTests(unittest.TestCase):
         self.assertTrue(report["healthy"])
         self.assertEqual([], report["problems"])
         self.assertEqual("1.0.0-test", report["version"])
+
+    def test_doctor_checks_every_present_cursor_hook_pin_and_entrypoint(self):
+        digest = "a" * 64
+        tool = Path(self.temp.name) / "safe-yolo-cursor.sh"
+        prompt = Path(self.temp.name) / "safe-yolo-cursor-prompt.sh"
+        tool.write_text(f"--manifest-sha256 {digest} --entry cursor\n")
+        prompt.write_text(f"--manifest-sha256 {digest} --entry cursor_prompt\n")
+        healthy = inspect_cursor_wiring((tool, prompt), digest)
+        prompt.write_text(f"--manifest-sha256 {'b' * 64} --entry cursor_prompt\n")
+        stale = inspect_cursor_wiring((tool, prompt), digest)
+        self.assertTrue(healthy["healthy"])
+        self.assertFalse(stale["healthy"])
 
 
 if __name__ == "__main__":

@@ -51,6 +51,16 @@ class WorkspaceContractTests(unittest.TestCase):
         self.assertEqual("workspace.local_functions_push", contract["policy_id"])
         self.assertEqual("block_method", unknown["decision"])
 
+    def test_global_launcher_blocks_unknown_command_for_an_explicit_checkout(self):
+        clean = SimpleNamespace(returncode=0)
+        with patch("engine.safe_yolo.subprocess.run", return_value=clean):
+            decision = self.engine.inspect_command(
+                f"workspace --repo {self.checkout} destroy",
+                {"cwd": str(self.operations)},
+            )
+        self.assertEqual("block_method", decision["decision"])
+        self.assertEqual("workspace.lifecycle", decision["policy_id"])
+
     def test_missing_cwd_does_not_claim_the_host_contract_is_absent(self):
         decision = self.engine.inspect_command("./workspace status --json", {})
         self.assertEqual("block_method", decision["decision"])

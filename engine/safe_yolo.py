@@ -615,15 +615,7 @@ class SafeYoloEngine:
             checkout = self._resolve_workspace_checkout(context.get("cwd") if isinstance(context.get("cwd"), str) else None, None)
         if checkout is None or self._workspace_relative(checkout) is None:
             return False
-        lifecycle = command_args[0] if command_args else ""
-        allowed_lifecycle = set(self.host_contract.get("workspace_lifecycle") or [])
-        if lifecycle in allowed_lifecycle:
-            return True
-        relative = self._workspace_relative(checkout)
-        return any(
-            item.get("workspace") == relative and item.get("command") == command_args
-            for item in (self.host_contract.get("workspace_commands") or [])
-        )
+        return True
 
     def _inspect_workspace_launcher(self, executable: str, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
         if self._workspace_root() is None:
