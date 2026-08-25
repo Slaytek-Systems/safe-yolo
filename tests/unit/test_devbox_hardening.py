@@ -64,6 +64,8 @@ class DevboxHardeningTests(unittest.TestCase):
         blocked_commands = (
             f"bin/tracked-validation devbox-ops {sha} validation/test-gh-prm.sh",
             f"/tmp/tracked-validation devbox-ops {sha} validation/test-gh-prm.sh",
+            f"{executable} arbitrary-repo {sha} validation/test-gh-prm.sh",
+            f"{executable} devbox-ops {sha} validation/arbitrary.sh",
             f"env {command}",
             f"env -i {command}",
             f"env -- {command}",
@@ -94,6 +96,10 @@ class DevboxHardeningTests(unittest.TestCase):
             f"git config alias.x '!p=/home/dev/devbox-ops/bin/tracked-; p=${{p}}validation; \"$p\" devbox-ops {sha} validation/test-gh-prm.sh' && git x",
             f"printf '%s\\n' '{command}' > /tmp/safe-yolo-rg-pre.sh && rg --pre sh NOMATCH /tmp/safe-yolo-rg-pre.sh",
             f"printf '%s\\n' '{command}' > /tmp/safe-yolo-command.txt",
+            f"perl -e 'exec \"/home/dev/devbox-ops/bin/tracked-\" . \"validation\", \"devbox-ops\", \"{sha}\", \"validation/test-gh-prm.sh\"'",
+            f"ruby -e 'exec \"/home/dev/devbox-ops/bin/tracked-\" + \"validation\", \"devbox-ops\", \"{sha}\", \"validation/test-gh-prm.sh\"'",
+            f"dash -c '/home/dev/devbox-ops/bin/tracked-\"validation\" devbox-ops {sha} validation/test-gh-prm.sh'",
+            f"busybox sh -c '/home/dev/devbox-ops/bin/tracked-\"validation\" devbox-ops {sha} validation/test-gh-prm.sh'",
         )
         for blocked_command in blocked_commands:
             with self.subTest(command=blocked_command):
@@ -109,7 +115,7 @@ class DevboxHardeningTests(unittest.TestCase):
             with self.subTest(command=harmless_mention):
                 self.assertEqual("allow", self.engine.inspect_command(harmless_mention)["decision"])
 
-    def test_tracked_validation_fails_closed_without_an_operations_root(self):
+    def test_tracked_validation_fails_closed_without_the_exact_operations_root(self):
         policy = json.loads((ROOT / "policy" / "policy.json").read_text())
         engine = SafeYoloEngine(policy, path_variables={
             "SAFE_YOLO_HOME": "/opt/safe-yolo",
@@ -120,6 +126,20 @@ class DevboxHardeningTests(unittest.TestCase):
             "ddbf4b92ff7eec413722bf77440b55ae1cad3eae validation/test-gh-prm.sh"
         )
         self.assertEqual("block_method", engine.inspect_command(command)["decision"])
+        alternate = SafeYoloEngine(
+            policy,
+            path_variables={
+                "SAFE_YOLO_HOME": "/opt/safe-yolo",
+                "CODEX_HOME": "/home/test/.codex",
+            },
+            host_contract={"operations_root": "/tmp/alternate-operations"},
+        )
+        self.assertEqual("block_method", alternate.inspect_command(command)["decision"])
+        alternate_command = command.replace(
+            "/home/dev/devbox-ops/bin/tracked-validation",
+            "/tmp/alternate-operations/bin/tracked-validation",
+        )
+        self.assertEqual("block_method", alternate.inspect_command(alternate_command)["decision"])
 
     def test_configured_git_aliases_fail_closed(self):
         decision = self.engine.inspect_command("git x", {"cwd": "/tmp/repository"})

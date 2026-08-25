@@ -21,7 +21,7 @@ DECISIONS = {
     "red": "block_hard",
 }
 
-SHELLS = {"bash", "sh", "zsh", "fish"}
+SHELLS = {"ash", "bash", "csh", "dash", "fish", "ksh", "sh", "tcsh", "zsh"}
 DESTRUCTIVE_GIT = {"reset", "rebase", "restore", "clean"}
 FORCE_FLAGS = {"--force", "--force-with-lease", "-f"}
 PROTECTED_BRANCHES = {"main", "master", "production", "prod"}
@@ -75,6 +75,10 @@ SYSTEM_RED_EXECUTABLES = {
 }
 REMOTE_EXECUTABLES = {"ssh", "scp", "rsync"}
 TRACKED_VALIDATION_NAME = "tracked-validation"
+TRACKED_VALIDATION_EXECUTABLE = "/home/dev/devbox-ops/bin/tracked-validation"
+TRACKED_VALIDATION_OPERATIONS_ROOT = "/home/dev/devbox-ops"
+TRACKED_VALIDATION_REPOSITORY = "devbox-ops"
+TRACKED_VALIDATION_PATH = "validation/test-gh-prm.sh"
 TRACKED_VALIDATION_SAFE_MENTION_EXECUTABLES = {"echo", "grep", "printf"}
 TRACKED_VALIDATION_WRAPPERS = {
     "bash",
@@ -96,9 +100,23 @@ TRACKED_VALIDATION_WRAPPERS = {
     "xargs",
     "zsh",
 }
-TRACKED_VALIDATION_REPOSITORY_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 TRACKED_VALIDATION_SHA_RE = re.compile(r"[0-9a-f]{40}$")
-TRACKED_VALIDATION_PATH_RE = re.compile(r"validation/[A-Za-z0-9._/-]+\.sh$")
+OPAQUE_INTERPRETERS = {
+    "R",
+    "Rscript",
+    "groovy",
+    "lua",
+    "luajit",
+    "node",
+    "perl",
+    "php",
+    "python",
+    "python3",
+    "ruby",
+    "tclsh",
+    "wish",
+}
+MULTICALL_EXECUTABLES = {"busybox", "toybox"}
 DANGEROUS_GIT_ENVIRONMENT = {
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_ASKPASS",
@@ -424,8 +442,8 @@ class SafeYoloEngine:
         executable_name = Path(executable).name
         operations_root = self.host_contract.get("operations_root")
         canonical_executable = (
-            str(Path(str(operations_root)).expanduser().resolve(strict=False) / "bin" / TRACKED_VALIDATION_NAME)
-            if operations_root
+            TRACKED_VALIDATION_EXECUTABLE
+            if operations_root == TRACKED_VALIDATION_OPERATIONS_ROOT
             else None
         )
         canonical_mentioned = bool(
@@ -436,7 +454,7 @@ class SafeYoloEngine:
             for token in tokens
         )
         wrapped_name = (
-            executable_name in TRACKED_VALIDATION_WRAPPERS
+            executable_name in (TRACKED_VALIDATION_WRAPPERS | SHELLS)
             and any(
                 Path(token).name == TRACKED_VALIDATION_NAME
                 or bool(canonical_executable and canonical_executable in token)
@@ -465,13 +483,10 @@ class SafeYoloEngine:
                 "Tracked validation requires exactly repository, commit, and validation-path arguments.",
             )
         repository_id, commit_sha, validation_path = tokens[1:]
-        valid_path = bool(TRACKED_VALIDATION_PATH_RE.fullmatch(validation_path))
-        valid_path = valid_path and "//" not in validation_path
-        valid_path = valid_path and all(part not in {"", ".", ".."} for part in validation_path.split("/"))
         if not (
-            TRACKED_VALIDATION_REPOSITORY_RE.fullmatch(repository_id)
+            repository_id == TRACKED_VALIDATION_REPOSITORY
             and TRACKED_VALIDATION_SHA_RE.fullmatch(commit_sha)
-            and valid_path
+            and validation_path == TRACKED_VALIDATION_PATH
         ):
             return result(
                 "block_method",
@@ -630,7 +645,14 @@ class SafeYoloEngine:
         if executable in SHELLS:
             wrapped = self._wrapped_command(args)
             if wrapped is not None:
-                return self.inspect_command(wrapped, context)
+                wrapped_result = self.inspect_command(wrapped, context)
+                if wrapped_result.get("policy_id") == "tracked_validation.exact":
+                    return result(
+                        "block_method",
+                        "tracked_validation.invocation",
+                        "Tracked validation requires the exact canonical executable with no wrapper.",
+                    )
+                return wrapped_result
             if args and not (args[0] in {"-n", "--version", "--help", "-h"}):
                 return result("block_hard", "shell.unclassified", "Untrusted shell script execution is not permitted.")
 
@@ -679,10 +701,17 @@ class SafeYoloEngine:
                 if path_result["decision"] != "allow":
                     return path_result
 
-        if executable in {"python", "python3", "node"}:
+        if executable in MULTICALL_EXECUTABLES:
+            return result(
+                "block_hard",
+                "shell.unclassified_interpreter",
+                "Multi-call executables can launch unreviewed secondary commands and are not permitted.",
+            )
+
+        if executable in OPAQUE_INTERPRETERS:
             read_only = (
                 args[:1] in (["--version"], ["--help"], ["-h"])
-                or args[:2] == ["-m", "unittest"]
+                or executable in {"python", "python3"} and args[:2] == ["-m", "unittest"]
                 or executable == "node" and args[:1] == ["--check"]
             )
             if not read_only:
