@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
 import unittest
-from unittest.mock import patch
 
 from adapters.codex import evaluate_payload
 from engine.safe_yolo import SafeYoloEngine
@@ -67,6 +66,7 @@ class DevboxHardeningTests(unittest.TestCase):
             f"/tmp/tracked-validation devbox-ops {sha} validation/test-gh-prm.sh",
             f"env {command}",
             f"env -i {command}",
+            f"env -- {command}",
             f"command {command}",
             f"time {command}",
             f"timeout 30 {command}",
@@ -91,6 +91,9 @@ class DevboxHardeningTests(unittest.TestCase):
             f"git --config-env=alias.x=ALIAS_VALUE x",
             f"git --exec-path=/tmp x",
             f"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.x GIT_CONFIG_VALUE_0='!{command}' git x",
+            f"git config alias.x '!p=/home/dev/devbox-ops/bin/tracked-; p=${{p}}validation; \"$p\" devbox-ops {sha} validation/test-gh-prm.sh' && git x",
+            f"printf '%s\\n' '{command}' > /tmp/safe-yolo-rg-pre.sh && rg --pre sh NOMATCH /tmp/safe-yolo-rg-pre.sh",
+            f"printf '%s\\n' '{command}' > /tmp/safe-yolo-command.txt",
         )
         for blocked_command in blocked_commands:
             with self.subTest(command=blocked_command):
@@ -100,7 +103,7 @@ class DevboxHardeningTests(unittest.TestCase):
                 )
 
         for harmless_mention in (
-            f"rg {executable} engine tests",
+            f"grep -F {executable} engine/safe_yolo.py",
             f"printf '%s\\n' {executable}",
         ):
             with self.subTest(command=harmless_mention):
@@ -119,8 +122,7 @@ class DevboxHardeningTests(unittest.TestCase):
         self.assertEqual("block_method", engine.inspect_command(command)["decision"])
 
     def test_configured_git_aliases_fail_closed(self):
-        with patch.object(self.engine, "_git_value", return_value="!printf bypass"):
-            decision = self.engine.inspect_command("git x", {"cwd": "/tmp/repository"})
+        decision = self.engine.inspect_command("git x", {"cwd": "/tmp/repository"})
         self.assertEqual("block_method", decision["decision"])
         self.assertEqual("git.alias_execution", decision["policy_id"])
 

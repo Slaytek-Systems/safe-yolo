@@ -74,7 +74,7 @@ SYSTEM_RED_EXECUTABLES = {
 }
 REMOTE_EXECUTABLES = {"ssh", "scp", "rsync"}
 TRACKED_VALIDATION_NAME = "tracked-validation"
-TRACKED_VALIDATION_SAFE_MENTION_EXECUTABLES = {"echo", "grep", "printf", "rg"}
+TRACKED_VALIDATION_SAFE_MENTION_EXECUTABLES = {"echo", "grep", "printf"}
 TRACKED_VALIDATION_WRAPPERS = {
     "bash",
     "builtin",
@@ -116,6 +116,59 @@ DANGEROUS_GIT_ENVIRONMENT = {
     "GIT_SSH",
     "GIT_SSH_COMMAND",
     "GIT_WORK_TREE",
+}
+KNOWN_GIT_SUBCOMMANDS = {
+    "add",
+    "archive",
+    "bisect",
+    "blame",
+    "branch",
+    "cat-file",
+    "check-attr",
+    "check-ignore",
+    "check-mailmap",
+    "check-ref-format",
+    "checkout",
+    "clean",
+    "clone",
+    "commit",
+    "config",
+    "describe",
+    "diff",
+    "diff-index",
+    "diff-tree",
+    "fetch",
+    "for-each-ref",
+    "fsck",
+    "grep",
+    "hash-object",
+    "help",
+    "init",
+    "log",
+    "ls-files",
+    "ls-remote",
+    "ls-tree",
+    "merge",
+    "merge-base",
+    "merge-tree",
+    "mv",
+    "name-rev",
+    "push",
+    "rebase",
+    "remote",
+    "reset",
+    "restore",
+    "rev-list",
+    "rev-parse",
+    "shortlog",
+    "show",
+    "show-ref",
+    "status",
+    "switch",
+    "symbolic-ref",
+    "tag",
+    "update-index",
+    "worktree",
 }
 
 
@@ -385,6 +438,10 @@ class SafeYoloEngine:
         canonical_mentioned = bool(
             canonical_executable and any(canonical_executable in token for token in tokens)
         )
+        has_shell_composition = any(
+            token in {"|", "||", "|&", "&&", ";", "&", "(", ")", "<", ">", "<<", ">>", "<<<", "<&", ">&"}
+            for token in tokens
+        )
         wrapped_name = (
             executable_name in TRACKED_VALIDATION_WRAPPERS
             and any(
@@ -396,7 +453,10 @@ class SafeYoloEngine:
         if executable != canonical_executable:
             unsafe_mention = (
                 canonical_mentioned
-                and executable_name not in TRACKED_VALIDATION_SAFE_MENTION_EXECUTABLES
+                and (
+                    executable_name not in TRACKED_VALIDATION_SAFE_MENTION_EXECUTABLES
+                    or has_shell_composition
+                )
             )
             if executable_name == TRACKED_VALIDATION_NAME or wrapped_name or unsafe_mention:
                 return result(
@@ -521,6 +581,16 @@ class SafeYoloEngine:
             return result("allow", "shell.empty", "Empty segment.")
 
         original_tokens = tokens
+        original_index = 0
+        while original_index < len(original_tokens) and re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*=.*", original_tokens[original_index]
+        ):
+            original_index += 1
+        if (
+            original_index < len(original_tokens)
+            and Path(original_tokens[original_index]).name == "env"
+        ):
+            return self.evaluate({"action": "credentials.expose", **context})
         tokens = self._strip_env(tokens)
         if not tokens:
             if original_tokens and Path(original_tokens[0]).name == "env":
@@ -597,6 +667,9 @@ class SafeYoloEngine:
 
         if executable in {"eval", "source", "."}:
             return result("block_method", "shell.dynamic_execution", "Dynamic shell evaluation is not inspectable enough for Safe YOLO.")
+
+        if executable == "rg" and any(arg == "--pre" or arg.startswith("--pre=") for arg in args):
+            return result("block_method", "shell.secondary_execution", "rg --pre command execution is not permitted.")
 
         if executable == "find" and any(arg in {"-delete", "-exec", "-execdir", "-ok", "-okdir"} for arg in args):
             return result("block_hard", "filesystem.delete", "Destructive find actions are Red; use a bounded reviewable method.")
@@ -878,16 +951,16 @@ class SafeYoloEngine:
             return result("allow", "git.inspect", "Git inspection is permitted.")
         subcommand = filtered[0]
         rest = filtered[1:]
-        if isinstance(git_cwd, str) and git_cwd:
-            configured_alias = self._git_value(["config", "--get", f"alias.{subcommand}"], git_cwd)
-            if configured_alias:
-                return result(
-                    "block_method",
-                    "git.alias_execution",
-                    "Configured Git aliases are not inspectable enough for Safe YOLO.",
-                )
         if subcommand in DESTRUCTIVE_GIT:
             return result("block_hard", f"git.{subcommand}", "Git work loss or history rewrite is Red.")
+        if subcommand not in KNOWN_GIT_SUBCOMMANDS:
+            return result(
+                "block_method",
+                "git.alias_execution",
+                "Unknown Git subcommands and configured aliases are not permitted.",
+            )
+        if subcommand == "config":
+            return self._inspect_git_config(rest)
         if subcommand == "checkout" and any(arg in {"--", "."} for arg in rest):
             return result("block_hard", "git.discard_work", "Checkout cannot discard working-tree changes.")
         if subcommand != "push":
@@ -908,6 +981,28 @@ class SafeYoloEngine:
         if self._safe_feature_push(positional, git_context):
             return result("allow_report", "git.push_feature", "Clean feature branch has matching origin upstream and no force/broad flags.")
         return self.evaluate({"action": "git.push_feature", **context})
+
+    @staticmethod
+    def _inspect_git_config(args: list[str]) -> dict[str, Any]:
+        write_flags = {
+            "--add",
+            "--edit",
+            "-e",
+            "--remove-section",
+            "--rename-section",
+            "--replace-all",
+            "--unset",
+            "--unset-all",
+        }
+        if any(arg in write_flags for arg in args):
+            return result("block_method", "git.config_write", "Git configuration writes are not permitted.")
+        positional = [arg for arg in args if not arg.startswith("-")]
+        read_operations = {"--get", "--get-all", "--get-regexp", "--get-urlmatch", "--list", "-l"}
+        if any(arg in read_operations for arg in args):
+            return result("allow", "git.config_read", "Git configuration inspection is permitted.")
+        if len(positional) <= 1:
+            return result("allow", "git.config_read", "Git configuration inspection is permitted.")
+        return result("block_method", "git.config_write", "Git configuration writes are not permitted.")
 
     def _inspect_gh(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
         if args[:2] == ["pr", "create"]:

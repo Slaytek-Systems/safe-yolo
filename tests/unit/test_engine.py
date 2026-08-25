@@ -80,8 +80,8 @@ class CanonicalEngineTests(unittest.TestCase):
         self.assertEqual("allow", allowed["decision"])
 
         assignment = "FILE=codex-task-session-operating-model.md env"
-        allowed = self.engine.inspect_command(assignment)
-        self.assertEqual("allow", allowed["decision"])
+        blocked = self.engine.inspect_command(assignment)
+        self.assertEqual("block_hard", blocked["decision"])
 
 
 if __name__ == "__main__":
