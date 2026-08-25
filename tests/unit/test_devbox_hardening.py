@@ -12,10 +12,14 @@ class DevboxHardeningTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         policy = json.loads((ROOT / "policy" / "policy.json").read_text())
-        cls.engine = SafeYoloEngine(policy, path_variables={
-            "SAFE_YOLO_HOME": "/opt/safe-yolo",
-            "CODEX_HOME": "/home/test/.codex",
-        })
+        cls.engine = SafeYoloEngine(
+            policy,
+            path_variables={
+                "SAFE_YOLO_HOME": "/opt/safe-yolo",
+                "CODEX_HOME": "/home/test/.codex",
+            },
+            host_contract={"operations_root": "/home/dev/devbox-ops"},
+        )
 
     def test_protected_shell_write_forms_require_maintenance(self):
         for command in (
@@ -37,10 +41,149 @@ class DevboxHardeningTests(unittest.TestCase):
             "python3 scripts/task.py",
             "node scripts/task.js",
             "bash scripts/task.sh",
+            "echo hi | /bin/bash",
+            "echo hi | /bin/sh",
+            "echo hi | dash",
+            "cat /tmp/x | command bash",
+            "printf code | bun",
         ):
             with self.subTest(command=command):
                 self.assertEqual("block_hard", self.engine.inspect_command(command)["decision"])
+        for command in (
+            ". /tmp/untrusted.sh",
+            "command . /tmp/untrusted.sh",
+            "builtin . /tmp/untrusted.sh",
+        ):
+            with self.subTest(command=command):
+                decision = self.engine.inspect_command(command)
+                self.assertEqual("block_method", decision["decision"])
+                self.assertEqual("shell.dynamic_execution", decision["policy_id"])
         for command in ("python3 --version", "python3 -m unittest tests.test_policy", "node --check app.js", "bash -n check.sh"):
+            with self.subTest(command=command):
+                self.assertEqual("allow", self.engine.inspect_command(command)["decision"])
+
+    def test_tracked_validation_allows_only_the_exact_literal_grammar(self):
+        executable = "/home/dev/devbox-ops/bin/tracked-validation"
+        sha = "ddbf4b92ff7eec413722bf77440b55ae1cad3eae"
+        command = f"{executable} devbox-ops {sha} validation/test-gh-prm.sh"
+        decision = self.engine.inspect_command(command)
+        self.assertEqual("allow_report", decision["decision"])
+        self.assertEqual("tracked_validation.exact", decision["policy_id"])
+
+        line_continuation = (
+            "/home/dev/devbox-ops/bin/tracked-" + "\\" + "\n"
+            + f"validation devbox-ops {sha} validation/test-gh-prm.sh"
+        )
+
+        blocked_commands = (
+            f"bin/tracked-validation devbox-ops {sha} validation/test-gh-prm.sh",
+            f"/tmp/tracked-validation devbox-ops {sha} validation/test-gh-prm.sh",
+            f"{executable} arbitrary-repo {sha} validation/test-gh-prm.sh",
+            f"{executable} devbox-ops {sha} validation/arbitrary.sh",
+            f"env {command}",
+            f"env -i {command}",
+            f"env -- {command}",
+            f"command {command}",
+            f"time {command}",
+            f"timeout 30 {command}",
+            f"bash -c '{command}'",
+            f"{command} extra",
+            f"{executable} devbox-ops {sha[:12]} validation/test-gh-prm.sh",
+            f"{executable} devbox-ops {sha.upper()} validation/test-gh-prm.sh",
+            f"{executable} devbox-ops {sha} validation/../test-gh-prm.sh",
+            f"{command} && true",
+            f"{command} | tee receipt.txt",
+            f"{command} > receipt.txt",
+            f"{executable} $(printf devbox-ops) {sha} validation/test-gh-prm.sh",
+            f"$(printf {executable}) devbox-ops {sha} validation/test-gh-prm.sh",
+            f"`printf {executable}` devbox-ops {sha} validation/test-gh-prm.sh",
+            f"/home/dev/devbox-ops/bin/tracked-${{UNSET:-validation}} devbox-ops {sha} validation/test-gh-prm.sh",
+            f"/home/dev/devbox-ops/bin/tracked-validatio? devbox-ops {sha} validation/test-gh-prm.sh",
+            line_continuation,
+            f"printf '%s%s\\n' /home/dev/devbox-ops/bin/tracked- validation | xargs sh -c '\"$0\" devbox-ops {sha} validation/test-gh-prm.sh'",
+            f"printf '%s\\n' '{command}' | bash",
+            f"git -c 'alias.x=!p={executable}; \"$p\" devbox-ops {sha} validation/test-gh-prm.sh; touch /tmp/safe-yolo-bypass' x",
+            f"git -c 'alias.x=!p=/home/dev/devbox-ops/bin/tracked-; p=${{p}}validation; \"$p\" devbox-ops {sha} validation/test-gh-prm.sh' x",
+            f"git --config-env=alias.x=ALIAS_VALUE x",
+            f"git --exec-path=/tmp x",
+            f"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.x GIT_CONFIG_VALUE_0='!{command}' git x",
+            f"git config alias.x '!p=/home/dev/devbox-ops/bin/tracked-; p=${{p}}validation; \"$p\" devbox-ops {sha} validation/test-gh-prm.sh' && git x",
+            f"printf '%s\\n' '{command}' > /tmp/safe-yolo-rg-pre.sh && rg --pre sh NOMATCH /tmp/safe-yolo-rg-pre.sh",
+            f"printf '%s\\n' '{command}' > /tmp/safe-yolo-command.txt",
+            f"perl -e 'exec \"/home/dev/devbox-ops/bin/tracked-\" . \"validation\", \"devbox-ops\", \"{sha}\", \"validation/test-gh-prm.sh\"'",
+            f"ruby -e 'exec \"/home/dev/devbox-ops/bin/tracked-\" + \"validation\", \"devbox-ops\", \"{sha}\", \"validation/test-gh-prm.sh\"'",
+            f"awk 'BEGIN {{ p=\"/home/dev/devbox-ops/bin/tracked-\" \"validation\"; system(p \" devbox-ops {sha} validation/test-gh-prm.sh\") }}'",
+            f"/home/dev/devbox-ops/bin/tracked-\"validation\" devbox-ops {sha} validation/test-gh-prm.sh",
+            f"/home/dev/devbox-ops/bin/tracked-\\validation devbox-ops {sha} validation/test-gh-prm.sh",
+            f"dash -c '/home/dev/devbox-ops/bin/tracked-\"validation\" devbox-ops {sha} validation/test-gh-prm.sh'",
+            f"busybox sh -c '/home/dev/devbox-ops/bin/tracked-\"validation\" devbox-ops {sha} validation/test-gh-prm.sh'",
+        )
+        for blocked_command in blocked_commands:
+            with self.subTest(command=blocked_command):
+                self.assertNotIn(
+                    self.engine.inspect_command(blocked_command)["decision"],
+                    {"allow", "allow_report"},
+                )
+
+        for harmless_mention in (
+            f"grep -F {executable} engine/safe_yolo.py",
+            f"printf '%s\\n' {executable}",
+        ):
+            with self.subTest(command=harmless_mention):
+                self.assertEqual("allow", self.engine.inspect_command(harmless_mention)["decision"])
+
+    def test_tracked_validation_fails_closed_without_the_exact_operations_root(self):
+        policy = json.loads((ROOT / "policy" / "policy.json").read_text())
+        engine = SafeYoloEngine(policy, path_variables={
+            "SAFE_YOLO_HOME": "/opt/safe-yolo",
+            "CODEX_HOME": "/home/test/.codex",
+        })
+        command = (
+            "/home/dev/devbox-ops/bin/tracked-validation devbox-ops "
+            "ddbf4b92ff7eec413722bf77440b55ae1cad3eae validation/test-gh-prm.sh"
+        )
+        self.assertEqual("block_method", engine.inspect_command(command)["decision"])
+        alternate = SafeYoloEngine(
+            policy,
+            path_variables={
+                "SAFE_YOLO_HOME": "/opt/safe-yolo",
+                "CODEX_HOME": "/home/test/.codex",
+            },
+            host_contract={"operations_root": "/tmp/alternate-operations"},
+        )
+        self.assertEqual("block_method", alternate.inspect_command(command)["decision"])
+        alternate_command = command.replace(
+            "/home/dev/devbox-ops/bin/tracked-validation",
+            "/tmp/alternate-operations/bin/tracked-validation",
+        )
+        self.assertEqual("block_method", alternate.inspect_command(alternate_command)["decision"])
+
+    def test_configured_git_aliases_fail_closed(self):
+        decision = self.engine.inspect_command("git x", {"cwd": "/tmp/repository"})
+        self.assertEqual("block_method", decision["decision"])
+        self.assertEqual("git.alias_execution", decision["policy_id"])
+
+    def test_git_execution_environment_fails_closed_across_shell_segments(self):
+        for command in (
+            "GIT_CONFIG_PARAMETERS=\"'core.pager=python3'\" git log",
+            "export GIT_PAGER=python3; git log",
+            "export GIT_PAGER=python3 && git log",
+            "bash -c 'export GIT_PAGER=python3; git log'",
+            "setenv GIT_SSH_COMMAND python3; git fetch",
+        ):
+            with self.subTest(command=command):
+                decision = self.engine.inspect_command(command)
+                self.assertEqual("block_method", decision["decision"])
+                self.assertEqual("git.dynamic_configuration", decision["policy_id"])
+
+    def test_literal_command_substitution_text_remains_inspectable(self):
+        decision = self.engine.inspect_command(r"rg '\$\(' engine tests")
+        self.assertEqual("allow", decision["decision"])
+        for command in (
+            "rg -F '| bash' engine tests",
+            "grep -F '| /bin/sh' engine/safe_yolo.py",
+            "printf '%s\\n' '| dash'",
+        ):
             with self.subTest(command=command):
                 self.assertEqual("allow", self.engine.inspect_command(command)["decision"])
 
