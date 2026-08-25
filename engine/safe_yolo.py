@@ -289,10 +289,18 @@ class SafeYoloEngine:
     @staticmethod
     def _token_embeds_secret(token: str) -> bool:
         return any(
-            SECRET_RE.search(component)
+            SafeYoloEngine._component_embeds_secret(component)
             for component in token.split("/")
-            if component not in BENIGN_CREDENTIAL_LIKE_PATH_COMPONENTS
         )
+
+    @staticmethod
+    def _component_embeds_secret(component: str) -> bool:
+        if component in BENIGN_CREDENTIAL_LIKE_PATH_COMPONENTS:
+            return False
+        prefix, separator, value = component.rpartition("=")
+        if separator and value in BENIGN_CREDENTIAL_LIKE_PATH_COMPONENTS:
+            return SECRET_RE.search(prefix) is not None
+        return SECRET_RE.search(component) is not None
 
     def inspect_path_write(self, raw_path: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
         context = context or {}

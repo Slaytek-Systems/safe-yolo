@@ -63,6 +63,7 @@ class CanonicalEngineTests(unittest.TestCase):
             f"git add /tmp/x{synthetic_credential}/codex-task-session-operating-model.md",
             f"printf 'FILE=/tmp/{synthetic_credential}/codex-task-session-operating-model.md'",
             f"git add docs/codex-task-session-operating-model.md/{synthetic_credential}",
+            f"printf '{synthetic_credential}=codex-task-session-operating-model.md'",
         )
         for command in blocked_commands:
             with self.subTest(command=command):
@@ -76,6 +77,10 @@ class CanonicalEngineTests(unittest.TestCase):
 
         absolute_path = "git add /tmp/docs/codex-task-session-operating-model.md"
         allowed = self.engine.inspect_command(absolute_path)
+        self.assertEqual("allow", allowed["decision"])
+
+        assignment = "FILE=codex-task-session-operating-model.md env"
+        allowed = self.engine.inspect_command(assignment)
         self.assertEqual("allow", allowed["decision"])
 
 
