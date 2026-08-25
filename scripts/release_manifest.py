@@ -6,7 +6,12 @@ from pathlib import Path
 from typing import Any
 
 MANIFEST_NAME = "manifest.json"
-ENTRYPOINTS = {"codex": "adapters/codex.py", "prompt": "adapters/codex_prompt.py"}
+ENTRYPOINTS = {
+    "codex": "adapters/codex.py",
+    "prompt": "adapters/codex_prompt.py",
+    "cursor": "adapters/cursor.py",
+    "cursor_prompt": "adapters/cursor_prompt.py",
+}
 SOURCE_ROOTS = ("policy", "engine", "adapters")
 
 

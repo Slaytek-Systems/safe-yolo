@@ -9,6 +9,11 @@
     "operations_root": {"type": "string", "minLength": 1},
     "workspaces_root": {"type": "string", "minLength": 1},
     "workspace_lifecycle": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "workspace_loopback_ports": {
+      "type": "array",
+      "items": {"type": "integer", "minimum": 1, "maximum": 65535},
+      "uniqueItems": true
+    },
     "workspace_commands": {
       "type": "array",
       "items": {
@@ -17,6 +22,21 @@
         "properties": {
           "workspace": {"type": "string", "minLength": 1},
           "command": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+          "policy_id": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    "git_protected_push_exceptions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["repository", "remote", "branch", "policy_id", "reason"],
+        "properties": {
+          "repository": {"type": "string", "minLength": 1},
+          "remote": {"type": "string", "minLength": 1},
+          "branch": {"type": "string", "minLength": 1},
           "policy_id": {"type": "string", "minLength": 1},
           "reason": {"type": "string", "minLength": 1}
         },

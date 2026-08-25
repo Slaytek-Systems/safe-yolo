@@ -9,7 +9,12 @@ import subprocess
 import sys
 
 
-ENTRYPOINTS = {"codex": "adapters/codex.py", "prompt": "adapters/codex_prompt.py"}
+ENTRYPOINTS = {
+    "codex": "adapters/codex.py",
+    "prompt": "adapters/codex_prompt.py",
+    "cursor": "adapters/cursor.py",
+    "cursor_prompt": "adapters/cursor_prompt.py",
+}
 
 
 def _sha256(path: Path) -> str:

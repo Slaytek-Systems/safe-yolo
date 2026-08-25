@@ -24,6 +24,7 @@ DECISIONS = {
 SHELLS = {"bash", "sh", "zsh", "fish"}
 DESTRUCTIVE_GIT = {"reset", "rebase", "restore", "clean"}
 FORCE_FLAGS = {"--force", "--force-with-lease", "-f"}
+GRAPHITE_STACK_COMMANDS = {"modify", "restack", "submit", "ss", "sync"}
 PROTECTED_BRANCHES = {"main", "master", "production", "prod"}
 NETWORK_WRITE_FLAGS = {
     "-d",
@@ -49,6 +50,7 @@ AUTH_FLAGS = {
     "--proxy-user",
 }
 PRIVATE_HOSTS = {"localhost", "0.0.0.0", "127.0.0.1", "::1"}
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 METADATA_HOSTS = {"169.254.169.254", "metadata.google.internal"}
 SECRET_RE = re.compile(
     r"(?:sk-[A-Za-z0-9_-]{20,}|github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,})"
@@ -88,7 +90,10 @@ class SafeYoloEngine:
     ):
         self.policy = policy
         self.actions = policy["actions"]
-        self.path_variables = dict(path_variables or {})
+        self.path_variables = {
+            "HOME": str(Path.home()),
+            **dict(path_variables or {}),
+        }
         self.host_contract = dict(host_contract or {})
         protected_paths = [*policy["protected_paths"], *(self.host_contract.get("protected_paths") or [])]
         self.protected_paths = [
@@ -196,17 +201,6 @@ class SafeYoloEngine:
         )
 
     def _condition_met(self, condition: str, request: dict[str, Any]) -> bool:
-        if condition == "safe_feature_push":
-            repository = request.get("repository") or {}
-            validation = request.get("validation") or {}
-            branch = repository.get("branch")
-            return bool(
-                repository.get("remote") == "origin"
-                and branch
-                and branch == repository.get("target_branch")
-                and not repository.get("protected", False)
-                and validation.get("passed") is True
-            )
         if condition == "external_release_contract":
             contract = request.get("external_release_contract") or {}
             required = {
@@ -431,12 +425,14 @@ class SafeYoloEngine:
 
         if executable in {"docker", "docker-compose"}:
             return self._inspect_docker(context)
-        if tokens[0] == "./workspace":
+        if self._is_workspace_launcher(tokens, args, context):
             return self._inspect_workspace_launcher(args, context)
         if tokens[0].startswith("./"):
             return result("block_method", "workspace.lifecycle", "Project launchers require a tracked repository contract.")
         if executable == "git":
             return self._inspect_git(args, context)
+        if executable == "gt":
+            return self._inspect_graphite(args, context)
         if executable == "gh":
             return self._inspect_gh(args, context)
         if executable == "core-edge":
@@ -543,37 +539,111 @@ class SafeYoloEngine:
             return result("block_method", "docker.workspace_contract", "Raw Docker is reserved for the approved operations workspace.")
         return result("allow", "docker.operations_workspace", "Docker operation is within the approved operations workspace.")
 
-    def _inspect_workspace_launcher(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
+    @staticmethod
+    def _workspace_command_args(args: list[str]) -> tuple[str | None, list[str]]:
+        repo = None
+        remaining: list[str] = []
+        index = 0
+        while index < len(args):
+            arg = args[index]
+            if arg == "--repo" and index + 1 < len(args):
+                repo = args[index + 1]
+                index += 2
+                continue
+            if arg.startswith("--repo="):
+                repo = arg.split("=", 1)[1]
+                index += 1
+                continue
+            remaining.append(arg)
+            index += 1
+        return repo, remaining
+
+    def _workspace_root(self) -> Path | None:
         workspaces_root = self.host_contract.get("workspaces_root")
-        cwd_value = context.get("cwd")
-        if not workspaces_root or not cwd_value:
-            return result("block_method", "workspace.lifecycle", "Workspace launcher requires an approved host contract.")
+        if not workspaces_root:
+            return None
         try:
-            root = Path(str(workspaces_root)).expanduser().resolve(strict=False)
-            cwd = Path(str(cwd_value)).expanduser().resolve(strict=False)
-            relative = cwd.relative_to(root)
-        except (OSError, ValueError):
+            return Path(str(workspaces_root)).expanduser().resolve(strict=False)
+        except OSError:
+            return None
+
+    def _resolve_workspace_checkout(self, raw: str | None, cwd: str | None) -> Path | None:
+        if not isinstance(raw, str) or not raw:
+            return None
+        try:
+            candidate = Path(raw).expanduser()
+            if not candidate.is_absolute():
+                base = Path(cwd).expanduser() if isinstance(cwd, str) and cwd else Path.cwd()
+                candidate = base / candidate
+            return candidate.resolve(strict=False)
+        except OSError:
+            return None
+
+    def _workspace_relative(self, checkout: Path) -> str | None:
+        root = self._workspace_root()
+        if root is None:
+            return None
+        try:
+            return str(checkout.relative_to(root))
+        except ValueError:
+            return None
+
+    def _is_workspace_launcher(self, tokens: list[str], args: list[str], context: dict[str, Any]) -> bool:
+        if tokens[0] == "./workspace":
+            return True
+        if Path(tokens[0]).name != "workspace":
+            return False
+        repo_flag, command_args = self._workspace_command_args(args)
+        checkout = self._resolve_workspace_checkout(repo_flag, context.get("cwd") if isinstance(context.get("cwd"), str) else None)
+        if checkout is None:
+            checkout = self._resolve_workspace_checkout(context.get("cwd") if isinstance(context.get("cwd"), str) else None, None)
+        if checkout is None or self._workspace_relative(checkout) is None:
+            return False
+        lifecycle = command_args[0] if command_args else ""
+        allowed_lifecycle = set(self.host_contract.get("workspace_lifecycle") or [])
+        if lifecycle in allowed_lifecycle:
+            return True
+        relative = self._workspace_relative(checkout)
+        return any(
+            item.get("workspace") == relative and item.get("command") == command_args
+            for item in (self.host_contract.get("workspace_commands") or [])
+        )
+
+    def _inspect_workspace_launcher(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
+        if self._workspace_root() is None:
+            return result("block_method", "workspace.lifecycle", "Workspace launcher requires an approved host contract.")
+        repo_flag, command_args = self._workspace_command_args(args)
+        cwd_value = context.get("cwd") if isinstance(context.get("cwd"), str) else None
+        checkout = self._resolve_workspace_checkout(repo_flag, cwd_value) or self._resolve_workspace_checkout(cwd_value, None)
+        if checkout is None:
+            return result(
+                "block_method",
+                "workspace.lifecycle",
+                "Workspace launcher requires cwd or --repo under the approved workspace root.",
+            )
+        relative = self._workspace_relative(checkout)
+        if relative is None:
             return result("block_method", "workspace.lifecycle", "Workspace launcher is outside the approved workspace root.")
-        launcher = cwd / "workspace"
+        launcher = checkout / "workspace"
         if not launcher.is_file() or launcher.is_symlink():
             return result("block_method", "workspace.untrusted_launcher", "Workspace launcher must be a real tracked file.")
-        lifecycle = args[0] if args else ""
+        lifecycle = command_args[0] if command_args else ""
         allowed_lifecycle = set(self.host_contract.get("workspace_lifecycle") or [])
         command_contracts = self.host_contract.get("workspace_commands") or []
         contract = next(
             (
                 item
                 for item in command_contracts
-                if item.get("workspace") == str(relative) and item.get("command") == args
+                if item.get("workspace") == relative and item.get("command") == command_args
             ),
             None,
         )
         if lifecycle not in allowed_lifecycle and contract is None:
             return result("block_method", "workspace.lifecycle", "Unknown workspace lifecycle command requires direct review.")
         checks = (
-            ["git", "-C", str(cwd), "ls-files", "--error-unmatch", "workspace"],
-            ["git", "-C", str(cwd), "diff", "--quiet", "--", "workspace"],
-            ["git", "-C", str(cwd), "diff", "--cached", "--quiet", "--", "workspace"],
+            ["git", "-C", str(checkout), "ls-files", "--error-unmatch", "workspace"],
+            ["git", "-C", str(checkout), "diff", "--quiet", "--", "workspace"],
+            ["git", "-C", str(checkout), "diff", "--cached", "--quiet", "--", "workspace"],
         )
         try:
             if any(subprocess.run(check, capture_output=True, check=False, timeout=2).returncode != 0 for check in checks):
@@ -629,25 +699,71 @@ class SafeYoloEngine:
             return None
         return completed.stdout.strip() if completed.returncode == 0 else None
 
-    def _safe_feature_push(self, positional: list[str], context: dict[str, Any]) -> bool:
+    def _push_branch(self, context: dict[str, Any]) -> str | None:
         cwd = context.get("cwd")
         if not isinstance(cwd, str) or not cwd:
-            return False
-        if positional and positional != ["origin"]:
-            return False
-        branch = self._git_value(["branch", "--show-current"], cwd)
-        if not branch or branch in PROTECTED_BRANCHES or branch.startswith("release/"):
-            return False
-        upstream = self._git_value(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd)
-        if upstream != f"origin/{branch}":
-            return False
-        status = self._git_value(["status", "--porcelain"], cwd)
-        return status == ""
+            return None
+        return self._git_value(["branch", "--show-current"], cwd)
+
+    @staticmethod
+    def _push_target_branch(refspec: str, current_branch: str | None) -> str:
+        destination = refspec.split(":", 1)[1] if ":" in refspec else refspec
+        if destination == "HEAD":
+            destination = current_branch or ""
+        return destination.removeprefix("refs/heads/")
+
+    def _protected_push_exception(
+        self,
+        rest: list[str],
+        context: dict[str, Any],
+        current_branch: str | None,
+    ) -> dict[str, Any] | None:
+        cwd = context.get("cwd")
+        if not isinstance(cwd, str) or not cwd or not current_branch:
+            return None
+        for contract in self.host_contract.get("git_protected_push_exceptions") or []:
+            if not isinstance(contract, dict):
+                continue
+            remote = contract.get("remote")
+            branch = contract.get("branch")
+            repository = contract.get("repository")
+            if not all(isinstance(value, str) and value for value in (remote, branch, repository)):
+                continue
+            if current_branch != branch or rest != [remote, branch]:
+                continue
+            repository_root = self._git_value(["rev-parse", "--show-toplevel"], cwd)
+            if not repository_root:
+                return None
+            if Path(repository_root).resolve(strict=False) != Path(repository).expanduser().resolve(strict=False):
+                continue
+            return result(
+                "allow_report",
+                str(contract.get("policy_id") or "git.protected_push_exception"),
+                str(contract.get("reason") or "Exact host-contracted protected push is permitted."),
+            )
+        return None
 
     def _inspect_git(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
         filtered = list(args)
-        if filtered[:1] == ["-C"] and len(filtered) >= 3:
-            filtered = filtered[2:]
+        git_context = dict(context)
+        while filtered and (filtered[0] == "-C" or filtered[0].startswith("-C")):
+            if filtered[0] == "-C":
+                if len(filtered) < 2:
+                    return result("block_method", "git.context_missing", "Git -C requires an explicit working directory.")
+                raw_cwd = filtered[1]
+                filtered = filtered[2:]
+            else:
+                raw_cwd = filtered[0][2:]
+                filtered = filtered[1:]
+                if not raw_cwd:
+                    return result("block_method", "git.context_missing", "Git -C requires an explicit working directory.")
+            effective_cwd = Path(raw_cwd).expanduser()
+            if not effective_cwd.is_absolute():
+                base_cwd = git_context.get("cwd")
+                if not isinstance(base_cwd, str) or not base_cwd:
+                    return result("block_method", "git.context_missing", "Relative Git -C requires a known working directory.")
+                effective_cwd = Path(base_cwd) / effective_cwd
+            git_context["cwd"] = str(effective_cwd.resolve(strict=False))
         if not filtered:
             return result("allow", "git.inspect", "Git inspection is permitted.")
         subcommand = filtered[0]
@@ -658,7 +774,7 @@ class SafeYoloEngine:
             return result("block_hard", "git.discard_work", "Checkout cannot discard working-tree changes.")
         if subcommand != "push":
             return result("allow", "git.ordinary", "Git operation is permitted.")
-        if any(arg in FORCE_FLAGS or arg.startswith("--force=") for arg in rest):
+        if any(arg in FORCE_FLAGS or arg.startswith(("--force=", "--force-with-lease=")) for arg in rest):
             return result("block_hard", "git.force_push", "Force push is always Red.")
         if any(arg.startswith("+") for arg in rest):
             return result("block_hard", "git.force_push", "Forced refspecs are always Red.")
@@ -667,12 +783,106 @@ class SafeYoloEngine:
         positional = [arg for arg in rest if not arg.startswith("-")]
         if any(arg.startswith(":") or arg.endswith(":") for arg in positional):
             return result("block_hard", "git.delete_ref", "Ref deletion is Red.")
+        if len(positional) > 2:
+            return result("block_hard", "git.unsafe_push", "Multi-ref push shapes are blocked.")
         tag = next((arg for arg in positional if TAG_RE.fullmatch(arg) or "refs/tags/" in arg), None)
         if tag:
-            return self.evaluate({"action": "git.push_tag", "target": tag.removeprefix("refs/tags/"), **context})
-        if self._safe_feature_push(positional, context):
-            return result("allow_report", "git.push_feature", "Clean feature branch has matching origin upstream and no force/broad flags.")
-        return self.evaluate({"action": "git.push_feature", **context})
+            return self.evaluate({"action": "git.push_tag", "target": tag.removeprefix("refs/tags/"), **git_context})
+        branch = self._push_branch(git_context)
+        cwd = git_context.get("cwd")
+        if isinstance(cwd, str) and cwd and branch is None:
+            return result(
+                "require_capability",
+                "git.push_protected",
+                "Current branch could not be determined for push classification.",
+            )
+        exception = self._protected_push_exception(rest, git_context, branch)
+        if exception is not None:
+            return exception
+        refspecs = positional[1:]
+        target_branches = [self._push_target_branch(refspec, branch) for refspec in refspecs]
+        protected_target = next(
+            (
+                target
+                for target in [branch or "", *target_branches]
+                if target in PROTECTED_BRANCHES or target.startswith("release/")
+            ),
+            "",
+        )
+        if protected_target:
+            return self.evaluate({"action": "git.push_protected", "target": protected_target, **git_context})
+        return self.evaluate({"action": "git.push_feature", **git_context})
+
+    def _inspect_graphite(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
+        graphite_context = dict(context)
+        cwd = self._flag_value(args, "--cwd")
+        if not cwd:
+            cwd = next((arg.split("=", 1)[1] for arg in args if arg.startswith("--cwd=")), "")
+        if cwd:
+            effective_cwd = Path(cwd).expanduser()
+            if not effective_cwd.is_absolute():
+                base_cwd = graphite_context.get("cwd")
+                if not isinstance(base_cwd, str) or not base_cwd:
+                    return result("block_method", "graphite.context_missing", "Relative Graphite --cwd requires a known working directory.")
+                effective_cwd = Path(base_cwd).expanduser() / effective_cwd
+            graphite_context["cwd"] = str(effective_cwd.resolve(strict=False))
+
+        command = ""
+        index = 0
+        while index < len(args):
+            arg = args[index]
+            if arg == "--cwd":
+                index += 2
+                continue
+            if arg.startswith("--cwd=") or arg.startswith("-"):
+                index += 1
+                continue
+            command = arg
+            break
+
+        if any(arg == "--no-verify" or arg.startswith("--no-verify=") or arg == "--verify=false" for arg in args):
+            return result("block_hard", "graphite.bypass_verification", "Graphite may not disable repository verification hooks.")
+        if command in {"submit", "ss"} and any(
+            arg in {"--force", "-f", "--ignore-out-of-sync-trunk"}
+            or arg.startswith(("--force=", "--ignore-out-of-sync-trunk="))
+            or (arg.startswith("-") and not arg.startswith("--") and "f" in arg[1:])
+            for arg in args
+        ):
+            return result("block_hard", "graphite.unsafe_submit", "Graphite submit overrides that remove the lease or ignore trunk synchronization are blocked.")
+        if command == "sync" and any(
+            arg in {"--force", "-f", "--delete-all", "-d"}
+            or arg.startswith(("--force=", "--delete-all="))
+            or (arg.startswith("-") and not arg.startswith("--") and any(flag in arg[1:] for flag in "fd"))
+            for arg in args
+        ):
+            return result("block_hard", "graphite.unsafe_sync", "Graphite sync may not skip branch overwrite or deletion confirmations.")
+        if command == "modify" and any(arg == "--interactive-rebase" or arg.startswith("--interactive-rebase=") for arg in args):
+            return result("block_hard", "graphite.interactive_rebase", "Interactive history surgery is outside the reviewed Graphite stack workflow.")
+        if command in {"submit", "ss"} and any(
+            arg in {"--merge-when-ready", "-m"} or arg.startswith("--merge-when-ready=")
+            or (arg.startswith("-") and not arg.startswith("--") and "m" in arg[1:])
+            for arg in args
+        ):
+            return self.evaluate({"action": "github.pr_merge", **graphite_context})
+
+        if command not in GRAPHITE_STACK_COMMANDS:
+            return result("allow", "graphite.ordinary", "Graphite inspection and ordinary topology commands are permitted.")
+
+        working_directory = graphite_context.get("cwd")
+        if not isinstance(working_directory, str) or not working_directory:
+            return result("block_method", "graphite.context_missing", "Graphite stack mutation requires a known repository working directory.")
+        repository_root = self._git_value(["rev-parse", "--show-toplevel"], working_directory)
+        if not repository_root:
+            return result("block_method", "graphite.context_missing", "Graphite stack mutation requires a verified Git repository.")
+
+        branch = self._flag_value(args, "--branch") or self._flag_value(args, "--into")
+        if not branch and command != "sync":
+            branch = self._push_branch(graphite_context) or ""
+        if command != "sync" and not branch:
+            return result("require_capability", "git.push_protected", "Graphite stack branch could not be determined.")
+        if branch and (branch in PROTECTED_BRANCHES or branch.startswith("release/")):
+            return self.evaluate({"action": "git.push_protected", "target": branch, **graphite_context})
+        return self.evaluate({"action": "git.graphite_stack", "operation": command, **graphite_context})
 
     def _inspect_gh(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
         if args[:2] == ["pr", "create"]:
@@ -748,6 +958,13 @@ class SafeYoloEngine:
             host = (parsed.hostname or "").lower()
             if host in METADATA_HOSTS:
                 return result("block_hard", "network.metadata", "Cloud metadata endpoints are Red.")
+            if host in LOOPBACK_HOSTS:
+                registered = {int(port) for port in (self.host_contract.get("workspace_loopback_ports") or [])}
+                port = parsed.port
+                if port is None:
+                    port = 443 if parsed.scheme == "https" else 80
+                if port in registered:
+                    return result("allow", "network.workspace_loopback", "Loopback read of a registered workspace port is permitted.")
             if host in PRIVATE_HOSTS or host.startswith("10.") or host.startswith("192.168.") or host.startswith("172.16."):
                 return result("require_capability", "network.private_read", "Private or local network access requires a scoped capability.")
         return result("allow", "network.public_read", "Literal credential-free public read is Green.")

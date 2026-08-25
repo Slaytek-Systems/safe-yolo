@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from adapters.codex import audit_payload, evaluate_payload, process_payload
 from adapters.codex_prompt import authorize_prompt
@@ -49,6 +51,28 @@ class CodexAdapterTests(unittest.TestCase):
         unknown = evaluate_payload({"tool_name": "future_mutation_tool", "tool_input": {}}, self.engine)
         self.assertEqual("block_hard", shell["decision"])
         self.assertEqual("block_hard", unknown["decision"])
+
+    def test_shell_workdir_overrides_task_root_for_git_classification(self):
+        def git_result(command, **_kwargs):
+            self.assertEqual("/tmp/disposable-repository", _kwargs["cwd"])
+            if command[1:] == ["branch", "--show-current"]:
+                return SimpleNamespace(returncode=0, stdout="task/proof\n")
+            raise AssertionError(command)
+
+        with patch("engine.safe_yolo.subprocess.run", side_effect=git_result):
+            decision = evaluate_payload(
+                {
+                    "tool_name": "Bash",
+                    "cwd": "/task/root",
+                    "tool_input": {
+                        "command": "git push -u origin task/proof",
+                        "workdir": "/tmp/disposable-repository",
+                    },
+                },
+                self.engine,
+            )
+        self.assertEqual("allow_report", decision["decision"])
+        self.assertEqual("git.push_feature", decision["policy_id"])
 
     def test_audit_only_records_a_block_without_returning_a_hook_block(self):
         audit = Path(self.temp.name) / "audit.jsonl"
