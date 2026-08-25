@@ -46,27 +46,29 @@ class CanonicalEngineTests(unittest.TestCase):
         self.assertEqual("require_capability", decision["decision"])
         self.assertEqual("harness.modify", decision["policy_id"])
 
-    def test_secret_detection_requires_token_boundary(self):
-        ordinary_path = "git add docs/architecture/codex-task-session-operating-model.md"
-        allowed = self.engine.inspect_command(ordinary_path)
-        self.assertEqual("allow", allowed["decision"])
-
+    def test_secret_detection_exempts_only_known_benign_path(self):
         synthetic_credential = "sk" + "-" + ("A" * 20)
-        embedded_in_word = self.engine.inspect_command(f"printf 'task{synthetic_credential}'")
-        self.assertEqual("allow", embedded_in_word["decision"])
-
-        shell_adjacent_commands = (
+        blocked_commands = (
+            f"printf {synthetic_credential}",
             f"printf '{synthetic_credential}'",
             f"printf 'key={synthetic_credential}'",
             f"printf './{synthetic_credential}'",
             f"printf '({synthetic_credential})'",
             f"true && printf '{synthetic_credential}'",
+            f"printf 'x{synthetic_credential}'",
+            f"printf 'task{synthetic_credential}'",
+            f"git add docs/architecture/codex-task-session-operating-model.md {synthetic_credential}",
+            f"printf 'codex-task-session-operating-model.md{synthetic_credential}'",
         )
-        for command in shell_adjacent_commands:
+        for command in blocked_commands:
             with self.subTest(command=command):
                 blocked = self.engine.inspect_command(command)
                 self.assertEqual("block_hard", blocked["decision"])
                 self.assertEqual("credentials.expose", blocked["policy_id"])
+
+        ordinary_path = "git add docs/architecture/codex-task-session-operating-model.md"
+        allowed = self.engine.inspect_command(ordinary_path)
+        self.assertEqual("allow", allowed["decision"])
 
 
 if __name__ == "__main__":
