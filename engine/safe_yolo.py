@@ -53,6 +53,7 @@ METADATA_HOSTS = {"169.254.169.254", "metadata.google.internal"}
 SECRET_RE = re.compile(
     r"(?:sk-[A-Za-z0-9_-]{20,}|github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,})"
 )
+BENIGN_CREDENTIAL_LIKE_PATH_COMPONENTS = {"codex-task-session-operating-model.md"}
 TAG_RE = re.compile(r"(?:refs/tags/)?v?\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$")
 SYSTEM_RED_EXECUTABLES = {
     "sudo",
@@ -267,21 +268,39 @@ class SafeYoloEngine:
 
     def inspect_command(self, command: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
         context = context or {}
-        if SECRET_RE.search(command):
-            return result("block_hard", "credentials.expose", "Command embeds a credential-like value.")
-        if re.search(r"\bcurl\b[^|]*(?:\||\|&)\s*(?:bash|sh|zsh|fish|python|python3|node|bun)\b", command):
-            return result("block_hard", "network.remote_execution", "Remote content cannot be piped into an interpreter.")
-
         try:
             tokens = self._tokens(command)
         except ValueError as error:
+            if SECRET_RE.search(command):
+                return result("block_hard", "credentials.expose", "Command embeds a credential-like value.")
             return result("block_method", "shell.unparseable", f"Command could not be safely parsed: {error}")
+
+        if any(self._token_embeds_secret(token) for token in tokens):
+            return result("block_hard", "credentials.expose", "Command embeds a credential-like value.")
+        if re.search(r"\bcurl\b[^|]*(?:\||\|&)\s*(?:bash|sh|zsh|fish|python|python3|node|bun)\b", command):
+            return result("block_hard", "network.remote_execution", "Remote content cannot be piped into an interpreter.")
 
         for segment in self._segments(tokens):
             inspected = self._inspect_segment(segment, context)
             if inspected["decision"] != "allow":
                 return inspected
         return result("allow", "shell.ordinary", "No restricted consequence detected.")
+
+    @staticmethod
+    def _token_embeds_secret(token: str) -> bool:
+        return any(
+            SafeYoloEngine._component_embeds_secret(component)
+            for component in token.split("/")
+        )
+
+    @staticmethod
+    def _component_embeds_secret(component: str) -> bool:
+        if component in BENIGN_CREDENTIAL_LIKE_PATH_COMPONENTS:
+            return False
+        prefix, separator, value = component.rpartition("=")
+        if separator and value in BENIGN_CREDENTIAL_LIKE_PATH_COMPONENTS:
+            return SECRET_RE.search(prefix) is not None
+        return SECRET_RE.search(component) is not None
 
     def inspect_path_write(self, raw_path: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
         context = context or {}

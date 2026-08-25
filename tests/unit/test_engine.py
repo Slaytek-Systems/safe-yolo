@@ -46,6 +46,43 @@ class CanonicalEngineTests(unittest.TestCase):
         self.assertEqual("require_capability", decision["decision"])
         self.assertEqual("harness.modify", decision["policy_id"])
 
+    def test_secret_detection_exempts_only_known_benign_path(self):
+        synthetic_credential = "sk" + "-" + ("A" * 20)
+        blocked_commands = (
+            f"printf {synthetic_credential}",
+            f"printf '{synthetic_credential}'",
+            f"printf 'key={synthetic_credential}'",
+            f"printf './{synthetic_credential}'",
+            f"printf '({synthetic_credential})'",
+            f"true && printf '{synthetic_credential}'",
+            f"printf 'x{synthetic_credential}'",
+            f"printf 'task{synthetic_credential}'",
+            f"git add docs/architecture/codex-task-session-operating-model.md {synthetic_credential}",
+            f"printf 'codex-task-session-operating-model.md{synthetic_credential}'",
+            f"git add /tmp/{synthetic_credential}/codex-task-session-operating-model.md",
+            f"git add /tmp/x{synthetic_credential}/codex-task-session-operating-model.md",
+            f"printf 'FILE=/tmp/{synthetic_credential}/codex-task-session-operating-model.md'",
+            f"git add docs/codex-task-session-operating-model.md/{synthetic_credential}",
+            f"printf '{synthetic_credential}=codex-task-session-operating-model.md'",
+        )
+        for command in blocked_commands:
+            with self.subTest(command=command):
+                blocked = self.engine.inspect_command(command)
+                self.assertEqual("block_hard", blocked["decision"])
+                self.assertEqual("credentials.expose", blocked["policy_id"])
+
+        ordinary_path = "git add docs/architecture/codex-task-session-operating-model.md"
+        allowed = self.engine.inspect_command(ordinary_path)
+        self.assertEqual("allow", allowed["decision"])
+
+        absolute_path = "git add /tmp/docs/codex-task-session-operating-model.md"
+        allowed = self.engine.inspect_command(absolute_path)
+        self.assertEqual("allow", allowed["decision"])
+
+        assignment = "FILE=codex-task-session-operating-model.md env"
+        allowed = self.engine.inspect_command(assignment)
+        self.assertEqual("allow", allowed["decision"])
+
 
 if __name__ == "__main__":
     unittest.main()
