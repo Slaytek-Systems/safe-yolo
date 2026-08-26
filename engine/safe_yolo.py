@@ -300,10 +300,13 @@ class SafeYoloEngine:
     def _has_direct_remote_execution(tokens: list[str]) -> bool:
         downloaded_paths: set[str] = set()
         remote_pipeline = False
+        process_substitution_executor = False
         for raw_segment, terminator in SafeYoloEngine._command_segments(tokens):
             segment = SafeYoloEngine._effective_segment(raw_segment)
             executable = Path(segment[0]).name if segment else ""
 
+            if process_substitution_executor and executable in {"curl", "wget"}:
+                return True
             if remote_pipeline and executable in REMOTE_CONTENT_EXECUTORS:
                 return True
             if SafeYoloEngine._executes_downloaded_path(segment, downloaded_paths):
@@ -316,6 +319,10 @@ class SafeYoloEngine:
                 remote_pipeline = remote_pipeline or executable in {"curl", "wget"}
             else:
                 remote_pipeline = False
+            if terminator == "<(":
+                process_substitution_executor = executable in REMOTE_CONTENT_EXECUTORS
+            elif terminator == ")":
+                process_substitution_executor = False
         return False
 
     @staticmethod
@@ -360,6 +367,35 @@ class SafeYoloEngine:
             normalized = SafeYoloEngine._normalized_command_path(candidate)
             if normalized is not None:
                 paths.add(normalized)
+        remote_name = executable == "curl" and any(
+            argument in {"--remote-name", "--remote-name-all"}
+            or (argument.startswith("-") and not argument.startswith("--") and "O" in argument[1:])
+            for argument in args
+        )
+        wget_stdout = executable == "wget" and any(
+            argument == "--output-document=-"
+            or (argument.startswith("-") and not argument.startswith("--") and argument.endswith("O-"))
+            or (argument in {"-O", "--output-document"} and index + 1 < len(args) and args[index + 1] == "-")
+            for index, argument in enumerate(args)
+        )
+        wget_no_file = executable == "wget" and any(
+            argument in {"--delete-after", "--spider"}
+            for argument in args
+        )
+        if remote_name or (executable == "wget" and not paths and not wget_stdout and not wget_no_file):
+            paths.update(SafeYoloEngine._remote_url_paths(args))
+        return paths
+
+    @staticmethod
+    def _remote_url_paths(args: list[str]) -> set[str]:
+        paths: set[str] = set()
+        for argument in args:
+            parsed = urlparse(argument)
+            if parsed.scheme not in {"http", "https"}:
+                continue
+            filename = Path(parsed.path).name
+            if filename:
+                paths.add(str(Path(filename)))
         return paths
 
     @staticmethod
