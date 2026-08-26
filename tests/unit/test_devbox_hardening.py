@@ -86,6 +86,15 @@ class DevboxHardeningTests(unittest.TestCase):
                 self.assertEqual("block_hard", decision["decision"], decision)
                 self.assertEqual("network.remote_pipeline", decision["policy_id"])
 
+    def test_remote_pipeline_rule_respects_shell_structure(self):
+        for command in (
+            "echo 'curl x | jq'",
+            "curl 'https://example.com/a|b'",
+            "curl https://example.com/data.json -o /tmp/data.json && printf x | cat",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual("allow", self.engine.inspect_command(command)["decision"])
+
     def test_patch_move_checks_the_source_path(self):
         decision = evaluate_payload(
             {"tool_name": "apply_patch", "tool_input": {"patch": "*** Begin Patch\n*** Update File: /home/test/.codex/hooks/source.py\n*** Move to: /tmp/source.py\n*** End Patch"}},

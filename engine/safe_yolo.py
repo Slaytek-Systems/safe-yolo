@@ -270,7 +270,7 @@ class SafeYoloEngine:
 
         if any(self._token_embeds_secret(token) for token in tokens):
             return result("block_hard", "credentials.expose", "Command embeds a credential-like value.")
-        if re.search(r"\b(?:curl|wget)\b[^|]*(?:\||\|&)", command):
+        if self._has_remote_response_pipeline(tokens):
             return result(
                 "block_hard",
                 "network.remote_pipeline",
@@ -282,6 +282,23 @@ class SafeYoloEngine:
             if inspected["decision"] != "allow":
                 return inspected
         return result("allow", "shell.ordinary", "No restricted consequence detected.")
+
+    @staticmethod
+    def _has_remote_response_pipeline(tokens: list[str]) -> bool:
+        current: list[str] = []
+        for token in tokens:
+            if token in {"|", "|&"}:
+                segment = SafeYoloEngine._strip_env(current)
+                while segment and Path(segment[0]).name in {"command", "builtin", "exec"}:
+                    segment = SafeYoloEngine._strip_env(segment[1:])
+                if segment and Path(segment[0]).name in {"curl", "wget"}:
+                    return True
+                current = []
+            elif token in {"||", "&&", ";", "(", ")"}:
+                current = []
+            else:
+                current.append(token)
+        return False
 
     @staticmethod
     def _token_embeds_secret(token: str) -> bool:
