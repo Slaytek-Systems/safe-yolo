@@ -22,6 +22,19 @@ DECISIONS = {
 }
 
 SHELLS = {"bash", "sh", "zsh", "fish"}
+REMOTE_CONTENT_EXECUTORS = {
+    *SHELLS,
+    "dash",
+    "bun",
+    "node",
+    "perl",
+    "php",
+    "python",
+    "python2",
+    "python3",
+    "ruby",
+}
+SHELL_SEPARATORS = {"|", "||", "|&", "&&", ";", "(", ")", "<(", ">("}
 DESTRUCTIVE_GIT = {"reset", "rebase", "restore", "clean"}
 FORCE_FLAGS = {"--force", "--force-with-lease", "-f"}
 PROTECTED_BRANCHES = {"main", "master", "production", "prod"}
@@ -270,11 +283,11 @@ class SafeYoloEngine:
 
         if any(self._token_embeds_secret(token) for token in tokens):
             return result("block_hard", "credentials.expose", "Command embeds a credential-like value.")
-        if self._has_remote_response_pipeline(tokens):
+        if self._has_direct_remote_execution(tokens):
             return result(
                 "block_hard",
-                "network.remote_pipeline",
-                "Fetch remote content to a file and inspect it before passing it to another command.",
+                "network.remote_execution",
+                "Download remote content for inspection; do not execute it in the same command.",
             )
 
         for segment in self._segments(tokens):
@@ -284,21 +297,106 @@ class SafeYoloEngine:
         return result("allow", "shell.ordinary", "No restricted consequence detected.")
 
     @staticmethod
-    def _has_remote_response_pipeline(tokens: list[str]) -> bool:
+    def _has_direct_remote_execution(tokens: list[str]) -> bool:
+        downloaded_paths: set[str] = set()
+        remote_pipeline = False
+        for raw_segment, terminator in SafeYoloEngine._command_segments(tokens):
+            segment = SafeYoloEngine._effective_segment(raw_segment)
+            executable = Path(segment[0]).name if segment else ""
+
+            if remote_pipeline and executable in REMOTE_CONTENT_EXECUTORS:
+                return True
+            if SafeYoloEngine._executes_downloaded_path(segment, downloaded_paths):
+                return True
+
+            if executable in {"curl", "wget"}:
+                downloaded_paths.update(SafeYoloEngine._remote_output_paths(executable, segment[1:]))
+
+            if terminator in {"|", "|&"}:
+                remote_pipeline = remote_pipeline or executable in {"curl", "wget"}
+            else:
+                remote_pipeline = False
+        return False
+
+    @staticmethod
+    def _effective_segment(tokens: list[str]) -> list[str]:
+        segment = SafeYoloEngine._strip_env(tokens)
+        while segment and Path(segment[0]).name in {"command", "builtin", "exec", "time"}:
+            segment = SafeYoloEngine._strip_env(segment[1:])
+        return segment
+
+    @staticmethod
+    def _remote_output_paths(executable: str, args: list[str]) -> set[str]:
+        paths: set[str] = set()
+        option_names = {"-o", "--output"} if executable == "curl" else {"-O", "--output-document"}
+        for index, argument in enumerate(args):
+            candidate = ""
+            if argument in option_names and index + 1 < len(args):
+                candidate = args[index + 1]
+            elif executable == "curl" and argument.startswith("--output="):
+                candidate = argument.split("=", 1)[1]
+            elif executable == "curl" and argument.startswith("-o") and len(argument) > 2:
+                candidate = argument[2:]
+            elif (
+                executable == "curl"
+                and argument.startswith("-")
+                and argument.endswith("o")
+                and index + 1 < len(args)
+            ):
+                candidate = args[index + 1]
+            elif executable == "wget" and argument.startswith("--output-document="):
+                candidate = argument.split("=", 1)[1]
+            elif executable == "wget" and argument.startswith("-O") and len(argument) > 2:
+                candidate = argument[2:]
+            elif (
+                executable == "wget"
+                and argument.startswith("-")
+                and argument.endswith("O")
+                and index + 1 < len(args)
+            ):
+                candidate = args[index + 1]
+            elif argument in {">", ">>"} and index + 1 < len(args):
+                candidate = args[index + 1]
+            normalized = SafeYoloEngine._normalized_command_path(candidate)
+            if normalized is not None:
+                paths.add(normalized)
+        return paths
+
+    @staticmethod
+    def _executes_downloaded_path(segment: list[str], downloaded_paths: set[str]) -> bool:
+        if not segment or not downloaded_paths:
+            return False
+        executable_path = SafeYoloEngine._normalized_command_path(segment[0])
+        if executable_path in downloaded_paths:
+            return True
+        if Path(segment[0]).name not in REMOTE_CONTENT_EXECUTORS:
+            return False
+        return any(
+            SafeYoloEngine._normalized_command_path(argument) in downloaded_paths
+            for argument in segment[1:]
+            if not argument.startswith("-")
+        )
+
+    @staticmethod
+    def _normalized_command_path(raw_path: str) -> str | None:
+        if not raw_path or raw_path == "-" or "://" in raw_path:
+            return None
+        return str(Path(raw_path))
+
+    @staticmethod
+    def _command_segments(tokens: list[str]) -> list[tuple[list[str], str | None]]:
+        segments: list[tuple[list[str], str | None]] = []
         current: list[str] = []
         for token in tokens:
-            if token in {"|", "|&"}:
-                segment = SafeYoloEngine._strip_env(current)
-                while segment and Path(segment[0]).name in {"command", "builtin", "exec", "time"}:
-                    segment = SafeYoloEngine._strip_env(segment[1:])
-                if segment and Path(segment[0]).name in {"curl", "wget"}:
-                    return True
-                current = []
-            elif token in {"||", "&&", ";", "(", ")", "<(", ">("}:
-                current = []
-            else:
-                current.append(token)
-        return False
+            if token in SHELL_SEPARATORS:
+                if current:
+                    segments.append((current, token))
+                    current = []
+                continue
+            current.append(token)
+        if current:
+            segments.append((current, None))
+        return segments
 
     @staticmethod
     def _token_embeds_secret(token: str) -> bool:
@@ -371,19 +469,7 @@ class SafeYoloEngine:
 
     @staticmethod
     def _segments(tokens: list[str]) -> list[list[str]]:
-        separators = {"|", "||", "|&", "&&", ";", "(", ")", "<(", ">("}
-        segments: list[list[str]] = []
-        current: list[str] = []
-        for token in tokens:
-            if token in separators:
-                if current:
-                    segments.append(current)
-                    current = []
-                continue
-            current.append(token)
-        if current:
-            segments.append(current)
-        return segments
+        return [segment for segment, _ in SafeYoloEngine._command_segments(tokens)]
 
     def _inspect_segment(self, tokens: list[str], context: dict[str, Any]) -> dict[str, Any]:
         if not tokens:
