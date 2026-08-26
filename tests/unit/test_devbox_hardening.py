@@ -30,19 +30,39 @@ class DevboxHardeningTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual("require_capability", self.engine.inspect_command(command)["decision"])
 
-    def test_opaque_interpreters_and_untrusted_scripts_fail_closed(self):
+    def test_repository_scripts_and_interpreters_are_ordinary_execution(self):
         for command in (
             "python3 -c 'print(1)'",
             "node -e 'console.log(1)'",
+            "bun -e 'console.log(1)'",
             "python3 scripts/task.py",
             "node scripts/task.js",
+            "bun scripts/task.ts",
             "bash scripts/task.sh",
+            "./scripts/task.sh",
         ):
             with self.subTest(command=command):
-                self.assertEqual("block_hard", self.engine.inspect_command(command)["decision"])
-        for command in ("python3 --version", "python3 -m unittest tests.test_policy", "node --check app.js", "bash -n check.sh"):
-            with self.subTest(command=command):
                 self.assertEqual("allow", self.engine.inspect_command(command)["decision"])
+
+    def test_direct_irreversible_consequences_still_receive_backpressure(self):
+        for command in (
+            "rm -rf build",
+            "git push --force-with-lease origin feature/x",
+            "railway up",
+            "printenv",
+            "ssh production.example.com",
+        ):
+            with self.subTest(command=command):
+                self.assertIn(
+                    self.engine.inspect_command(command)["decision"],
+                    {"block_hard", "require_capability"},
+                )
+
+    def test_nested_program_effects_are_not_claimed_as_contained(self):
+        nested = "python3 -c \"open('/home/test/.codex/hooks/probe.py','w').write('x')\""
+        direct = "cp /tmp/probe.py /home/test/.codex/hooks/probe.py"
+        self.assertEqual("allow", self.engine.inspect_command(nested)["decision"])
+        self.assertEqual("require_capability", self.engine.inspect_command(direct)["decision"])
 
     def test_file_backed_network_uploads_are_red(self):
         for command in (

@@ -9,14 +9,14 @@ The baseline is live on both hosts. Do not infer activation from source changes 
 | macOS (`/Users/slayga`) | `1.0.10` | Manifest `b06de186e90987978cd77622ba54b043f534e1718d80da0938d616bdee544d6a`; canonical hook pin and live `pwd` smoke audited. |
 | devbox (`/home/dev`) | `1.0.11` | Manifest `c6463a59644cb33a0c833d93001b04e7c4b383041e26e9360a49fe1878c9df7a`; remote installer and doctor passed; Navigator verified the repaired live agent path. |
 
-Both hosts use `approval_policy = "never"` and `sandbox_mode = "danger-full-access"`. Deterministic policy enforcement remains the safety boundary.
+Both hosts use `approval_policy = "never"` and `sandbox_mode = "danger-full-access"`. The active policy provides deterministic backpressure for direct tool calls. It is not containment for scripts or interpreters running as the same operating-system identity; durable safety depends on scoped authority and recoverability below the hook.
 
 ## Baseline capabilities
 
 - Normal code, tests, commits, and clean feature-branch pushes proceed without approval prompts.
 - Codex task/thread read, create, archive, message, and collaboration tools are classified rather than fail-closed as unknown.
 - macOS protects credential/system surfaces (`~/.ssh`, shell profiles, LaunchAgents, Keychain access).
-- Destructive filesystem actions, force pushes, secret exposure, control-plane mutation, and unproven production deploys remain hard-blocked.
+- Direct destructive filesystem actions, force pushes, secret exposure, control-plane mutation, and unproven production deploys receive deterministic backpressure.
 - macOS permits only two exact remote Safe YOLO maintenance actions for `devbox`: canonical-source fast-forward pull and the fixed remote updater. Arbitrary SSH remains blocked.
 
 ## Reopen protocol

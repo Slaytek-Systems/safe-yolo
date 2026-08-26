@@ -2,15 +2,5 @@
   "$schema": "../../contracts/host-contract.schema.json",
   "version": "1",
   "operations_root": "/home/dev/devbox-ops",
-  "workspaces_root": "/home/dev/workspaces",
-  "workspace_lifecycle": ["identity", "start", "status", "doctor", "stop", "attach", "explain", "check", "reconcile", "restart", "logs", "infra", "up", "down", "preview"],
-  "workspace_loopback_ports": [3000, 3030, 3210, 3211, 3220, 5173, 5174, 5177, 5188, 55322, 6791, 7071],
-  "workspace_commands": [
-    {"workspace": "infotech/repos/infotech-dashboard", "command": ["functions", "push"], "policy_id": "workspace.local_functions_push", "reason": "Reviewed Infotech function push targets only the declared local self-hosted backend."},
-    {"workspace": "infotech/repos/infotech-dashboard", "command": ["fixtures", "public-live", "seed"], "policy_id": "workspace.local_public_live_fixtures_seed", "reason": "Reviewed fixture seed creates only the fixed sanitized local public-live dataset."},
-    {"workspace": "infotech/repos/infotech-dashboard", "command": ["fixtures", "public-live", "clean"], "policy_id": "workspace.local_public_live_fixtures_clean", "reason": "Reviewed fixture cleanup removes only the fixed owned local public-live dataset."},
-    {"workspace": "infotech/repos/infotech-dashboard", "command": ["fixtures", "report-device-inventory", "seed"], "policy_id": "workspace.local_report_device_inventory_fixtures_seed", "reason": "Reviewed fixture seed creates only the fixed sanitized local report device-inventory dataset."},
-    {"workspace": "infotech/repos/infotech-dashboard", "command": ["fixtures", "report-device-inventory", "clean"], "policy_id": "workspace.local_report_device_inventory_fixtures_clean", "reason": "Reviewed fixture cleanup removes only the fixed owned local report device-inventory dataset."},
-    {"workspace": "infotech/repos/infotech-dashboard", "command": ["proof", "public-live-efficiency"], "policy_id": "workspace.local_public_live_efficiency_proof", "reason": "Reviewed proof runs the fixed bounded workload against only the local backend."}
-  ]
+  "workspace_loopback_ports": [3000, 3030, 3210, 3211, 3220, 5173, 5174, 5177, 5188, 55322, 6791, 7071]
 }
