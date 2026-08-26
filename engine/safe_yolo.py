@@ -288,10 +288,10 @@ class SafeYoloEngine:
         current: list[str] = []
         for token in tokens:
             if token in {"|", "|&"}:
-                segment = SafeYoloEngine._strip_env(current)
-                while segment and Path(segment[0]).name in {"command", "builtin", "exec"}:
-                    segment = SafeYoloEngine._strip_env(segment[1:])
-                if segment and Path(segment[0]).name in {"curl", "wget"}:
+                if any(
+                    re.search(r"(?:^|[\s/])(?:curl|wget)(?:$|\s)", part)
+                    for part in current
+                ):
                     return True
                 current = []
             elif token in {"||", "&&", ";", "(", ")"}:
