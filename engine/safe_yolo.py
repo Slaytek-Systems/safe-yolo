@@ -270,8 +270,12 @@ class SafeYoloEngine:
 
         if any(self._token_embeds_secret(token) for token in tokens):
             return result("block_hard", "credentials.expose", "Command embeds a credential-like value.")
-        if re.search(r"\bcurl\b[^|]*(?:\||\|&)\s*(?:bash|sh|zsh|fish|python|python3|node|bun)\b", command):
-            return result("block_hard", "network.remote_execution", "Remote content cannot be piped into an interpreter.")
+        if re.search(r"\b(?:curl|wget)\b[^|]*(?:\||\|&)", command):
+            return result(
+                "block_hard",
+                "network.remote_pipeline",
+                "Fetch remote content to a file and inspect it before passing it to another command.",
+            )
 
         for segment in self._segments(tokens):
             inspected = self._inspect_segment(segment, context)
