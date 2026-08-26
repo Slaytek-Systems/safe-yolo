@@ -6,6 +6,8 @@ Safe YOLO pairs full local autonomy with deterministic backpressure on visibly d
 
 Safe YOLO is not a containment boundary for code running as the same operating-system identity. A script can perform operations that are not visible in its top-level invocation. Irreversible protection must therefore live below the command hook: scoped credentials and provider permissions, recoverable local state, protected production systems, and explicit operator-owned activation. The hook remains useful for preventing obvious accidental commands, but it must never be presented as proof that arbitrary same-user code is safe.
 
+That boundary is deliberate: Safe YOLO does not perform shell data-flow or code-provenance analysis. Repository scripts, inline interpreters, and shell-composed program execution are the same class of ordinary same-user execution. A host must satisfy the authority and recovery prerequisites before this policy is activated.
+
 ## Status
 
 Bootstrap repository. No host is installed or modified from this repository yet.

@@ -34,5 +34,6 @@ Safe YOLO is deterministic consequence backpressure for direct tool calls. It is
 
 - No security guarantee against a malicious local account outside Codex’s controlled tool path.
 - No security guarantee against repository code, interpreters, shell functions, or wrappers running inside the same account.
+- No shell data-flow or code-provenance classification for fetched, generated, piped, or sourced program content.
 - No automatic harness update from an agent session.
 - No generic escape hatches, slash-command overrides, or arbitrary command allowlists for Red actions.
