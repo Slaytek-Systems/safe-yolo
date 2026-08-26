@@ -270,9 +270,6 @@ class SafeYoloEngine:
 
         if any(self._token_embeds_secret(token) for token in tokens):
             return result("block_hard", "credentials.expose", "Command embeds a credential-like value.")
-        if re.search(r"\bcurl\b[^|]*(?:\||\|&)\s*(?:bash|sh|zsh|fish|python|python3|node|bun)\b", command):
-            return result("block_hard", "network.remote_execution", "Remote content cannot be piped into an interpreter.")
-
         for segment in self._segments(tokens):
             inspected = self._inspect_segment(segment, context)
             if inspected["decision"] != "allow":
@@ -350,7 +347,7 @@ class SafeYoloEngine:
 
     @staticmethod
     def _segments(tokens: list[str]) -> list[list[str]]:
-        separators = {"|", "||", "|&", "&&", ";", "(", ")"}
+        separators = {"|", "||", "|&", "&&", ";", "(", ")", "<(", ">("}
         segments: list[list[str]] = []
         current: list[str] = []
         for token in tokens:
@@ -386,8 +383,6 @@ class SafeYoloEngine:
             wrapped = self._wrapped_command(args)
             if wrapped is not None:
                 return self.inspect_command(wrapped, context)
-            if args and not (args[0] in {"-n", "--version", "--help", "-h"}):
-                return result("block_hard", "shell.unclassified", "Untrusted shell script execution is not permitted.")
 
         if executable in {"command", "builtin", "exec"} and args:
             return self._inspect_segment(args, context)
@@ -426,27 +421,8 @@ class SafeYoloEngine:
                 if path_result["decision"] != "allow":
                     return path_result
 
-        if executable in {"python", "python3", "node"}:
-            read_only = (
-                args[:1] in (["--version"], ["--help"], ["-h"])
-                or args[:2] == ["-m", "unittest"]
-                or executable == "node" and args[:1] == ["--check"]
-            )
-            if not read_only:
-                return result("block_hard", "shell.unclassified_interpreter", "Inline or script-backed interpreter execution is not permitted.")
-        if executable == "bun":
-            inline = self._inline_program(executable, args)
-            if inline is not None and self._looks_mutating(inline):
-                if self._mentions_protected_path(inline):
-                    return result("block_method", "filesystem.opaque_protected_write", "Inline programs cannot mutate protected paths, even in Maintenance Mode.")
-                return result("block_method", "filesystem.opaque_write", "Use a structured, reviewable editing method instead of inline mutation.")
-
         if executable in {"docker", "docker-compose"}:
             return self._inspect_docker(context)
-        if self._is_workspace_launcher(tokens, args, context):
-            return self._inspect_workspace_launcher(tokens[0], args, context)
-        if tokens[0].startswith("./"):
-            return result("block_method", "workspace.lifecycle", "Project launchers require a tracked repository contract.")
         if executable == "git":
             return self._inspect_git(args, context)
         if executable == "gh":
@@ -472,32 +448,6 @@ class SafeYoloEngine:
                 return result("block_method", "package.remote_execution", f"Package binary is not installed locally: {package}")
 
         return result("allow", "shell.segment", "Segment is permitted.")
-
-    @staticmethod
-    def _inline_program(executable: str, args: list[str]) -> str | None:
-        flags = {"-c"} if executable in {"python", "python3"} else {"-e", "--eval"}
-        for index, arg in enumerate(args[:-1]):
-            if arg in flags:
-                return args[index + 1]
-        return None
-
-    @staticmethod
-    def _looks_mutating(program: str) -> bool:
-        patterns = (
-            r"\bopen\s*\(",
-            r"write_text\s*\(",
-            r"write_bytes\s*\(",
-            r"writeFile(?:Sync)?\s*\(",
-            r"unlink(?:Sync)?\s*\(",
-            r"rmtree\s*\(",
-            r"remove\s*\(",
-        )
-        return any(re.search(pattern, program) for pattern in patterns)
-
-    def _mentions_protected_path(self, program: str) -> bool:
-        expanded = str(Path.home())
-        normalized = program.replace("~", expanded)
-        return any(str(item["resolved"]) in normalized for item in self.protected_paths)
 
     @staticmethod
     def _strip_env(tokens: list[str]) -> list[str]:
@@ -554,124 +504,6 @@ class SafeYoloEngine:
         if working != operations and operations not in working.parents:
             return result("block_method", "docker.workspace_contract", "Raw Docker is reserved for the approved operations workspace.")
         return result("allow", "docker.operations_workspace", "Docker operation is within the approved operations workspace.")
-
-    @staticmethod
-    def _workspace_command_args(args: list[str]) -> tuple[str | None, list[str]]:
-        repo = None
-        remaining: list[str] = []
-        index = 0
-        while index < len(args):
-            arg = args[index]
-            if arg == "--repo" and index + 1 < len(args):
-                repo = args[index + 1]
-                index += 2
-                continue
-            if arg.startswith("--repo="):
-                repo = arg.split("=", 1)[1]
-                index += 1
-                continue
-            remaining.append(arg)
-            index += 1
-        return repo, remaining
-
-    def _workspace_root(self) -> Path | None:
-        workspaces_root = self.host_contract.get("workspaces_root")
-        if not workspaces_root:
-            return None
-        try:
-            return Path(str(workspaces_root)).expanduser().resolve(strict=False)
-        except OSError:
-            return None
-
-    def _resolve_workspace_checkout(self, raw: str | None, cwd: str | None) -> Path | None:
-        if not isinstance(raw, str) or not raw:
-            return None
-        try:
-            candidate = Path(raw).expanduser()
-            if not candidate.is_absolute():
-                base = Path(cwd).expanduser() if isinstance(cwd, str) and cwd else Path.cwd()
-                candidate = base / candidate
-            return candidate.resolve(strict=False)
-        except OSError:
-            return None
-
-    def _workspace_relative(self, checkout: Path) -> str | None:
-        root = self._workspace_root()
-        if root is None:
-            return None
-        try:
-            return str(checkout.relative_to(root))
-        except ValueError:
-            return None
-
-    def _is_workspace_launcher(self, tokens: list[str], args: list[str], context: dict[str, Any]) -> bool:
-        if tokens[0] == "./workspace":
-            return True
-        if Path(tokens[0]).name != "workspace":
-            return False
-        repo_flag, command_args = self._workspace_command_args(args)
-        checkout = self._resolve_workspace_checkout(repo_flag, context.get("cwd") if isinstance(context.get("cwd"), str) else None)
-        if checkout is None:
-            checkout = self._resolve_workspace_checkout(context.get("cwd") if isinstance(context.get("cwd"), str) else None, None)
-        if checkout is None or self._workspace_relative(checkout) is None:
-            return False
-        return True
-
-    def _inspect_workspace_launcher(self, executable: str, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
-        if self._workspace_root() is None:
-            return result("block_method", "workspace.lifecycle", "Workspace launcher requires an approved host contract.")
-        repo_flag, command_args = self._workspace_command_args(args)
-        cwd_value = context.get("cwd") if isinstance(context.get("cwd"), str) else None
-        cwd_checkout = self._resolve_workspace_checkout(cwd_value, None)
-        repo_checkout = self._resolve_workspace_checkout(repo_flag, cwd_value)
-        if executable.startswith("./"):
-            if cwd_checkout is None or (repo_checkout is not None and repo_checkout != cwd_checkout):
-                return result(
-                    "block_method",
-                    "workspace.untrusted_launcher",
-                    "Relative workspace launcher must be verified in its actual working directory.",
-                )
-            checkout = cwd_checkout
-        else:
-            checkout = repo_checkout or cwd_checkout
-        if checkout is None:
-            return result(
-                "block_method",
-                "workspace.lifecycle",
-                "Workspace launcher requires cwd or --repo under the approved workspace root.",
-            )
-        relative = self._workspace_relative(checkout)
-        if relative is None:
-            return result("block_method", "workspace.lifecycle", "Workspace launcher is outside the approved workspace root.")
-        launcher = checkout / "workspace"
-        if not launcher.is_file() or launcher.is_symlink():
-            return result("block_method", "workspace.untrusted_launcher", "Workspace launcher must be a real tracked file.")
-        lifecycle = command_args[0] if command_args else ""
-        allowed_lifecycle = set(self.host_contract.get("workspace_lifecycle") or [])
-        command_contracts = self.host_contract.get("workspace_commands") or []
-        contract = next(
-            (
-                item
-                for item in command_contracts
-                if item.get("workspace") == relative and item.get("command") == command_args
-            ),
-            None,
-        )
-        if lifecycle not in allowed_lifecycle and contract is None:
-            return result("block_method", "workspace.lifecycle", "Unknown workspace lifecycle command requires direct review.")
-        checks = (
-            ["git", "-C", str(checkout), "ls-files", "--error-unmatch", "workspace"],
-            ["git", "-C", str(checkout), "diff", "--quiet", "--", "workspace"],
-            ["git", "-C", str(checkout), "diff", "--cached", "--quiet", "--", "workspace"],
-        )
-        try:
-            if any(subprocess.run(check, capture_output=True, check=False, timeout=2).returncode != 0 for check in checks):
-                return result("block_method", "workspace.untrusted_launcher", "Workspace launcher must be tracked and unmodified.")
-        except (OSError, subprocess.TimeoutExpired):
-            return result("block_method", "workspace.unproven_launcher", "Workspace launcher could not be verified.")
-        if contract is not None:
-            return result("allow_report", str(contract["policy_id"]), str(contract["reason"]))
-        return result("allow", "workspace.lifecycle", "Tracked workspace lifecycle command is permitted.")
 
     def _inspect_railway(self, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
         flags_with_values = {"--project", "-p", "--environment", "-e", "--service", "-s", "--team", "--workspace"}

@@ -9,4 +9,6 @@
 7. Upgrade devbox to the same released package and retain its current implementation as the immediate rollback target.
 8. Enable contract-based production release only after independent evidence and adversarial tests exist.
 
+Before activating a release that permits ordinary repository code, audit the host identity below the hook. Activation is blocked while that identity can reach unscoped production/provider authority, unrecoverable local state, or persistent data without a proved restore path. Fix those capabilities at their owning OS/provider/recovery layer; do not add script allowlists, content scanners, or another command broker to compensate.
+
 All installer actions are explicit operator-maintenance actions. Codex sessions may inspect health, but cannot update their own policy/hook release.

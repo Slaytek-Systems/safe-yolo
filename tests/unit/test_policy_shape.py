@@ -5,6 +5,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 POLICY_PATH = ROOT / "policy" / "policy.json"
 CORPUS_PATH = ROOT / "tests" / "corpus" / "commands.jsonl"
+HOST_CONTRACT_SCHEMA_PATH = ROOT / "contracts" / "host-contract.schema.json"
 
 
 class CanonicalPolicyTests(unittest.TestCase):
@@ -30,6 +31,13 @@ class CanonicalPolicyTests(unittest.TestCase):
         self.assertEqual(len(cases), len({case["id"] for case in cases}))
         for case in cases:
             self.assertIn(case["expected"], {"allow", "allow_report", "require_capability", "block_method", "block_hard"})
+
+    def test_host_contract_has_no_script_or_launcher_registry(self):
+        schema = json.loads(HOST_CONTRACT_SCHEMA_PATH.read_text())
+        properties = schema["properties"]
+        self.assertNotIn("workspaces_root", properties)
+        self.assertNotIn("workspace_lifecycle", properties)
+        self.assertNotIn("workspace_commands", properties)
 
 
 if __name__ == "__main__":
