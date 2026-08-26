@@ -294,7 +294,7 @@ class SafeYoloEngine:
                 if segment and Path(segment[0]).name in {"curl", "wget"}:
                     return True
                 current = []
-            elif token in {"||", "&&", ";", "(", ")"}:
+            elif token in {"||", "&&", ";", "(", ")", "<(", ">("}:
                 current = []
             else:
                 current.append(token)
@@ -371,7 +371,7 @@ class SafeYoloEngine:
 
     @staticmethod
     def _segments(tokens: list[str]) -> list[list[str]]:
-        separators = {"|", "||", "|&", "&&", ";", "(", ")"}
+        separators = {"|", "||", "|&", "&&", ";", "(", ")", "<(", ">("}
         segments: list[list[str]] = []
         current: list[str] = []
         for token in tokens:
