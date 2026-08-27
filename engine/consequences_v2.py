@@ -43,7 +43,13 @@ class ConsequenceKernel:
         if tool_name in {"bash", "shell", "exec_command"} and isinstance(tool_input, dict):
             command = tool_input.get("command") or tool_input.get("cmd")
             if isinstance(command, str):
-                return self._shell(command, cwd)
+                workdir = tool_input.get("workdir")
+                effective_cwd = (
+                    self._resolve_from(workdir, cwd)
+                    if isinstance(workdir, str) and workdir
+                    else cwd
+                )
+                return self._shell(command, effective_cwd)
         paths = self._structured_paths(tool_input, cwd)
         if any(self._inside(path, self.credential_paths) for path in paths):
             return Decision(
@@ -107,7 +113,12 @@ class ConsequenceKernel:
                 elif str(key).lower() in {"patch", "command"} and isinstance(value, str):
                     for line in value.splitlines():
                         stripped = line.strip()
-                        for prefix in ("*** Add File: ", "*** Update File: ", "*** Delete File: "):
+                        for prefix in (
+                            "*** Add File: ",
+                            "*** Update File: ",
+                            "*** Delete File: ",
+                            "*** Move to: ",
+                        ):
                             if stripped.startswith(prefix):
                                 found.append(cls._resolve_from(stripped.removeprefix(prefix), cwd))
                 elif isinstance(value, (dict, list)):

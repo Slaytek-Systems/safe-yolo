@@ -63,6 +63,50 @@ class V2ConsequenceKernelTests(unittest.TestCase):
                 self.assertEqual("filesystem.delete", decision.consequence)
                 self.assertIn("obsolete.py", decision.display)
 
+    def test_apply_patch_move_destination_honors_operator_only_roots(self):
+        cases = (
+            ("/home/test/.codex/hooks.json", "enforcement.modify"),
+            ("/home/test/.codex/auth.json", "credentials.access"),
+        )
+        for destination, consequence in cases:
+            with self.subTest(destination=destination):
+                decision = self.kernel.evaluate(
+                    {
+                        "tool_name": "apply_patch",
+                        "tool_input": {
+                            "patch": (
+                                "*** Begin Patch\n"
+                                "*** Update File: /workspace/source.txt\n"
+                                f"*** Move to: {destination}\n"
+                                "@@\n"
+                                "-before\n"
+                                "+after\n"
+                                "*** End Patch"
+                            )
+                        },
+                    }
+                )
+                self.assertEqual("operator_only", decision.outcome)
+                self.assertEqual(consequence, decision.consequence)
+
+    def test_shell_workdir_resolves_relative_operator_only_paths(self):
+        cases = (
+            ("cat auth.json", "/home/test/.codex", "credentials.access"),
+            ("tee hooks.json", "/home/test/.codex", "enforcement.modify"),
+            ("cat id_ed25519", "/home/test/.ssh", "credentials.access"),
+        )
+        for command, workdir, consequence in cases:
+            with self.subTest(command=command, workdir=workdir):
+                decision = self.kernel.evaluate(
+                    {
+                        "tool_name": "exec_command",
+                        "cwd": "/workspace",
+                        "tool_input": {"cmd": command, "workdir": workdir},
+                    }
+                )
+                self.assertEqual("operator_only", decision.outcome)
+                self.assertEqual(consequence, decision.consequence)
+
     def test_approval_summaries_name_the_direct_target(self):
         force_push = self._shell("git push --force-with-lease origin feature/x")
         production = self._shell("railway up")
