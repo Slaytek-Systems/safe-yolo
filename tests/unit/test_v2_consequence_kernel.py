@@ -24,6 +24,8 @@ class V2ConsequenceKernelTests(unittest.TestCase):
             "bunx unknown-package --help",
             "docker ps",
             "git status && rm obsolete.txt",
+            "git clean --dry-run",
+            "git clean -n",
         )
         for command in commands:
             with self.subTest(command=command):
@@ -38,14 +40,20 @@ class V2ConsequenceKernelTests(unittest.TestCase):
             "git push --force-with-lease origin feature/x": "git.history_mutation",
             "/usr/bin/git push --mirror origin": "git.history_mutation",
             "git push --prune origin": "git.history_mutation",
+            "git push -d origin feature/x": "git.history_mutation",
             "git -C /repo push --force origin feature/x": "git.history_mutation",
             "git reset --hard HEAD~1": "git.history_mutation",
+            "git --no-pager reset --hard HEAD~1": "git.history_mutation",
+            "git restore README.md": "git.history_mutation",
             "railway up": "production.mutate",
             "fly deploy": "production.mutate",
             "vercel --prod": "production.mutate",
             "kubectl apply -f deployment.yaml": "production.mutate",
             "kubectl -n prod delete pod web": "production.mutate",
             "kubectl --context prod apply -f deployment.yaml": "production.mutate",
+            "kubectl create deployment web --image example/web": "production.mutate",
+            "kubectl edit deployment web": "production.mutate",
+            "kubectl rollout restart deployment/web": "production.mutate",
             "gh pr merge 123": "production.mutate",
             "ssh production.example.com": "remote.execute",
             "/usr/bin/ssh production.example.com": "remote.execute",
@@ -130,12 +138,26 @@ class V2ConsequenceKernelTests(unittest.TestCase):
             "printf x>/home/test/.safe-yolo/policy.json",
             "echo x 2> /home/test/.codex/hooks/error.log",
             "echo x 2>/home/test/.codex/hooks/error.log",
+            "touch /home/test/.codex/hooks.json",
+            "truncate -s 0 /home/test/.safe-yolo/policy.json",
+            "unlink /home/test/.codex/hooks.json",
+            "rmdir /home/test/.codex/hooks",
         )
         for command in commands:
             with self.subTest(command=command):
                 decision = self._shell(command)
                 self.assertEqual("operator_only", decision.outcome)
                 self.assertEqual("enforcement.modify", decision.consequence)
+
+    def test_shell_input_redirection_honors_credential_roots(self):
+        for command in (
+            "cat </home/test/.codex/auth.json",
+            "read secret 0</home/test/.ssh/id_ed25519",
+        ):
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("operator_only", decision.outcome)
+                self.assertEqual("credentials.access", decision.consequence)
 
     def test_structured_source_and_destination_aliases_honor_operator_roots(self):
         cases = (
@@ -176,10 +198,13 @@ class V2ConsequenceKernelTests(unittest.TestCase):
     def test_approval_summaries_name_the_direct_target(self):
         force_push = self._shell("git push --force-with-lease origin feature/x")
         production = self._shell("railway up")
+        remote = self._shell("ssh -p 2222 production.example.com")
 
         self.assertIn("origin", force_push.display)
         self.assertIn("feature/x", force_push.display)
         self.assertIn("railway up", production.display)
+        self.assertIn("production.example.com", remote.display)
+        self.assertNotIn("to 2222", remote.display)
 
     def test_credential_dump_is_operator_only(self):
         for command in (

@@ -31,6 +31,7 @@ def inspect_codex_wiring(
     bootstrap_path: str | Path,
     manifest_sha256: str,
     *,
+    release_path: str | Path,
     entry: str = "codex",
     approval_post_tool: bool = False,
 ) -> dict[str, Any]:
@@ -55,6 +56,7 @@ def inspect_codex_wiring(
     elif pretool[0][0] != "*" or not _command_is_pinned(
         pretool[0][1],
         bootstrap_path=bootstrap_path,
+        release_path=release_path,
         manifest_sha256=manifest_sha256,
         entry=entry,
     ):
@@ -68,6 +70,7 @@ def inspect_codex_wiring(
         elif not _command_is_pinned(
             posttool[0][1],
             bootstrap_path=bootstrap_path,
+            release_path=release_path,
             manifest_sha256=manifest_sha256,
             entry=entry,
         ):
@@ -105,6 +108,7 @@ def _command_is_pinned(
     command: str,
     *,
     bootstrap_path: str | Path,
+    release_path: str | Path,
     manifest_sha256: str,
     entry: str,
 ) -> bool:
@@ -113,17 +117,40 @@ def _command_is_pinned(
     except ValueError:
         return False
 
-    def value_after(flag: str) -> str | None:
-        try:
-            index = tokens.index(flag)
-        except ValueError:
-            return None
-        return tokens[index + 1] if index + 1 < len(tokens) else None
-
+    if len(tokens) < 2 or Path(tokens[0]).name != "python3":
+        return False
+    if tokens[1] != str(bootstrap_path):
+        return False
+    values: dict[str, str] = {}
+    booleans: set[str] = set()
+    value_flags = {
+        "--release",
+        "--manifest-sha256",
+        "--entry",
+        "--host-contract",
+        "--state-dir",
+    }
+    boolean_flags = {"--audit-only"}
+    index = 2
+    while index < len(tokens):
+        flag = tokens[index]
+        if flag in value_flags:
+            if flag in values or index + 1 >= len(tokens):
+                return False
+            values[flag] = tokens[index + 1]
+            index += 2
+            continue
+        if flag in boolean_flags:
+            if flag in booleans:
+                return False
+            booleans.add(flag)
+            index += 1
+            continue
+        return False
     return (
-        str(bootstrap_path) in tokens
-        and value_after("--manifest-sha256") == manifest_sha256
-        and value_after("--entry") == entry
+        values.get("--release") == str(release_path)
+        and values.get("--manifest-sha256") == manifest_sha256
+        and values.get("--entry") == entry
     )
 
 
@@ -173,6 +200,7 @@ def main() -> int:
             args.codex_hooks,
             args.bootstrap,
             str(args.manifest_sha256 or ""),
+            release_path=args.release,
             entry=args.entry,
             approval_post_tool=args.entry == "codex_v2",
         )

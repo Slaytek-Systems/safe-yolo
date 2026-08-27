@@ -50,7 +50,13 @@ class ReleaseToolTests(unittest.TestCase):
         hooks = Path(self.temp.name) / "hooks.json"
         config.write_text('approval_policy = "never"\nsandbox_mode = "danger-full-access"\n')
         hooks.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": f"python3 /safe-yolo/bootstrap.py --release {self.release} --manifest-sha256 {digest} --entry codex"}]}]}}))
-        report = inspect_codex_wiring(config, hooks, "/safe-yolo/bootstrap.py", digest)
+        report = inspect_codex_wiring(
+            config,
+            hooks,
+            "/safe-yolo/bootstrap.py",
+            digest,
+            release_path=self.release,
+        )
         self.assertTrue(report["healthy"])
 
     def test_doctor_proves_v2_pretool_and_approval_posttool_wiring(self):
@@ -86,6 +92,7 @@ class ReleaseToolTests(unittest.TestCase):
             hooks,
             "/safe-yolo/bootstrap.py",
             digest,
+            release_path=self.release,
             entry="codex_v2",
             approval_post_tool=True,
         )
@@ -96,6 +103,7 @@ class ReleaseToolTests(unittest.TestCase):
             hooks,
             "/safe-yolo/bootstrap.py",
             digest,
+            release_path=self.release,
             entry="codex_v2",
             approval_post_tool=True,
         )
@@ -106,6 +114,51 @@ class ReleaseToolTests(unittest.TestCase):
             "exactly one request_user_input PostToolUse command hook is required",
             missing_posttool["problems"],
         )
+
+    def test_doctor_rejects_trailing_bootstrap_and_duplicate_pins(self):
+        build_manifest(self.release)
+        digest = manifest_digest(self.release)
+        config = Path(self.temp.name) / "config.toml"
+        hooks = Path(self.temp.name) / "hooks.json"
+        config.write_text('approval_policy = "never"\nsandbox_mode = "danger-full-access"\n')
+        invalid_commands = (
+            (
+                f"python3 -c pass /safe-yolo/bootstrap.py --manifest-sha256 {digest} "
+                "--entry codex"
+            ),
+            (
+                f"python3 /safe-yolo/bootstrap.py --manifest-sha256 bad "
+                f"--manifest-sha256 {digest} --entry codex"
+            ),
+            (
+                f"python3 /safe-yolo/bootstrap.py --manifest-sha256 {digest} "
+                "--entry bad --entry codex"
+            ),
+        )
+        for command in invalid_commands:
+            with self.subTest(command=command):
+                hooks.write_text(
+                    json.dumps(
+                        {
+                            "hooks": {
+                                "PreToolUse": [
+                                    {
+                                        "matcher": "*",
+                                        "hooks": [{"type": "command", "command": command}],
+                                    }
+                                ]
+                            }
+                        }
+                    )
+                )
+                report = inspect_codex_wiring(
+                    config,
+                    hooks,
+                    "/safe-yolo/bootstrap.py",
+                    digest,
+                    release_path=self.release,
+                )
+                self.assertFalse(report["healthy"])
 
     def test_doctor_cli_reports_v2_release_and_wiring_health(self):
         build_manifest(self.release)
@@ -177,6 +230,7 @@ class ReleaseToolTests(unittest.TestCase):
             hooks,
             "/safe-yolo/bootstrap.py",
             "0" * 64,
+            release_path=self.release,
             entry="codex_v2",
             approval_post_tool=True,
         )

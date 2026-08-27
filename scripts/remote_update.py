@@ -112,6 +112,7 @@ def main() -> int:
         HOOKS,
         HOME / "bootstrap.py",
         manifest_sha256,
+        release_path=release,
     )
     if not wiring["healthy"]:
         raise RuntimeError(f"Installed release failed doctor: {wiring['problems']}")

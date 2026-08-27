@@ -165,7 +165,19 @@ class ConsequenceKernel:
                 "credentials.access",
                 "credential material is not available to the agent",
             )
-        mutating = executable in {"rm", "mv", "cp", "install", "tee", "chmod", "chown"}
+        mutating = executable in {
+            "rm",
+            "mv",
+            "cp",
+            "install",
+            "tee",
+            "chmod",
+            "chown",
+            "touch",
+            "truncate",
+            "unlink",
+            "rmdir",
+        }
         mutating = mutating or (executable == "sed" and "-i" in tokens[1:])
         mutating = mutating or redirects_output
         if mutating and any(self._inside(path, self.enforcement_paths) for path in token_paths):
@@ -198,7 +210,7 @@ class ConsequenceKernel:
                 f"run {self._production_display(tokens)} production mutation",
             )
         if executable == "ssh":
-            host = next((token for token in tokens[1:] if not token.startswith("-")), "remote host")
+            host = self._ssh_host(tokens[1:])
             return Decision(
                 "approval_required",
                 "remote.execute",
@@ -233,6 +245,11 @@ class ConsequenceKernel:
                 if redirect and not redirect.startswith("&"):
                     found.append(cls._resolve_from(redirect, cwd))
                 continue
+            redirect = cls._input_redirection(token)
+            if redirect is not None:
+                if redirect:
+                    found.append(cls._resolve_from(redirect, cwd))
+                continue
             if token.startswith("--") and "=" in token:
                 value = token.split("=", 1)[1]
                 if value:
@@ -244,10 +261,18 @@ class ConsequenceKernel:
 
     @staticmethod
     def _output_redirection(token: str) -> str | None:
-        index = token.find(">")
+        return ConsequenceKernel._redirection_target(token, ">")
+
+    @staticmethod
+    def _input_redirection(token: str) -> str | None:
+        return ConsequenceKernel._redirection_target(token, "<")
+
+    @staticmethod
+    def _redirection_target(token: str, marker: str) -> str | None:
+        index = token.find(marker)
         if index >= 0:
             target = token[index + 1 :]
-            if target.startswith(">"):
+            if target.startswith(marker):
                 target = target[1:]
             return target
         return None
@@ -291,6 +316,7 @@ class ConsequenceKernel:
                     "--force",
                     "--force-with-lease",
                     "--delete",
+                    "-d",
                     "--tags",
                     "--mirror",
                     "--prune",
@@ -300,17 +326,33 @@ class ConsequenceKernel:
                 or (token.startswith(":") and len(token) > 1)
                 for token in args[1:]
             )
-        if args[0] in {"rebase", "clean"}:
+        if args[0] == "rebase":
             return True
+        if args[0] == "clean":
+            return not any(token in {"-n", "--dry-run"} for token in args[1:])
         if args[0] == "reset" and "--hard" in args[1:]:
             return True
-        if args[0] in {"checkout", "restore"} and "--" in args[1:]:
+        if args[0] == "restore":
+            return True
+        if args[0] == "checkout" and "--" in args[1:]:
             return True
         return False
 
     @staticmethod
     def _git_command_args(args: list[str]) -> list[str]:
         remaining = list(args)
+        boolean_globals = {
+            "--no-pager",
+            "--paginate",
+            "-p",
+            "--literal-pathspecs",
+            "--no-literal-pathspecs",
+            "--glob-pathspecs",
+            "--noglob-pathspecs",
+            "--icase-pathspecs",
+            "--no-optional-locks",
+            "--bare",
+        }
         while remaining:
             if remaining[0] in {"-C", "-c", "--git-dir", "--work-tree"} and len(remaining) >= 2:
                 remaining = remaining[2:]
@@ -318,8 +360,50 @@ class ConsequenceKernel:
             if remaining[0].startswith(("--git-dir=", "--work-tree=")):
                 remaining = remaining[1:]
                 continue
+            if remaining[0] in boolean_globals:
+                remaining = remaining[1:]
+                continue
             break
         return remaining
+
+    @staticmethod
+    def _ssh_host(args: list[str]) -> str:
+        options_with_values = {
+            "-B",
+            "-b",
+            "-c",
+            "-D",
+            "-E",
+            "-e",
+            "-F",
+            "-I",
+            "-i",
+            "-J",
+            "-L",
+            "-l",
+            "-m",
+            "-O",
+            "-o",
+            "-P",
+            "-p",
+            "-R",
+            "-S",
+            "-W",
+            "-w",
+        }
+        index = 0
+        while index < len(args):
+            token = args[index]
+            if token == "--":
+                return args[index + 1] if index + 1 < len(args) else "remote host"
+            if token in options_with_values:
+                index += 2
+                continue
+            if token.startswith("-"):
+                index += 1
+                continue
+            return token
+        return "remote host"
 
     @staticmethod
     def _git_display(args: list[str]) -> str:
@@ -339,12 +423,34 @@ class ConsequenceKernel:
         if executable == "vercel":
             return "--prod" in args or "--production" in args
         if executable == "kubectl":
-            return ConsequenceKernel._kubectl_verb(args) in {
+            command = ConsequenceKernel._kubectl_command_args(args)
+            if not command:
+                return False
+            if command[0] == "rollout":
+                return len(command) >= 2 and command[1] in {
+                    "pause",
+                    "restart",
+                    "resume",
+                    "undo",
+                }
+            return command[0] in {
+                "annotate",
                 "apply",
+                "autoscale",
+                "cordon",
+                "create",
                 "delete",
+                "drain",
+                "edit",
+                "expose",
+                "label",
                 "patch",
                 "replace",
+                "run",
                 "scale",
+                "set",
+                "taint",
+                "uncordon",
             }
         if executable == "gh":
             return args[:2] in (
@@ -357,6 +463,11 @@ class ConsequenceKernel:
 
     @staticmethod
     def _kubectl_verb(args: list[str]) -> str:
+        command = ConsequenceKernel._kubectl_command_args(args)
+        return command[0] if command else ""
+
+    @staticmethod
+    def _kubectl_command_args(args: list[str]) -> list[str]:
         flags_with_values = {
             "--as",
             "--as-group",
@@ -384,15 +495,15 @@ class ConsequenceKernel:
         while index < len(args):
             token = args[index]
             if token == "--":
-                return args[index + 1] if index + 1 < len(args) else ""
+                return args[index + 1 :]
             if token in flags_with_values:
                 index += 2
                 continue
             if token.startswith("-"):
                 index += 1
                 continue
-            return token
-        return ""
+            return args[index:]
+        return []
 
     @staticmethod
     def _production_display(tokens: list[str]) -> str:
