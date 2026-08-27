@@ -3,10 +3,15 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from scripts.remote_update import repin_command_text, repin_cursor_hooks
+from scripts.remote_update import require_legacy_version, repin_command_text, repin_cursor_hooks
 
 
 class RemoteUpdatePinTests(unittest.TestCase):
+    def test_legacy_updater_rejects_v2_cutover(self):
+        self.assertEqual("1.0.24", require_legacy_version("1.0.24"))
+        with self.assertRaisesRegex(RuntimeError, "operator cutover"):
+            require_legacy_version("2.0.0-alpha.1")
+
     def test_repins_single_line_command(self):
         original = (
             "/usr/bin/python3 /home/dev/.safe-yolo/bootstrap.py "

@@ -27,6 +27,14 @@ RELEASE_PIN_RE = re.compile(r"(--release\s+)\S+")
 MANIFEST_PIN_RE = re.compile(r"(--manifest-sha256\s+)[0-9a-f]{64}")
 
 
+def require_legacy_version(version: str) -> str:
+    if not version.startswith("1."):
+        raise RuntimeError(
+            "Legacy remote_update only activates Safe YOLO 1.x; use the v2 operator cutover."
+        )
+    return version
+
+
 def repin_command_text(text: str, release: Path, manifest_sha256: str) -> tuple[str, int]:
     """Update release/manifest pins in single-line or shell-continued commands."""
     updated, release_count = RELEASE_PIN_RE.subn(rf"\g<1>{release}", text, count=1)
@@ -89,7 +97,7 @@ def ensure_release(version: str) -> dict[str, str]:
 def main() -> int:
     if not SOURCE.is_dir() or not HOME.is_dir():
         raise RuntimeError("Expected devbox canonical source and Safe YOLO home directories.")
-    version = (SOURCE / "VERSION").read_text().strip()
+    version = require_legacy_version((SOURCE / "VERSION").read_text().strip())
     receipt = ensure_release(version)
     release = Path(receipt["release"])
     manifest_sha256 = receipt["manifest_sha256"]
@@ -112,6 +120,7 @@ def main() -> int:
         HOOKS,
         HOME / "bootstrap.py",
         manifest_sha256,
+        release_path=release,
     )
     if not wiring["healthy"]:
         raise RuntimeError(f"Installed release failed doctor: {wiring['problems']}")

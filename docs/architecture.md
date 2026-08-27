@@ -1,39 +1,53 @@
-# Architecture contract
+# Safe YOLO 2.0 architecture contract
 
-## Operating posture
+## Capability
 
-Target Codex posture on each host:
+Permit ordinary agent work without classification maintenance. Interrupt a small set of direct consequences, show the person what would happen, and bind any approval to one exact retry.
 
-```toml
-approval_policy = "never"
-sandbox_mode = "danger-full-access"
-```
+Safe YOLO is backpressure, not containment. Durable protection remains scoped operating-system and provider authority, protected production systems, recoverable state, and operator-owned activation.
 
-Safe YOLO is deterministic consequence backpressure for direct tool calls. It is not the authoritative security boundary for repository code: scripts and interpreters run as the agent's operating-system identity and can perform actions hidden from the top-level command. Each supported host may run the same policy engine through one Codex `PreToolUse` adapter, but durable protection belongs to operating-system identity, scoped credentials, provider controls, and proved recovery.
+## Canonical decisions
 
-## Invariants
+The kernel returns exactly three outcomes:
 
-1. Constitutional Red actions cannot be overridden.
-2. Unknown side-effecting tool types fail closed.
-3. Harness/policy modification requires an exact, short-lived, session-bound maintenance capability.
-4. The adapter audits decisions without retaining raw secrets or tool content.
-5. A canonical conformance corpus produces equivalent decisions across macOS and Linux.
-6. Host adapters declare facts (paths, service managers, launchers); they cannot weaken common policy.
-7. Raw production deploy commands are blocked. A release is permitted only through a repository-specific, externally verifiable contract.
-8. Repository scripts, interpreters, and launchers execute normally; Safe YOLO does not maintain script allowlists or claim to inspect their internal effects.
+- `allow` — continue immediately;
+- `approval_required` — deny once and offer the ask-user journey;
+- `operator_only` — deny without an in-task override.
 
-## Trust boundaries
+Default is `allow`. Unknown tools are allowed. There is no tool-name registry, script registry, interpreter registry, trusted-path list, shell data-flow analysis, provenance inference, or generic fail-closed classification.
 
-- Codex’s trusted lifecycle-hook registration is the local bootstrap boundary.
-- The active release must be hash-verified by a minimal bootstrap before loading the engine; verification failure blocks tool use.
-- Release evidence must come from external, agent-non-writable sources and bind exact repository, target commit/artifact, environment, service, and expiry.
-- A repository-local file alone is never sufficient deployment proof.
-- Direct-command denial is defense in depth, not containment. A host is eligible for this policy only when same-user code cannot reach unacceptable irreversible authority or when that state has a proved restore path.
+Approval-eligible direct consequences are:
 
-## Explicit non-goals
+- filesystem deletion;
+- Git history or destructive ref mutation;
+- production mutation;
+- remote shell execution;
+- privilege-changing execution;
+- binding a service to a public interface.
 
-- No security guarantee against a malicious local account outside Codex’s controlled tool path.
-- No security guarantee against repository code, interpreters, shell functions, or wrappers running inside the same account.
-- No shell data-flow or code-provenance classification for fetched, generated, piped, or sourced program content.
-- No automatic harness update from an agent session.
-- No generic escape hatches, slash-command overrides, or arbitrary command allowlists for Red actions.
+Operator-only consequences are:
+
+- credential material access or environment-wide credential dumping;
+- modification of Safe YOLO or the hook surface that enforces it.
+
+The direct recognizers are deliberately narrow. Composition such as wrappers, scripts, inline programs, shell chains, or a new semantic tool can route around them. That is an accepted property of backpressure and must not be repaired with another general classifier.
+
+## Approval receipt
+
+`PreToolUse` fingerprints the canonical tuple of tool name, tool input, and working directory. The first consequential attempt stores only the fingerprint, consequence, task/turn scope, expiry, and hash of the expected `request_user_input` arguments. Raw tool input is not persisted.
+
+The denial tells the agent to call `request_user_input` with exact arguments. A `PostToolUse` hook observes both those arguments and the host-produced response. Only the currently observed Codex Desktop shape—one exact recommended answer in the nested answer list—mints a receipt.
+
+The receipt remains in host-local state, is scoped to the same task and turn, expires after five minutes, matches one exact action fingerprint, and is consumed by one retry. It is never returned to the model.
+
+Codex hooks cannot currently turn a `PreToolUse` denial directly into an approval prompt. The blocked attempt followed by ask and retry is therefore intentional.
+
+## Shared truth and surfaces
+
+The consequence and receipt rules live in `engine/`; adapters only translate lifecycle payloads. Codex Desktop is the first proved surface. Cursor, Codex CLI/TUI response-shape parity, and semantic consequence metadata from future tools are deferred until each surface can be observed and tested without permissive parsing.
+
+## Release boundary
+
+The 2.0 candidate reuses immutable release manifests, hash-verifying bootstrap, and non-overwriting installation. It does not import the 1.x classifier or prompt-capability path. Source integration, immutable installation, hook activation, live runtime proof, and host recovery proof remain separate outcomes.
+
+Safe YOLO cannot install or activate its own enforcement release. Credential exposure and enforcement modification require an operator-maintenance path outside the governed agent session.

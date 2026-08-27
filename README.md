@@ -1,25 +1,31 @@
 # Safe YOLO
 
-Portable, deterministic safety rails for high-agency coding agents.
+Safe YOLO is small, deterministic backpressure for high-agency coding agents.
 
-Safe YOLO pairs full local autonomy with deterministic backpressure on visibly dangerous tool calls. Repository scripts, interpreters, and launchers are ordinary development execution; they do not require a per-script registry.
+The 2.0 candidate defaults to allow. It interrupts only direct, visible consequences and never asks whether an unknown tool, script, interpreter, wrapper, or composed shell program is generally trustworthy.
 
-Safe YOLO is not a containment boundary for code running as the same operating-system identity. A script can perform operations that are not visible in its top-level invocation. Irreversible protection must therefore live below the command hook: scoped credentials and provider permissions, recoverable local state, protected production systems, and explicit operator-owned activation. The hook remains useful for preventing obvious accidental commands, but it must never be presented as proof that arbitrary same-user code is safe.
+An approval-eligible action follows one contract:
 
-That boundary is deliberate: Safe YOLO does not perform shell data-flow or code-provenance analysis. Repository scripts, inline interpreters, and shell-composed program execution are the same class of ordinary same-user execution. A host must satisfy the authority and recovery prerequisites before this policy is activated.
+1. deny the first attempt;
+2. ask the person through Codex `request_user_input` with a sanitized action summary and exact fingerprint;
+3. record the host-observed answer without exposing a token to the model;
+4. allow one identical retry in the same task turn;
+5. consume the receipt.
+
+Credential access and modification of the enforcement surface are operator-only. They never offer an in-task approval route.
 
 ## Status
 
-Bootstrap repository. No host is installed or modified from this repository yet.
+`2.0.0-alpha.1` is a source candidate only. It is not installed or active on any host. The installed 1.x runtime and the legacy engine/adapters in this repository remain untouched for rollback and comparison.
 
-## Design
+## Candidate implementation
 
-- `policy/` — portable direct-command policy and protected-surface declarations.
-- `engine/` — deterministic evaluator and scoped capability model.
-- `adapters/codex/` — Codex lifecycle-hook transport.
-- `hosts/` — macOS and Linux facts only; never separate policy semantics.
-- `contracts/` — externally verifiable release-contract definitions.
-- `tests/` — shared conformance corpus, adapter tests, and runtime smoke checks.
-- `scripts/` — explicit operator install and health-check entry points.
+- `engine/consequences_v2.py` — default-allow direct consequence kernel.
+- `engine/approvals_v2.py` — exact, expiring, one-shot approval ledger.
+- `adapters/codex_v2.py` — Codex `PreToolUse` and `PostToolUse` transport.
+- `tests/unit/test_v2_*` — kernel, receipt, and executable-hook journeys.
+- `hosts/linux/devbox.v2-candidate.hooks.json` — non-active cutover example.
 
-See [architecture](docs/architecture.md) and the [cutover plan](docs/cutover.md).
+Existing release verification and immutable installation plumbing is reused. Existing 1.x classification and prompt-capability code is not imported by the 2.0 candidate.
+
+See the [architecture contract](docs/architecture.md) and [reversible cutover plan](docs/cutover.md).
