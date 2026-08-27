@@ -7,7 +7,11 @@ from engine.consequences_v2 import ConsequenceKernel
 class V2ConsequenceKernelTests(unittest.TestCase):
     def setUp(self):
         self.kernel = ConsequenceKernel(
-            enforcement_paths=("/home/test/.safe-yolo", "/home/test/.codex/hooks.json"),
+            enforcement_paths=(
+                "/home/test/.safe-yolo",
+                "/home/test/.codex/hooks.json",
+                "/home/test/.codex/hooks",
+            ),
             credential_paths=("/home/test/.codex/auth.json", "/home/test/.ssh"),
         )
 
@@ -28,17 +32,28 @@ class V2ConsequenceKernelTests(unittest.TestCase):
     def test_direct_approval_eligible_consequences(self):
         expected = {
             "rm -rf build": "filesystem.delete",
+            "/bin/rm obsolete.txt": "filesystem.delete",
+            "unlink obsolete.txt": "filesystem.delete",
+            "rmdir build": "filesystem.delete",
             "git push --force-with-lease origin feature/x": "git.history_mutation",
+            "/usr/bin/git push --mirror origin": "git.history_mutation",
+            "git push --prune origin": "git.history_mutation",
             "git -C /repo push --force origin feature/x": "git.history_mutation",
             "git reset --hard HEAD~1": "git.history_mutation",
             "railway up": "production.mutate",
             "fly deploy": "production.mutate",
             "vercel --prod": "production.mutate",
             "kubectl apply -f deployment.yaml": "production.mutate",
+            "kubectl -n prod delete pod web": "production.mutate",
+            "kubectl --context prod apply -f deployment.yaml": "production.mutate",
             "gh pr merge 123": "production.mutate",
             "ssh production.example.com": "remote.execute",
+            "/usr/bin/ssh production.example.com": "remote.execute",
             "sudo touch /tmp/probe": "privilege.modify",
+            "/usr/bin/sudo touch /tmp/probe": "privilege.modify",
             "vite --host 0.0.0.0": "network.public_exposure",
+            "vite --host": "network.public_exposure",
+            "vite --host --port 3000": "network.public_exposure",
             "python3 -m http.server --bind 0.0.0.0": "network.public_exposure",
         }
         for command, consequence in expected.items():
@@ -107,6 +122,57 @@ class V2ConsequenceKernelTests(unittest.TestCase):
                 self.assertEqual("operator_only", decision.outcome)
                 self.assertEqual(consequence, decision.consequence)
 
+    def test_direct_shell_write_variants_honor_enforcement_roots(self):
+        commands = (
+            "cp --target-directory=/home/test/.codex/hooks probe.py",
+            "/bin/cp --target-directory=/home/test/.codex/hooks probe.py",
+            "echo x >/home/test/.codex/hooks.json",
+            "printf x>/home/test/.safe-yolo/policy.json",
+            "echo x 2> /home/test/.codex/hooks/error.log",
+            "echo x 2>/home/test/.codex/hooks/error.log",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("operator_only", decision.outcome)
+                self.assertEqual("enforcement.modify", decision.consequence)
+
+    def test_structured_source_and_destination_aliases_honor_operator_roots(self):
+        cases = (
+            (
+                {
+                    "tool_name": "move_file",
+                    "tool_input": {
+                        "from": "/workspace/source.py",
+                        "to": "/home/test/.codex/hooks.json",
+                    },
+                },
+                "enforcement.modify",
+            ),
+            (
+                {
+                    "tool_name": "copy_file",
+                    "tool_input": {
+                        "source": "/workspace/source.py",
+                        "destination": "/home/test/.codex/auth.json",
+                    },
+                },
+                "credentials.access",
+            ),
+            (
+                {
+                    "tool_name": "write_file",
+                    "tool_input": {"target_file": "/home/test/.safe-yolo/policy.json"},
+                },
+                "enforcement.modify",
+            ),
+        )
+        for payload, consequence in cases:
+            with self.subTest(payload=payload):
+                decision = self.kernel.evaluate(payload)
+                self.assertEqual("operator_only", decision.outcome)
+                self.assertEqual(consequence, decision.consequence)
+
     def test_approval_summaries_name_the_direct_target(self):
         force_push = self._shell("git push --force-with-lease origin feature/x")
         production = self._shell("railway up")
@@ -116,7 +182,15 @@ class V2ConsequenceKernelTests(unittest.TestCase):
         self.assertIn("railway up", production.display)
 
     def test_credential_dump_is_operator_only(self):
-        for command in ("env", "printenv"):
+        for command in (
+            "env",
+            "env -0",
+            "env --null",
+            "env -u DEBUG",
+            "printenv",
+            "printenv -0",
+            "printenv --null",
+        ):
             with self.subTest(command=command):
                 decision = self._shell(command)
                 self.assertEqual("operator_only", decision.outcome)

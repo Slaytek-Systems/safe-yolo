@@ -122,6 +122,7 @@ class ApprovalLedger:
             "expires_at": now + self.ttl_seconds,
         }
         with self._locked():
+            self._prune_locked(now)
             self._write(self.pending / f"{request_id}.json", record)
         return tool_input
 
@@ -147,6 +148,7 @@ class ApprovalLedger:
         session_id, turn_id = self._scope(payload)
         input_hash = _digest(payload.get("tool_input") or {})
         now = time.time()
+        self._prune_locked(now)
         if not self.pending.exists():
             return False
         candidates = sorted(self.pending.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
@@ -162,8 +164,7 @@ class ApprovalLedger:
                 or record.get("consumed_at")
             ):
                 continue
-            record["consumed_at"] = now
-            self._write(target, record)
+            target.unlink(missing_ok=True)
             if not self._approved_answer(payload.get("tool_response")):
                 return False
             receipt_id = secrets.token_urlsafe(18)
@@ -188,6 +189,7 @@ class ApprovalLedger:
         session_id, turn_id = self._scope(payload)
         fingerprint = self.action_fingerprint(payload)
         now = time.time()
+        self._prune_locked(now)
         if not self.approved.exists():
             return False
         candidates = sorted(self.approved.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
@@ -203,7 +205,22 @@ class ApprovalLedger:
                 or record.get("consumed_at")
             ):
                 continue
-            record["consumed_at"] = now
-            self._write(target, record)
+            target.unlink(missing_ok=True)
             return True
         return False
+
+    def _prune_locked(self, now: float) -> None:
+        for directory in (self.pending, self.approved):
+            if not directory.exists():
+                continue
+            for target in directory.glob("*.json"):
+                record = self._read(target)
+                if (
+                    record is None
+                    or record.get("consumed_at")
+                    or record.get("expires_at", 0) <= now
+                ):
+                    try:
+                        target.unlink(missing_ok=True)
+                    except OSError:
+                        continue

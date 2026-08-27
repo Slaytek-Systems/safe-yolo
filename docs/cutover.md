@@ -11,6 +11,20 @@ This repository produces a source candidate. It does not authorize installation 
 7. Activate one host through the operator route, read back the immutable release/hash/hook pin, and repeat the bounded journey.
 8. Treat Cursor and unobserved Codex surfaces as separate parity work. Do not add permissive response parsing merely to claim cross-surface support.
 
+After the operator installs and wires the pilot, prove both the immutable release and the two-hook lifecycle with the read-only doctor:
+
+```sh
+python3 scripts/doctor.py \
+  --release /home/dev/.safe-yolo/releases/2.0.0-alpha.1 \
+  --manifest-sha256 MANIFEST_SHA256 \
+  --codex-config /home/dev/.codex/config.toml \
+  --codex-hooks /home/dev/.codex/hooks.json \
+  --bootstrap /home/dev/.safe-yolo/bootstrap.py \
+  --entry codex_v2
+```
+
+The v2 doctor requires one `PreToolUse` command matched to `*` and one `PostToolUse` command matched to `request_user_input`, both pinned to the exact bootstrap, manifest hash, and `codex_v2` entrypoint.
+
 ## Deferred parity debt
 
 - Cursor has no 2.0 adapter or ask-user receipt proof.

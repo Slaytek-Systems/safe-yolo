@@ -101,9 +101,14 @@ class ConsequenceKernel:
             "file_path",
             "filepath",
             "filename",
+            "target_file",
             "target_path",
+            "source",
             "source_path",
+            "destination",
             "destination_path",
+            "from",
+            "to",
         }
         found: list[Path] = []
         if isinstance(tool_input, dict):
@@ -152,38 +157,35 @@ class ConsequenceKernel:
             return Decision("allow")
         if not tokens:
             return Decision("allow")
-        token_paths = tuple(
-            self._resolve_from(token, cwd)
-            for token in tokens[1:]
-            if not token.startswith("-")
-        )
+        executable = Path(tokens[0]).name
+        token_paths, redirects_output = self._shell_paths(tokens[1:], cwd)
         if any(self._inside(path, self.credential_paths) for path in token_paths):
             return Decision(
                 "operator_only",
                 "credentials.access",
                 "credential material is not available to the agent",
             )
-        mutating = tokens[0] in {"rm", "mv", "cp", "install", "tee", "chmod", "chown"}
-        mutating = mutating or (tokens[0] == "sed" and "-i" in tokens[1:])
-        mutating = mutating or any(token in {">", ">>"} for token in tokens)
+        mutating = executable in {"rm", "mv", "cp", "install", "tee", "chmod", "chown"}
+        mutating = mutating or (executable == "sed" and "-i" in tokens[1:])
+        mutating = mutating or redirects_output
         if mutating and any(self._inside(path, self.enforcement_paths) for path in token_paths):
             return Decision(
                 "operator_only",
                 "enforcement.modify",
                 "Safe YOLO enforcement can only be changed through operator maintenance",
             )
-        if tokens in (["env"], ["printenv"]):
+        if self._environment_dump(executable, tokens[1:]):
             return Decision(
                 "operator_only",
                 "credentials.access",
                 "dumping the complete process environment is not available to the agent",
             )
-        if tokens[0] == "rm":
+        if executable in {"rm", "unlink", "rmdir"}:
             targets = [token for token in tokens[1:] if not token.startswith("-")]
             display = "delete " + (", ".join(targets) if targets else "filesystem targets")
             return Decision("approval_required", "filesystem.delete", display)
-        git_args = self._git_command_args(tokens[1:]) if tokens[0] == "git" else []
-        if tokens[0] == "git" and self._git_history_mutation(git_args):
+        git_args = self._git_command_args(tokens[1:]) if executable == "git" else []
+        if executable == "git" and self._git_history_mutation(git_args):
             return Decision(
                 "approval_required",
                 "git.history_mutation",
@@ -195,18 +197,18 @@ class ConsequenceKernel:
                 "production.mutate",
                 f"run {self._production_display(tokens)} production mutation",
             )
-        if tokens[0] == "ssh":
+        if executable == "ssh":
             host = next((token for token in tokens[1:] if not token.startswith("-")), "remote host")
             return Decision(
                 "approval_required",
                 "remote.execute",
                 f"open a remote shell to {host}",
             )
-        if tokens[0] in {"sudo", "doas", "su"}:
+        if executable in {"sudo", "doas", "su"}:
             return Decision(
                 "approval_required",
                 "privilege.modify",
-                f"execute through {tokens[0]}",
+                f"execute through {executable}",
             )
         if self._public_bind(tokens):
             return Decision(
@@ -216,13 +218,83 @@ class ConsequenceKernel:
             )
         return Decision("allow")
 
+    @classmethod
+    def _shell_paths(
+        cls,
+        tokens: list[str],
+        cwd: Path,
+    ) -> tuple[tuple[Path, ...], bool]:
+        found: list[Path] = []
+        redirects_output = False
+        for token in tokens:
+            redirect = cls._output_redirection(token)
+            if redirect is not None:
+                redirects_output = True
+                if redirect and not redirect.startswith("&"):
+                    found.append(cls._resolve_from(redirect, cwd))
+                continue
+            if token.startswith("--") and "=" in token:
+                value = token.split("=", 1)[1]
+                if value:
+                    found.append(cls._resolve_from(value, cwd))
+                continue
+            if not token.startswith("-"):
+                found.append(cls._resolve_from(token, cwd))
+        return tuple(found), redirects_output
+
+    @staticmethod
+    def _output_redirection(token: str) -> str | None:
+        index = token.find(">")
+        if index >= 0:
+            target = token[index + 1 :]
+            if target.startswith(">"):
+                target = target[1:]
+            return target
+        return None
+
+    @staticmethod
+    def _environment_dump(executable: str, args: list[str]) -> bool:
+        if executable == "printenv":
+            if any(token in {"--help", "--version"} for token in args):
+                return False
+            return not any(token not in {"-0", "--null"} for token in args)
+        if executable != "env":
+            return False
+        index = 0
+        options_with_values = {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"}
+        while index < len(args):
+            token = args[index]
+            if token in {"--help", "--version"}:
+                return False
+            if token == "--":
+                return index + 1 >= len(args)
+            if token in options_with_values:
+                index += 2
+                continue
+            if token.startswith(("--unset=", "--chdir=", "--split-string=")):
+                index += 1
+                continue
+            if token.startswith("-") or "=" in token:
+                index += 1
+                continue
+            return False
+        return True
+
     @staticmethod
     def _git_history_mutation(args: list[str]) -> bool:
         if not args:
             return False
         if args[0] == "push":
             return any(
-                token in {"-f", "--force", "--force-with-lease", "--delete", "--tags"}
+                token in {
+                    "-f",
+                    "--force",
+                    "--force-with-lease",
+                    "--delete",
+                    "--tags",
+                    "--mirror",
+                    "--prune",
+                }
                 or token.startswith("--force-with-lease=")
                 or token.startswith("+")
                 or (token.startswith(":") and len(token) > 1)
@@ -258,7 +330,7 @@ class ConsequenceKernel:
 
     @staticmethod
     def _production_mutation(tokens: list[str]) -> bool:
-        executable = tokens[0]
+        executable = Path(tokens[0]).name
         args = tokens[1:]
         if executable == "railway":
             return any(arg in {"up", "deploy"} for arg in args)
@@ -267,7 +339,13 @@ class ConsequenceKernel:
         if executable == "vercel":
             return "--prod" in args or "--production" in args
         if executable == "kubectl":
-            return bool(args and args[0] in {"apply", "delete", "patch", "replace", "scale"})
+            return ConsequenceKernel._kubectl_verb(args) in {
+                "apply",
+                "delete",
+                "patch",
+                "replace",
+                "scale",
+            }
         if executable == "gh":
             return args[:2] in (
                 ["pr", "merge"],
@@ -278,8 +356,47 @@ class ConsequenceKernel:
         return False
 
     @staticmethod
+    def _kubectl_verb(args: list[str]) -> str:
+        flags_with_values = {
+            "--as",
+            "--as-group",
+            "--cache-dir",
+            "--certificate-authority",
+            "--client-certificate",
+            "--client-key",
+            "--cluster",
+            "--context",
+            "--kubeconfig",
+            "--namespace",
+            "-n",
+            "--password",
+            "--profile",
+            "--profile-output",
+            "--request-timeout",
+            "--server",
+            "-s",
+            "--tls-server-name",
+            "--token",
+            "--user",
+            "--username",
+        }
+        index = 0
+        while index < len(args):
+            token = args[index]
+            if token == "--":
+                return args[index + 1] if index + 1 < len(args) else ""
+            if token in flags_with_values:
+                index += 2
+                continue
+            if token.startswith("-"):
+                index += 1
+                continue
+            return token
+        return ""
+
+    @staticmethod
     def _production_display(tokens: list[str]) -> str:
-        executable = tokens[0]
+        executable = Path(tokens[0]).name
         args = tokens[1:]
         if executable == "railway":
             subcommand = next((arg for arg in args if arg in {"up", "deploy"}), "mutation")
@@ -289,7 +406,7 @@ class ConsequenceKernel:
         if executable == "vercel":
             return "vercel " + ("--prod" if "--prod" in args else "--production")
         if executable == "kubectl":
-            return "kubectl " + (args[0] if args else "mutation")
+            return "kubectl " + (ConsequenceKernel._kubectl_verb(args) or "mutation")
         if executable == "gh":
             return "gh " + " ".join(args[:3])
         return executable
@@ -297,6 +414,13 @@ class ConsequenceKernel:
     @staticmethod
     def _public_bind(tokens: list[str]) -> bool:
         public_values = {"0.0.0.0", "::", "[::]"}
+        executable = Path(tokens[0]).name
+        if executable == "vite":
+            for index, token in enumerate(tokens):
+                if token == "--host" and (
+                    index + 1 >= len(tokens) or tokens[index + 1].startswith("-")
+                ):
+                    return True
         for index, token in enumerate(tokens[:-1]):
             if token in {"--host", "--bind", "-H"} and tokens[index + 1] in public_values:
                 return True

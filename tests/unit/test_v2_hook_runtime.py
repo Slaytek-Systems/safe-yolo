@@ -87,6 +87,28 @@ class V2HookRuntimeTests(unittest.TestCase):
                 self.assertIn("operator-only", reason)
                 self.assertNotIn("SAFE_YOLO_REQUEST_USER_INPUT=", reason)
 
+    def test_executable_hook_denies_malformed_or_non_object_payloads(self):
+        for raw_payload in ("", "not-json", "[]"):
+            with self.subTest(raw_payload=raw_payload):
+                result = subprocess.run(
+                    self.direct_command,
+                    cwd=ROOT,
+                    input=raw_payload,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(0, result.returncode, result.stderr)
+                denial = json.loads(result.stdout)
+                self.assertEqual(
+                    "deny",
+                    denial["hookSpecificOutput"]["permissionDecision"],
+                )
+                self.assertIn(
+                    "unreadable hook payload",
+                    denial["hookSpecificOutput"]["permissionDecisionReason"],
+                )
+
     def _assert_block_ask_approve_retry(self, command):
         action = {
             "hook_event_name": "PreToolUse",

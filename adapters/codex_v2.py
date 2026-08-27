@@ -106,7 +106,18 @@ def main() -> int:
     parser.add_argument("--codex-home", type=Path, default=Path("~/.codex").expanduser())
     parser.add_argument("--user-home", type=Path, default=Path.home())
     args = parser.parse_args()
-    payload = json.load(sys.stdin)
+    try:
+        payload = json.load(sys.stdin)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        payload = None
+    if not isinstance(payload, dict):
+        json.dump(
+            _deny("Safe YOLO received an unreadable hook payload."),
+            sys.stdout,
+            sort_keys=True,
+        )
+        sys.stdout.write("\n")
+        return 0
     kernel = build_kernel(
         safe_yolo_home=args.safe_yolo_home,
         codex_home=args.codex_home,

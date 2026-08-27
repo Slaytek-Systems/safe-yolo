@@ -153,6 +153,22 @@ class V2ApprovalJourneyTests(unittest.TestCase):
 
         self.assertEqual(1, sum(results))
 
+    def test_ledger_removes_consumed_and_expired_records(self):
+        action = self._bash("rm obsolete.txt")
+        with patch("engine.approvals_v2.time.time", return_value=1000):
+            denied = handle_pre_tool(action, self.kernel, self.ledger)
+            approval_input = approval_request_from_denial(denied)
+            self.assertTrue(handle_post_tool(self._approval(approval_input), self.ledger))
+            self.assertTrue(self.ledger.consume_approval(action))
+            handle_pre_tool(self._bash("rm expired.txt"), self.kernel, self.ledger)
+
+        with patch("engine.approvals_v2.time.time", return_value=2000):
+            handle_pre_tool(self._bash("rm current.txt"), self.kernel, self.ledger)
+
+        records = list(Path(self.temp.name).rglob("*.json"))
+        self.assertEqual(1, len(records))
+        self.assertIn("pending-v2", records[0].parts)
+
     def test_operator_only_boundaries_never_offer_approval(self):
         for action in (
             self._bash("cat /home/test/.codex/auth.json"),
