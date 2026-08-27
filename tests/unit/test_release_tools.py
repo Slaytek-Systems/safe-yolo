@@ -160,6 +160,42 @@ class ReleaseToolTests(unittest.TestCase):
                 )
                 self.assertFalse(report["healthy"])
 
+    def test_doctor_rejects_legacy_only_flags_for_v2_adapter(self):
+        build_manifest(self.release)
+        digest = manifest_digest(self.release)
+        config = Path(self.temp.name) / "config.toml"
+        hooks = Path(self.temp.name) / "hooks.json"
+        config.write_text('approval_policy = "never"\nsandbox_mode = "danger-full-access"\n')
+        for suffix in ("--audit-only", "--host-contract /safe-yolo/host.json"):
+            with self.subTest(suffix=suffix):
+                command = (
+                    f"python3 /safe-yolo/bootstrap.py --release {self.release} "
+                    f"--manifest-sha256 {digest} --entry codex_v2 {suffix}"
+                )
+                hooks.write_text(
+                    json.dumps(
+                        {
+                            "hooks": {
+                                "PreToolUse": [
+                                    {
+                                        "matcher": "*",
+                                        "hooks": [{"type": "command", "command": command}],
+                                    }
+                                ]
+                            }
+                        }
+                    )
+                )
+                report = inspect_codex_wiring(
+                    config,
+                    hooks,
+                    "/safe-yolo/bootstrap.py",
+                    digest,
+                    release_path=self.release,
+                    entry="codex_v2",
+                )
+                self.assertFalse(report["healthy"])
+
     def test_doctor_cli_reports_v2_release_and_wiring_health(self):
         build_manifest(self.release)
         digest = manifest_digest(self.release)

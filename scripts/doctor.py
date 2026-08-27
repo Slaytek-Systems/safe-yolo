@@ -147,6 +147,10 @@ def _command_is_pinned(
             index += 1
             continue
         return False
+    if entry == "codex_v2" and (
+        "--host-contract" in values or "--audit-only" in booleans
+    ):
+        return False
     return (
         values.get("--release") == str(release_path)
         and values.get("--manifest-sha256") == manifest_sha256
