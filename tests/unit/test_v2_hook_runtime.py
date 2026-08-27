@@ -49,6 +49,44 @@ class V2HookRuntimeTests(unittest.TestCase):
         ]
         self._assert_block_ask_approve_retry(command)
 
+    def test_executable_hook_denies_operator_only_paths_from_move_and_workdir(self):
+        codex_home = Path(self.temp.name) / "codex"
+        cases = (
+            {
+                "hook_event_name": "PreToolUse",
+                "cwd": "/workspace",
+                "tool_name": "exec_command",
+                "tool_input": {
+                    "cmd": "cat auth.json",
+                    "workdir": str(codex_home),
+                },
+            },
+            {
+                "hook_event_name": "PreToolUse",
+                "cwd": "/workspace",
+                "tool_name": "apply_patch",
+                "tool_input": {
+                    "patch": (
+                        "*** Begin Patch\n"
+                        "*** Update File: /workspace/source.txt\n"
+                        f"*** Move to: {codex_home / 'hooks.json'}\n"
+                        "@@\n"
+                        "-before\n"
+                        "+after\n"
+                        "*** End Patch"
+                    )
+                },
+            },
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                result = self._run(self.direct_command, payload)
+                self.assertEqual(0, result.returncode, result.stderr)
+                denial = json.loads(result.stdout)
+                reason = denial["hookSpecificOutput"]["permissionDecisionReason"]
+                self.assertIn("operator-only", reason)
+                self.assertNotIn("SAFE_YOLO_REQUEST_USER_INPUT=", reason)
+
     def _assert_block_ask_approve_retry(self, command):
         action = {
             "hook_event_name": "PreToolUse",
