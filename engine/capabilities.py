@@ -145,6 +145,83 @@ class PendingMaintenanceStore:
             if (
                 record.get("session_id") != session_id
                 or record.get("consumed_at")
+                or record.get("cancelled_at")
+                or record.get("expires_at", 0) <= time.time()
+            ):
+                continue
+            record["consumed_at"] = time.time()
+            target.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+            os.chmod(target, 0o600)
+            return record
+        return None
+
+    def cancel(self, session_id: str) -> int:
+        if not session_id or not self.root.exists():
+            return 0
+        cancelled = 0
+        for target in self.root.glob("*.json"):
+            try:
+                record = json.loads(target.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if record.get("session_id") != session_id or record.get("consumed_at") or record.get("cancelled_at"):
+                continue
+            record["cancelled_at"] = time.time()
+            target.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+            os.chmod(target, 0o600)
+            cancelled += 1
+        return cancelled
+
+
+class PendingActionStore:
+    """One-time action requests awaiting an exact user approval prompt."""
+
+    def __init__(self, root: str | Path):
+        self.root = Path(root).expanduser().resolve(strict=False)
+
+    def _prepare_root(self) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.root, 0o700)
+
+    def request(
+        self,
+        *,
+        session_id: str,
+        action: str,
+        constraints: dict[str, Any],
+        ttl_seconds: int = 15 * 60,
+    ) -> dict[str, Any]:
+        if not session_id or not action or not constraints or ttl_seconds <= 0:
+            raise ValueError("Pending actions require a session, normalized action, exact constraints, and positive TTL.")
+        self._prepare_root()
+        now = time.time()
+        record = {
+            "id": secrets.token_urlsafe(24),
+            "session_id": session_id,
+            "kind": "action",
+            "action": action,
+            "constraints": constraints,
+            "issued_at": now,
+            "expires_at": now + ttl_seconds,
+        }
+        target = self.root / f"{record['id']}.json"
+        target.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+        os.chmod(target, 0o600)
+        return record
+
+    def consume(self, session_id: str) -> dict[str, Any] | None:
+        if not session_id or not self.root.exists():
+            return None
+        candidates = sorted(self.root.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+        for target in candidates:
+            try:
+                record = json.loads(target.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if (
+                record.get("session_id") != session_id
+                or record.get("consumed_at")
+                or record.get("cancelled_at")
                 or record.get("expires_at", 0) <= time.time()
             ):
                 continue

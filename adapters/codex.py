@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from adapters.codex_context import turn_scope
-from engine.capabilities import CapabilityStore, PendingMaintenanceStore
+from engine.capabilities import CapabilityStore, PendingActionStore, PendingMaintenanceStore
 from engine.recovery import FileCheckpointStore, RecoveryUnavailable
 from engine.safe_yolo import SafeYoloEngine, result
 
@@ -25,7 +25,7 @@ THREAD_INSPECTION_TOOLS = {"codex_applist_threads", "codex_appread_thread", "cod
 THREAD_CREATION_TOOLS = {"codex_appcreate_thread"}
 THREAD_LIFECYCLE_TOOLS = {"codex_appset_thread_archived"}
 THREAD_MESSAGE_TOOLS = {"codex_appsend_message_to_thread"}
-AUTOMATION_TOOLS = {"codex_appautomation_update"}
+AUTOMATION_TOOLS = {"codex_appautomation_update", "mcp__codex_app__automation_update"}
 AUTOMATION_MANAGEMENT_MODES = {"create", "update", "pause", "resume"}
 COLLABORATION_TOOLS = {"collaborationspawn_agent", "collaborationwait_agent", "collaborationlist_agents"}
 NODE_REPL_JS_TOOLS = {"mcp__node_repl__js"}
@@ -261,7 +261,20 @@ def evaluate_payload(payload: dict[str, Any], engine: SafeYoloEngine) -> dict[st
         if mode in AUTOMATION_MANAGEMENT_MODES:
             return result("allow_report", "codex.automation_management", "Reversible automation management is permitted and reported.")
         if mode == "delete":
-            return engine.evaluate({"action": "records.delete", **context})
+            automation_id = str(tool_input.get("id") or "").strip() if isinstance(tool_input, dict) else ""
+            if not automation_id:
+                return result("block_method", "codex.automation_delete_target_missing", "Automation deletion requires one exact automation id.")
+            delete_request = {"action": "records.delete", "record_type": "automation", "record_id": automation_id, **context}
+            decision = engine.evaluate(delete_request)
+            if decision["decision"] == "require_capability":
+                return {
+                    **decision,
+                    "action_request": {
+                        "action": "records.delete",
+                        "constraints": {"record_type": "automation", "record_id": automation_id},
+                    },
+                }
+            return decision
         return result("block_method", "codex.automation_operation_unclassified", "Unclassified automation operation requires an adapter update before use.")
     if tool_name in NODE_REPL_JS_TOOLS:
         return classify_node_repl(tool_input)
@@ -276,7 +289,9 @@ def hook_response(decision: dict[str, Any], pending: dict[str, Any] | None = Non
     if decision["decision"] not in {"block_hard", "block_method", "require_capability"}:
         return None
     reason = f"Safe YOLO [{decision['policy_id']}]: {decision['reason']}"
-    if pending is not None:
+    if pending is not None and pending.get("kind") == "action":
+        reason += " A scoped action request is pending; reply only 'approve' or 'yes' to authorize this exact action."
+    elif pending is not None:
         reason += " A scoped maintenance request is pending; reply only 'approve' or 'yes' to authorize this exact maintenance scope."
     return {"decision": "block", "reason": reason}
 
@@ -304,6 +319,7 @@ def process_payload(
     engine: SafeYoloEngine,
     *,
     pending_store: PendingMaintenanceStore | None = None,
+    pending_action_store: PendingActionStore | None = None,
     audit_log: Path | None = None,
     recovery_store: FileCheckpointStore | None = None,
 ) -> dict[str, str] | None:
@@ -346,6 +362,13 @@ def process_payload(
             harness=str(request["harness"]),
             scopes=list(request["scopes"]),
         )
+    action_request = decision.get("action_request")
+    if isinstance(action_request, dict) and pending_action_store is not None and session_id:
+        pending = pending_action_store.request(
+            session_id=session_id,
+            action=str(action_request["action"]),
+            constraints=dict(action_request["constraints"]),
+        )
     audit_warning = None
     if audit_log is not None:
         try:
@@ -372,6 +395,7 @@ def main() -> int:
     payload = json.load(sys.stdin)
     store = CapabilityStore(args.state_dir / "capabilities")
     pending = PendingMaintenanceStore(args.state_dir / "pending-maintenance")
+    pending_actions = PendingActionStore(args.state_dir / "pending-actions")
     recovery = FileCheckpointStore(args.state_dir / "recovery")
     host_contract = json.loads(args.host_contract.read_text(encoding="utf-8")) if args.host_contract else None
     engine = SafeYoloEngine.from_file(args.policy, capability_store=store, host_contract=host_contract)
@@ -381,7 +405,7 @@ def main() -> int:
         audit_payload(payload, engine, args.state_dir / "audit.jsonl")
         response = None
     else:
-        response = process_payload(payload, engine, pending_store=pending, audit_log=args.state_dir / "audit.jsonl", recovery_store=recovery)
+        response = process_payload(payload, engine, pending_store=pending, pending_action_store=pending_actions, audit_log=args.state_dir / "audit.jsonl", recovery_store=recovery)
     if response is not None:
         json.dump(response, sys.stdout, sort_keys=True)
         sys.stdout.write("\n")

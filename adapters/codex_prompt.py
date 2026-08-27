@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from adapters.codex_context import turn_scope
-from engine.capabilities import CapabilityStore, PendingMaintenanceStore
+from engine.capabilities import CapabilityStore, PendingActionStore, PendingMaintenanceStore
 
 
 APPROVAL_WORDS = {"approve", "yes"}
@@ -19,20 +19,37 @@ def authorize_prompt(
     payload: dict[str, Any],
     store: CapabilityStore,
     pending_store: PendingMaintenanceStore,
+    pending_action_store: PendingActionStore | None = None,
 ) -> dict[str, Any] | None:
-    """Consume one pending maintenance request only after an exact approval reply."""
+    """Consume one pending capability request only after an exact approval reply."""
     session_id = str(payload.get("session_id") or "")
     prompt = str(payload.get("prompt") or "").strip().lower()
     if not session_id:
         return None
     if prompt not in APPROVAL_WORDS:
         pending_store.cancel(session_id)
+        if pending_action_store is not None:
+            pending_action_store.cancel(session_id)
         return None
     pending = pending_store.consume(session_id)
+    scoped_session = turn_scope(payload)
+    if pending is None and pending_action_store is not None:
+        pending = pending_action_store.consume(session_id)
     if pending is None:
         return None
-    scoped_session = turn_scope(payload)
     kind = str(pending.get("kind") or "maintenance")
+    if kind == "action":
+        action = str(pending["action"])
+        constraints = dict(pending["constraints"])
+        store.issue(
+            kind="action",
+            action=action,
+            session_id=scoped_session,
+            constraints=constraints,
+            ttl_seconds=TTL_SECONDS,
+            user_authorized=True,
+        )
+        return {"kind": "action", "action": action, "constraints": constraints}
     store.issue(
         kind=kind,
         session_id=scoped_session,
@@ -52,9 +69,10 @@ def main() -> int:
         payload,
         CapabilityStore(args.state_dir / "capabilities"),
         PendingMaintenanceStore(args.state_dir / "pending-maintenance"),
+        PendingActionStore(args.state_dir / "pending-actions"),
     )
     if authorization is not None:
-        json.dump({"hookSpecificOutput": {"additionalContext": f"Safe YOLO maintenance capability active: {authorization}"}}, sys.stdout, sort_keys=True)
+        json.dump({"hookSpecificOutput": {"additionalContext": f"Safe YOLO capability active: {authorization}"}}, sys.stdout, sort_keys=True)
         sys.stdout.write("\n")
     return 0
 

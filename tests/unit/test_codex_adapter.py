@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from adapters.codex import audit_payload, evaluate_payload, process_payload
 from adapters.codex_prompt import authorize_prompt
-from engine.capabilities import CapabilityStore, PendingMaintenanceStore
+from engine.capabilities import CapabilityStore, PendingActionStore, PendingMaintenanceStore
 from engine.safe_yolo import SafeYoloEngine
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -19,6 +19,7 @@ class CodexAdapterTests(unittest.TestCase):
         policy = json.loads((ROOT / "policy" / "policy.json").read_text())
         self.store = CapabilityStore(Path(self.temp.name) / "capabilities")
         self.pending = PendingMaintenanceStore(Path(self.temp.name) / "pending")
+        self.pending_actions = PendingActionStore(Path(self.temp.name) / "pending-actions")
         self.engine = SafeYoloEngine(policy, capability_store=self.store, path_variables={
             "SAFE_YOLO_HOME": "/opt/safe-yolo",
             "CODEX_HOME": "/home/test/.codex",
@@ -49,17 +50,86 @@ class CodexAdapterTests(unittest.TestCase):
             "resume": ("allow_report", "codex.automation_management"),
             "delete": ("require_capability", "records.delete"),
         }
-        for mode, (decision_name, policy_id) in cases.items():
-            with self.subTest(mode=mode):
-                decision = evaluate_payload(
-                    {
-                        "tool_name": "codex_appautomation_update",
-                        "tool_input": {"mode": mode},
-                    },
-                    self.engine,
-                )
-                self.assertEqual(decision_name, decision["decision"])
-                self.assertEqual(policy_id, decision["policy_id"])
+        tool_names = {"codex_appautomation_update", "mcp__codex_app__automation_update"}
+        for tool_name in tool_names:
+            for mode, (decision_name, policy_id) in cases.items():
+                with self.subTest(tool_name=tool_name, mode=mode):
+                    tool_input = {"mode": mode}
+                    if mode == "delete":
+                        tool_input["id"] = "automation-123"
+                    decision = evaluate_payload(
+                        {"tool_name": tool_name, "tool_input": tool_input},
+                        self.engine,
+                    )
+                    self.assertEqual(decision_name, decision["decision"])
+                    self.assertEqual(policy_id, decision["policy_id"])
+
+    def test_codex_automation_delete_requires_one_exact_target(self):
+        decision = evaluate_payload(
+            {"tool_name": "mcp__codex_app__automation_update", "tool_input": {"mode": "delete"}},
+            self.engine,
+        )
+        self.assertEqual("block_method", decision["decision"])
+        self.assertEqual("codex.automation_delete_target_missing", decision["policy_id"])
+
+    def test_codex_automation_delete_approval_is_exact_and_turn_scoped(self):
+        first = {
+            "tool_name": "mcp__codex_app__automation_update",
+            "session_id": "automation-session",
+            "turn_id": "turn-1",
+            "tool_input": {"mode": "delete", "id": "automation-123"},
+        }
+        denied = process_payload(first, self.engine, pending_store=self.pending, pending_action_store=self.pending_actions)
+        self.assertEqual("block", denied["decision"])
+        self.assertIn("exact action", denied["reason"])
+
+        authorization = authorize_prompt(
+            {"session_id": "automation-session", "turn_id": "turn-2", "prompt": "approve"},
+            self.store,
+            self.pending,
+            self.pending_actions,
+        )
+        self.assertEqual("action", authorization["kind"])
+        self.assertEqual("records.delete", authorization["action"])
+
+        allowed = evaluate_payload({**first, "turn_id": "turn-2"}, self.engine)
+        self.assertEqual("allow_report", allowed["decision"])
+
+        wrong_target = evaluate_payload(
+            {**first, "turn_id": "turn-2", "tool_input": {"mode": "delete", "id": "automation-456"}},
+            self.engine,
+        )
+        self.assertEqual("require_capability", wrong_target["decision"])
+
+    def test_cancelled_automation_delete_cannot_be_approved_later(self):
+        denied = process_payload(
+            {
+                "tool_name": "mcp__codex_app__automation_update",
+                "session_id": "cancelled-automation-session",
+                "turn_id": "turn-1",
+                "tool_input": {"mode": "delete", "id": "automation-123"},
+            },
+            self.engine,
+            pending_store=self.pending,
+            pending_action_store=self.pending_actions,
+        )
+        self.assertEqual("block", denied["decision"])
+
+        cancelled = authorize_prompt(
+            {"session_id": "cancelled-automation-session", "turn_id": "turn-2", "prompt": "not yet"},
+            self.store,
+            self.pending,
+            self.pending_actions,
+        )
+        self.assertIsNone(cancelled)
+
+        authorization = authorize_prompt(
+            {"session_id": "cancelled-automation-session", "turn_id": "turn-3", "prompt": "approve"},
+            self.store,
+            self.pending,
+            self.pending_actions,
+        )
+        self.assertIsNone(authorization)
 
     def test_codex_automation_tool_fails_closed_without_a_known_operation(self):
         decision = evaluate_payload(
