@@ -1,0 +1,31 @@
+{
+  "description": "Non-active Safe YOLO 2.0 candidate. Replace placeholders only through operator maintenance after pilot proof.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 /home/dev/.safe-yolo/bootstrap.py --release /home/dev/.safe-yolo/releases/2.0.0-alpha.1 --manifest-sha256 REPLACE_AFTER_INSTALL --entry codex_v2 --state-dir /home/dev/.safe-yolo/state",
+            "timeout": 10,
+            "statusMessage": "Checking direct Safe YOLO consequences"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "request_user_input",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 /home/dev/.safe-yolo/bootstrap.py --release /home/dev/.safe-yolo/releases/2.0.0-alpha.1 --manifest-sha256 REPLACE_AFTER_INSTALL --entry codex_v2 --state-dir /home/dev/.safe-yolo/state",
+            "timeout": 10,
+            "statusMessage": "Recording exact Safe YOLO approval"
+          }
+        ]
+      }
+    ]
+  }
+}

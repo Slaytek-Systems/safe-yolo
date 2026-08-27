@@ -11,6 +11,7 @@ import sys
 
 ENTRYPOINTS = {
     "codex": "adapters/codex.py",
+    "codex_v2": "adapters/codex_v2.py",
     "prompt": "adapters/codex_prompt.py",
     "cursor": "adapters/cursor.py",
     "cursor_prompt": "adapters/cursor_prompt.py",

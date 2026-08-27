@@ -32,6 +32,15 @@ class ReleaseToolTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             verified_entry(self.release, "codex", expected_manifest_hash=manifest_digest(self.release))
 
+    def test_verified_release_exposes_v2_codex_entry(self):
+        build_manifest(self.release)
+        entry = verified_entry(
+            self.release,
+            "codex_v2",
+            expected_manifest_hash=manifest_digest(self.release),
+        )
+        self.assertEqual((self.release / "adapters" / "codex_v2.py").resolve(), entry)
+
     def test_doctor_reports_healthy_codex_wiring(self):
         build_manifest(self.release)
         digest = manifest_digest(self.release)
