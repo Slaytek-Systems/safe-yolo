@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from adapters.codex_v2 import approval_request_from_denial, handle_post_tool, handle_pre_tool
-from engine.approvals_v2 import ApprovalLedger
+from engine.approvals_v2 import ApprovalLedger, _digest
 from engine.consequences_v2 import ConsequenceKernel
 
 
@@ -115,6 +115,47 @@ class V2ApprovalJourneyTests(unittest.TestCase):
         self.assertTrue(handle_post_tool(self._approval(approval_input), self.ledger))
         self.assertIsNone(handle_pre_tool(action, self.kernel, self.ledger))
         self.assertIsNotNone(handle_pre_tool(action, self.kernel, self.ledger))
+
+    def test_repeated_same_action_reuses_one_pending_request(self):
+        action = self._bash("rm obsolete.txt")
+        first_input = approval_request_from_denial(
+            handle_pre_tool(action, self.kernel, self.ledger)
+        )
+        unanswered = self._approval(first_input)
+        unanswered["tool_response"] = {"answers": {}}
+        self.assertFalse(handle_post_tool(unanswered, self.ledger))
+
+        repeated_input = approval_request_from_denial(
+            handle_pre_tool(action, self.kernel, self.ledger)
+        )
+
+        self.assertEqual(first_input, repeated_input)
+        self.assertEqual(1, len(list(self.ledger.pending.glob("*.json"))))
+
+    def test_explicit_decision_closes_duplicate_same_action_requests(self):
+        action = self._bash("rm obsolete.txt")
+        approval_input = approval_request_from_denial(
+            handle_pre_tool(action, self.kernel, self.ledger)
+        )
+        original_path = next(self.ledger.pending.glob("*.json"))
+        duplicate_record = json.loads(original_path.read_text(encoding="utf-8"))
+        duplicate_input = json.loads(json.dumps(approval_input))
+        duplicate_id = "legacy-duplicate-request"
+        duplicate_input["questions"][0]["question"] = duplicate_input["questions"][0][
+            "question"
+        ].replace(duplicate_record["id"], duplicate_id)
+        duplicate_record["id"] = duplicate_id
+        duplicate_record["approval_input_hash"] = _digest(duplicate_input)
+        self.ledger._write(
+            self.ledger.pending / f"{duplicate_id}.json",
+            duplicate_record,
+        )
+
+        self.assertFalse(
+            handle_post_tool(self._approval(approval_input, answer="Reject"), self.ledger)
+        )
+        self.assertFalse(handle_post_tool(self._approval(duplicate_input), self.ledger))
+        self.assertEqual([], list(self.ledger.pending.glob("*.json")))
 
     def test_approval_does_not_authorize_an_altered_action(self):
         original = self._bash("rm obsolete.txt")

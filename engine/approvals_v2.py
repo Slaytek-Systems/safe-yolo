@@ -97,13 +97,79 @@ class ApprovalLedger:
         session_id, turn_id = self._scope(payload)
         if not session_id or not turn_id:
             raise ValueError("Approval requests require session_id and turn_id.")
-        request_id = secrets.token_urlsafe(18)
         fingerprint = self.action_fingerprint(payload)
+        now = time.time()
+        with self._locked():
+            self._prune_locked(now)
+            candidates = sorted(
+                self.pending.glob("*.json"),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            ) if self.pending.exists() else []
+            matches: list[tuple[Path, dict[str, Any]]] = []
+            for target in candidates:
+                record = self._read(target)
+                if record is None:
+                    continue
+                if (
+                    record.get("session_id") == session_id
+                    and record.get("turn_id") == turn_id
+                    and record.get("fingerprint") == fingerprint
+                    and record.get("consequence") == consequence
+                    and record.get("expires_at", 0) > now
+                    and not record.get("consumed_at")
+                ):
+                    matches.append((target, record))
+            if matches:
+                _, record = matches[0]
+                for duplicate, _ in matches[1:]:
+                    duplicate.unlink(missing_ok=True)
+                tool_input = self._approval_input(
+                    request_id=str(record.get("id") or ""),
+                    fingerprint=fingerprint,
+                    consequence=consequence,
+                    display=display,
+                )
+                if (
+                    not record.get("id")
+                    or record.get("approval_input_hash") != _digest(tool_input)
+                ):
+                    raise ValueError("Pending approval request does not match the current action.")
+                return tool_input
+
+            request_id = secrets.token_urlsafe(18)
+            tool_input = self._approval_input(
+                request_id=request_id,
+                fingerprint=fingerprint,
+                consequence=consequence,
+                display=display,
+            )
+            record = {
+                "id": request_id,
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "fingerprint": fingerprint,
+                "consequence": consequence,
+                "approval_input_hash": _digest(tool_input),
+                "issued_at": now,
+                "expires_at": now + self.pending_ttl_seconds,
+            }
+            self._write(self.pending / f"{request_id}.json", record)
+        return tool_input
+
+    @staticmethod
+    def _approval_input(
+        *,
+        request_id: str,
+        fingerprint: str,
+        consequence: str,
+        display: str,
+    ) -> dict[str, Any]:
         question = (
             f"Approve one exact retry for {consequence}: {display}? "
             f"Request {request_id}; action fingerprint {fingerprint}."
         )
-        tool_input = {
+        return {
             "questions": [
                 {
                     "header": "Safe YOLO",
@@ -115,28 +181,13 @@ class ApprovalLedger:
                             "description": "Permit one identical retry in this task turn.",
                         },
                         {
-                            "label": "Reject",
+                            "label": REJECT_ANSWER,
                             "description": "Keep the consequential action blocked.",
                         },
                     ],
                 }
             ]
         }
-        now = time.time()
-        record = {
-            "id": request_id,
-            "session_id": session_id,
-            "turn_id": turn_id,
-            "fingerprint": fingerprint,
-            "consequence": consequence,
-            "approval_input_hash": _digest(tool_input),
-            "issued_at": now,
-            "expires_at": now + self.pending_ttl_seconds,
-        }
-        with self._locked():
-            self._prune_locked(now)
-            self._write(self.pending / f"{request_id}.json", record)
-        return tool_input
 
     @staticmethod
     def _approval_answer(response: Any) -> str | None:
@@ -189,7 +240,7 @@ class ApprovalLedger:
             answer = self._approval_answer(payload.get("tool_response"))
             if answer is None:
                 return False
-            target.unlink(missing_ok=True)
+            self._close_action_requests_locked(record)
             if answer != APPROVAL_ANSWER:
                 return False
             receipt_id = secrets.token_urlsafe(18)
@@ -205,6 +256,20 @@ class ApprovalLedger:
             self._write(self.approved / f"{receipt_id}.json", receipt)
             return True
         return False
+
+    def _close_action_requests_locked(self, selected: dict[str, Any]) -> None:
+        if not self.pending.exists():
+            return
+        for target in self.pending.glob("*.json"):
+            record = self._read(target)
+            if record is None:
+                continue
+            if (
+                record.get("session_id") == selected.get("session_id")
+                and record.get("turn_id") == selected.get("turn_id")
+                and record.get("fingerprint") == selected.get("fingerprint")
+            ):
+                target.unlink(missing_ok=True)
 
     def consume_approval(self, payload: dict[str, Any]) -> bool:
         with self._locked():
