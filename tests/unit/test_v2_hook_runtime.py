@@ -142,6 +142,16 @@ class V2HookRuntimeTests(unittest.TestCase):
                 separators=(",", ":"),
             ),
         }
+        unanswered = dict(approval)
+        unanswered["tool_response"] = json.dumps(
+            {"answers": {}},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        retained = self._run(command, unanswered)
+        self.assertEqual(0, retained.returncode, retained.stderr)
+        self.assertEqual("", retained.stdout)
+
         recorded = self._run(command, approval)
         self.assertEqual(0, recorded.returncode, recorded.stderr)
         self.assertIn("one exact retry approval", recorded.stdout)

@@ -12,6 +12,7 @@ from typing import Any
 
 
 APPROVAL_ANSWER = "Approve once (Recommended)"
+REJECT_ANSWER = "Reject"
 QUESTION_ID = "safe_yolo_approval"
 
 
@@ -26,11 +27,22 @@ def _digest(value: Any) -> str:
 class ApprovalLedger:
     """Host-local, one-shot approvals bound to an exact tool action."""
 
-    def __init__(self, root: str | Path, *, ttl_seconds: int = 5 * 60) -> None:
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        pending_ttl_seconds: int = 30 * 60,
+        receipt_ttl_seconds: int = 5 * 60,
+        ttl_seconds: int | None = None,
+    ) -> None:
         self.root = Path(root).expanduser().resolve(strict=False)
         self.pending = self.root / "pending-v2"
         self.approved = self.root / "approved-v2"
-        self.ttl_seconds = ttl_seconds
+        if ttl_seconds is not None:
+            pending_ttl_seconds = ttl_seconds
+            receipt_ttl_seconds = ttl_seconds
+        self.pending_ttl_seconds = pending_ttl_seconds
+        self.receipt_ttl_seconds = receipt_ttl_seconds
 
     @staticmethod
     def action_fingerprint(payload: dict[str, Any]) -> str:
@@ -119,7 +131,7 @@ class ApprovalLedger:
             "consequence": consequence,
             "approval_input_hash": _digest(tool_input),
             "issued_at": now,
-            "expires_at": now + self.ttl_seconds,
+            "expires_at": now + self.pending_ttl_seconds,
         }
         with self._locked():
             self._prune_locked(now)
@@ -127,21 +139,26 @@ class ApprovalLedger:
         return tool_input
 
     @staticmethod
-    def _approved_answer(response: Any) -> bool:
+    def _approval_answer(response: Any) -> str | None:
         if isinstance(response, str):
             try:
                 response = json.loads(response)
             except json.JSONDecodeError:
-                return False
+                return None
         if not isinstance(response, dict):
-            return False
+            return None
         answers = response.get("answers")
         if not isinstance(answers, dict):
-            return False
+            return None
         selected = answers.get(QUESTION_ID)
         if not isinstance(selected, dict):
-            return False
-        return selected.get("answers") == [APPROVAL_ANSWER]
+            return None
+        values = selected.get("answers")
+        if values == [APPROVAL_ANSWER]:
+            return APPROVAL_ANSWER
+        if values == [REJECT_ANSWER]:
+            return REJECT_ANSWER
+        return None
 
     def approve_from_tool(self, payload: dict[str, Any]) -> bool:
         if str(payload.get("tool_name") or "").lower() != "request_user_input":
@@ -169,8 +186,11 @@ class ApprovalLedger:
                 or record.get("consumed_at")
             ):
                 continue
+            answer = self._approval_answer(payload.get("tool_response"))
+            if answer is None:
+                return False
             target.unlink(missing_ok=True)
-            if not self._approved_answer(payload.get("tool_response")):
+            if answer != APPROVAL_ANSWER:
                 return False
             receipt_id = secrets.token_urlsafe(18)
             receipt = {
@@ -180,7 +200,7 @@ class ApprovalLedger:
                 "fingerprint": record["fingerprint"],
                 "consequence": record["consequence"],
                 "issued_at": now,
-                "expires_at": now + self.ttl_seconds,
+                "expires_at": now + self.receipt_ttl_seconds,
             }
             self._write(self.approved / f"{receipt_id}.json", receipt)
             return True

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from engine.approvals_v2 import ApprovalLedger
+from engine.approvals_v2 import APPROVAL_ANSWER, ApprovalLedger
 from engine.consequences_v2 import ConsequenceKernel
 
 
@@ -90,7 +90,9 @@ def handle_pre_tool(
     encoded = json.dumps(tool_input, sort_keys=True, separators=(",", ":"))
     return _deny(
         f"Safe YOLO approval required [{decision.consequence}]: {decision.display}. "
-        "Call request_user_input exactly once with the following JSON, then retry the identical action.\n"
+        "Call request_user_input with the following JSON. Retry the identical action only when "
+        f"the response explicitly selects {APPROVAL_ANSWER}. If it returns empty answers, present "
+        "the same JSON again; the action remains blocked.\n"
         f"{APPROVAL_MARKER}{encoded}"
     )
 
