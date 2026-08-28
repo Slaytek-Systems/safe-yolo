@@ -8,15 +8,16 @@ An approval-eligible action follows one contract:
 
 1. deny the first attempt;
 2. ask the person through Codex `request_user_input` with a sanitized action summary and exact fingerprint;
-3. record the host-observed answer without exposing a token to the model;
-4. allow one identical retry in the same task turn;
-5. consume the receipt.
+3. retain the same pending request when Codex returns empty answers, so the identical prompt can be presented again;
+4. record an explicit host-observed approval without exposing a token to the model;
+5. allow one identical retry in the same task turn;
+6. consume the receipt.
 
 Credential access and modification of the enforcement surface are operator-only. They never offer an in-task approval route.
 
 ## Status
 
-`2.0.0-alpha.2` is the current source candidate. Repository state does not prove installation or activation; hosts install immutable releases through separately reviewed operator maintenance. Earlier immutable releases and the legacy engine/adapters remain available for rollback and comparison.
+`2.0.0-alpha.3` is the current source candidate. Repository state does not prove installation or activation; hosts install immutable releases through separately reviewed operator maintenance. Earlier immutable releases and the legacy engine/adapters remain available for rollback and comparison.
 
 ## Candidate implementation
 

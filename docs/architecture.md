@@ -36,9 +36,9 @@ The direct recognizers are deliberately narrow. Composition such as wrappers, sc
 
 `PreToolUse` fingerprints the canonical tuple of tool name, tool input, and working directory. The first consequential attempt stores only the fingerprint, consequence, task/turn scope, expiry, and hash of the expected `request_user_input` arguments. Raw tool input is not persisted.
 
-The denial tells the agent to call `request_user_input` with exact arguments. A `PostToolUse` hook observes both those arguments and the host-produced response. Only the currently observed Codex Desktop shape—one exact recommended answer in the nested answer list—mints a receipt.
+The denial tells the agent to call `request_user_input` with exact arguments. A repeated attempt for the same action reuses that task/turn-bound request rather than minting a duplicate. A `PostToolUse` hook observes both those arguments and the host-produced response. Only the currently observed Codex Desktop shape—one exact recommended answer in the nested answer list—mints a receipt. Any explicit decision closes every same-action pending record before rejection or receipt creation. Empty, missing, or malformed answers mint nothing and retain the same pending request so the exact prompt can be presented again.
 
-The receipt remains in host-local state, is scoped to the same task and turn, expires after five minutes, matches one exact action fingerprint, and is consumed by one retry. It is never returned to the model.
+The pending request remains in host-local state for up to thirty minutes and is scoped to the same task and turn. The receipt expires after five minutes, matches one exact action fingerprint, and is consumed by one retry. Neither is returned to the model.
 
 Codex hooks cannot currently turn a `PreToolUse` denial directly into an approval prompt. The blocked attempt followed by ask and retry is therefore intentional.
 

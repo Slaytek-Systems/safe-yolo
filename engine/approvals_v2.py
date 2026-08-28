@@ -12,6 +12,7 @@ from typing import Any
 
 
 APPROVAL_ANSWER = "Approve once (Recommended)"
+REJECT_ANSWER = "Reject"
 QUESTION_ID = "safe_yolo_approval"
 
 
@@ -26,11 +27,22 @@ def _digest(value: Any) -> str:
 class ApprovalLedger:
     """Host-local, one-shot approvals bound to an exact tool action."""
 
-    def __init__(self, root: str | Path, *, ttl_seconds: int = 5 * 60) -> None:
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        pending_ttl_seconds: int = 30 * 60,
+        receipt_ttl_seconds: int = 5 * 60,
+        ttl_seconds: int | None = None,
+    ) -> None:
         self.root = Path(root).expanduser().resolve(strict=False)
         self.pending = self.root / "pending-v2"
         self.approved = self.root / "approved-v2"
-        self.ttl_seconds = ttl_seconds
+        if ttl_seconds is not None:
+            pending_ttl_seconds = ttl_seconds
+            receipt_ttl_seconds = ttl_seconds
+        self.pending_ttl_seconds = pending_ttl_seconds
+        self.receipt_ttl_seconds = receipt_ttl_seconds
 
     @staticmethod
     def action_fingerprint(payload: dict[str, Any]) -> str:
@@ -85,13 +97,79 @@ class ApprovalLedger:
         session_id, turn_id = self._scope(payload)
         if not session_id or not turn_id:
             raise ValueError("Approval requests require session_id and turn_id.")
-        request_id = secrets.token_urlsafe(18)
         fingerprint = self.action_fingerprint(payload)
+        now = time.time()
+        with self._locked():
+            self._prune_locked(now)
+            candidates = sorted(
+                self.pending.glob("*.json"),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            ) if self.pending.exists() else []
+            matches: list[tuple[Path, dict[str, Any]]] = []
+            for target in candidates:
+                record = self._read(target)
+                if record is None:
+                    continue
+                if (
+                    record.get("session_id") == session_id
+                    and record.get("turn_id") == turn_id
+                    and record.get("fingerprint") == fingerprint
+                    and record.get("consequence") == consequence
+                    and record.get("expires_at", 0) > now
+                    and not record.get("consumed_at")
+                ):
+                    matches.append((target, record))
+            if matches:
+                _, record = matches[0]
+                for duplicate, _ in matches[1:]:
+                    duplicate.unlink(missing_ok=True)
+                tool_input = self._approval_input(
+                    request_id=str(record.get("id") or ""),
+                    fingerprint=fingerprint,
+                    consequence=consequence,
+                    display=display,
+                )
+                if (
+                    not record.get("id")
+                    or record.get("approval_input_hash") != _digest(tool_input)
+                ):
+                    raise ValueError("Pending approval request does not match the current action.")
+                return tool_input
+
+            request_id = secrets.token_urlsafe(18)
+            tool_input = self._approval_input(
+                request_id=request_id,
+                fingerprint=fingerprint,
+                consequence=consequence,
+                display=display,
+            )
+            record = {
+                "id": request_id,
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "fingerprint": fingerprint,
+                "consequence": consequence,
+                "approval_input_hash": _digest(tool_input),
+                "issued_at": now,
+                "expires_at": now + self.pending_ttl_seconds,
+            }
+            self._write(self.pending / f"{request_id}.json", record)
+        return tool_input
+
+    @staticmethod
+    def _approval_input(
+        *,
+        request_id: str,
+        fingerprint: str,
+        consequence: str,
+        display: str,
+    ) -> dict[str, Any]:
         question = (
             f"Approve one exact retry for {consequence}: {display}? "
             f"Request {request_id}; action fingerprint {fingerprint}."
         )
-        tool_input = {
+        return {
             "questions": [
                 {
                     "header": "Safe YOLO",
@@ -103,45 +181,35 @@ class ApprovalLedger:
                             "description": "Permit one identical retry in this task turn.",
                         },
                         {
-                            "label": "Reject",
+                            "label": REJECT_ANSWER,
                             "description": "Keep the consequential action blocked.",
                         },
                     ],
                 }
             ]
         }
-        now = time.time()
-        record = {
-            "id": request_id,
-            "session_id": session_id,
-            "turn_id": turn_id,
-            "fingerprint": fingerprint,
-            "consequence": consequence,
-            "approval_input_hash": _digest(tool_input),
-            "issued_at": now,
-            "expires_at": now + self.ttl_seconds,
-        }
-        with self._locked():
-            self._prune_locked(now)
-            self._write(self.pending / f"{request_id}.json", record)
-        return tool_input
 
     @staticmethod
-    def _approved_answer(response: Any) -> bool:
+    def _approval_answer(response: Any) -> str | None:
         if isinstance(response, str):
             try:
                 response = json.loads(response)
             except json.JSONDecodeError:
-                return False
+                return None
         if not isinstance(response, dict):
-            return False
+            return None
         answers = response.get("answers")
         if not isinstance(answers, dict):
-            return False
+            return None
         selected = answers.get(QUESTION_ID)
         if not isinstance(selected, dict):
-            return False
-        return selected.get("answers") == [APPROVAL_ANSWER]
+            return None
+        values = selected.get("answers")
+        if values == [APPROVAL_ANSWER]:
+            return APPROVAL_ANSWER
+        if values == [REJECT_ANSWER]:
+            return REJECT_ANSWER
+        return None
 
     def approve_from_tool(self, payload: dict[str, Any]) -> bool:
         if str(payload.get("tool_name") or "").lower() != "request_user_input":
@@ -169,8 +237,11 @@ class ApprovalLedger:
                 or record.get("consumed_at")
             ):
                 continue
-            target.unlink(missing_ok=True)
-            if not self._approved_answer(payload.get("tool_response")):
+            answer = self._approval_answer(payload.get("tool_response"))
+            if answer is None:
+                return False
+            self._close_action_requests_locked(record)
+            if answer != APPROVAL_ANSWER:
                 return False
             receipt_id = secrets.token_urlsafe(18)
             receipt = {
@@ -180,11 +251,25 @@ class ApprovalLedger:
                 "fingerprint": record["fingerprint"],
                 "consequence": record["consequence"],
                 "issued_at": now,
-                "expires_at": now + self.ttl_seconds,
+                "expires_at": now + self.receipt_ttl_seconds,
             }
             self._write(self.approved / f"{receipt_id}.json", receipt)
             return True
         return False
+
+    def _close_action_requests_locked(self, selected: dict[str, Any]) -> None:
+        if not self.pending.exists():
+            return
+        for target in self.pending.glob("*.json"):
+            record = self._read(target)
+            if record is None:
+                continue
+            if (
+                record.get("session_id") == selected.get("session_id")
+                and record.get("turn_id") == selected.get("turn_id")
+                and record.get("fingerprint") == selected.get("fingerprint")
+            ):
+                target.unlink(missing_ok=True)
 
     def consume_approval(self, payload: dict[str, Any]) -> bool:
         with self._locked():
