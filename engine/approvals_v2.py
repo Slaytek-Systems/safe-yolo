@@ -128,6 +128,11 @@ class ApprovalLedger:
 
     @staticmethod
     def _approved_answer(response: Any) -> bool:
+        if isinstance(response, str):
+            try:
+                response = json.loads(response)
+            except json.JSONDecodeError:
+                return False
         if not isinstance(response, dict):
             return False
         answers = response.get("answers")
