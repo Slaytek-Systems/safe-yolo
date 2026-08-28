@@ -130,13 +130,17 @@ class V2HookRuntimeTests(unittest.TestCase):
             "cwd": "/workspace",
             "tool_name": "request_user_input",
             "tool_input": approval_input,
-            "tool_response": {
-                "answers": {
-                    "safe_yolo_approval": {
-                        "answers": ["Approve once (Recommended)"],
+            "tool_response": json.dumps(
+                {
+                    "answers": {
+                        "safe_yolo_approval": {
+                            "answers": ["Approve once (Recommended)"],
+                        }
                     }
-                }
-            },
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
         }
         recorded = self._run(command, approval)
         self.assertEqual(0, recorded.returncode, recorded.stderr)

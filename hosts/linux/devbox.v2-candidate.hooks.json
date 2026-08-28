@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 /home/dev/.safe-yolo/bootstrap.py --release /home/dev/.safe-yolo/releases/2.0.0-alpha.1 --manifest-sha256 REPLACE_AFTER_INSTALL --entry codex_v2 --state-dir /home/dev/.safe-yolo/state",
+            "command": "/usr/bin/python3 /home/dev/.safe-yolo/bootstrap.py --release /home/dev/.safe-yolo/releases/2.0.0-alpha.2 --manifest-sha256 REPLACE_AFTER_INSTALL --entry codex_v2 --state-dir /home/dev/.safe-yolo/state",
             "timeout": 10,
             "statusMessage": "Checking direct Safe YOLO consequences"
           }
@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 /home/dev/.safe-yolo/bootstrap.py --release /home/dev/.safe-yolo/releases/2.0.0-alpha.1 --manifest-sha256 REPLACE_AFTER_INSTALL --entry codex_v2 --state-dir /home/dev/.safe-yolo/state",
+            "command": "/usr/bin/python3 /home/dev/.safe-yolo/bootstrap.py --release /home/dev/.safe-yolo/releases/2.0.0-alpha.2 --manifest-sha256 REPLACE_AFTER_INSTALL --entry codex_v2 --state-dir /home/dev/.safe-yolo/state",
             "timeout": 10,
             "statusMessage": "Recording exact Safe YOLO approval"
           }

@@ -16,7 +16,7 @@ Credential access and modification of the enforcement surface are operator-only.
 
 ## Status
 
-`2.0.0-alpha.1` is a source candidate only. It is not installed or active on any host. The installed 1.x runtime and the legacy engine/adapters in this repository remain untouched for rollback and comparison.
+`2.0.0-alpha.2` is the current source candidate. Repository state does not prove installation or activation; hosts install immutable releases through separately reviewed operator maintenance. Earlier immutable releases and the legacy engine/adapters remain available for rollback and comparison.
 
 ## Candidate implementation
 

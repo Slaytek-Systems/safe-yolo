@@ -81,6 +81,21 @@ class V2ApprovalJourneyTests(unittest.TestCase):
             json.dumps(approval_request_from_denial(denied_again), sort_keys=True),
         )
 
+    def test_codex_encoded_approval_response_allows_one_identical_retry(self):
+        action = self._bash("rm obsolete.txt")
+        denied = handle_pre_tool(action, self.kernel, self.ledger)
+        approval_input = approval_request_from_denial(denied)
+        approval = self._approval(approval_input)
+        approval["tool_response"] = json.dumps(
+            approval["tool_response"],
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+        self.assertTrue(handle_post_tool(approval, self.ledger))
+        self.assertIsNone(handle_pre_tool(action, self.kernel, self.ledger))
+        self.assertIsNotNone(handle_pre_tool(action, self.kernel, self.ledger))
+
     def test_approval_does_not_authorize_an_altered_action(self):
         original = self._bash("rm obsolete.txt")
         denied = handle_pre_tool(original, self.kernel, self.ledger)

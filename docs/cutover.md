@@ -15,7 +15,7 @@ After the operator installs and wires the pilot, prove both the immutable releas
 
 ```sh
 python3 scripts/doctor.py \
-  --release /home/dev/.safe-yolo/releases/2.0.0-alpha.1 \
+  --release /home/dev/.safe-yolo/releases/2.0.0-alpha.2 \
   --manifest-sha256 MANIFEST_SHA256 \
   --codex-config /home/dev/.codex/config.toml \
   --codex-hooks /home/dev/.codex/hooks.json \
@@ -28,9 +28,9 @@ The v2 doctor requires one `PreToolUse` command matched to `*` and one `PostTool
 ## Deferred parity debt
 
 - Cursor has no 2.0 adapter or ask-user receipt proof.
-- Codex CLI/TUI response shapes have not been observed; only Codex Desktop is accepted by the candidate parser.
+- Codex 0.150.1 was observed returning the `request_user_input` result as one JSON-encoded string. The candidate accepts either the direct object or exactly one decoded object; other response shapes remain unproved.
 - Hooks cannot directly request approval, so one deny → ask → retry round trip remains.
 - New semantic tools do not carry host-owned consequence metadata; unknown tools default to allow.
-- The installed 1.x runtime remains active until a separately authorized pilot, review, recovery, and operator cutover complete.
+- Host activation remains separate from repository state; each host keeps its prior immutable release until its separately authorized review, recovery, and operator cutover complete.
 
 All installation and hook changes are operator-maintenance actions. A governed Codex session may inspect source and health but cannot replace its own enforcement runtime.
