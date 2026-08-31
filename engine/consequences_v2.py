@@ -310,7 +310,7 @@ class ConsequenceKernel:
         if not args:
             return False
         if args[0] == "push":
-            args = [args[0], *ConsequenceKernel._shell_segment(args[1:])]
+            args = [args[0], *ConsequenceKernel._push_args_before_heredoc(args[1:])]
             return any(
                 token in {
                     "-f",
@@ -368,9 +368,9 @@ class ConsequenceKernel:
         return remaining
 
     @staticmethod
-    def _shell_segment(tokens: list[str]) -> list[str]:
+    def _push_args_before_heredoc(tokens: list[str]) -> list[str]:
         for index, token in enumerate(tokens):
-            if token in {"&&", "||", ";", "|", "|&", "&"}:
+            if token == "<<" or token.startswith("<<"):
                 return tokens[:index]
         return tokens
 
@@ -417,7 +417,9 @@ class ConsequenceKernel:
     def _git_display(args: list[str]) -> str:
         if args and args[0] == "push":
             targets = [
-                token for token in ConsequenceKernel._shell_segment(args[1:]) if not token.startswith("-")
+                token
+                for token in ConsequenceKernel._push_args_before_heredoc(args[1:])
+                if not token.startswith("-")
             ]
             return "git push to " + (" ".join(targets) if targets else "configured remote/ref")
         return "git " + " ".join(args[:2])

@@ -70,7 +70,7 @@ class V2ConsequenceKernelTests(unittest.TestCase):
                 self.assertEqual("approval_required", decision.outcome)
                 self.assertEqual(consequence, decision.consequence)
 
-    def test_safe_push_stops_scanning_at_following_control_flow(self):
+    def test_safe_push_stops_scanning_at_heredoc_payload(self):
         decision = self._shell(
             "git push origin HEAD:feature/safe && gh pr create --body-file - <<'EOF'\n"
             "Summary\n"
@@ -80,19 +80,30 @@ class V2ConsequenceKernelTests(unittest.TestCase):
 
         self.assertEqual("allow", decision.outcome)
 
-    def test_git_push_force_detection_stops_at_shell_control_tokens(self):
-        for token in ("&&", "||", ";", "|", "|&", "&"):
-            with self.subTest(token=token):
-                force_before = self._shell(
-                    f"git push origin +topic/main:topic/main {token} echo safe"
-                )
-                self.assertEqual("approval_required", force_before.outcome)
-                self.assertEqual("git push to origin +topic/main:topic/main", force_before.display)
+    def test_git_push_force_detection_stops_at_heredoc_tokens(self):
+        for marker in ("<<EOF", "<< EOF", "<<'EOF'"):
+            with self.subTest(marker=marker):
                 decision = self._shell(
-                    f"git push origin HEAD:topic/main {token} echo +topic/main:topic/main"
+                    f"git push origin HEAD:topic/main {marker}\n"
+                    "+topic/main:topic/main\n"
+                    "EOF"
                 )
                 self.assertEqual("allow", decision.outcome)
                 self.assertIsNone(decision.display)
+
+    def test_git_push_force_detection_keeps_force_tokens_before_heredoc(self):
+        cases = (
+            ("git push origin '&&' --force-with-lease <<EOF\nsafe\nEOF", "git push to origin &&"),
+            ("git push origin '&&' +topic/main:topic/main <<EOF\nsafe\nEOF", "git push to origin && +topic/main:topic/main"),
+            ("git push origin HEAD:topic/main &&keep --force-with-lease <<EOF\nsafe\nEOF", "git push to origin HEAD:topic/main &&keep"),
+            ("git push origin :topic/main <<EOF\nsafe\nEOF", "git push to origin :topic/main"),
+        )
+        for command, display in cases:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual("git.history_mutation", decision.consequence)
+                self.assertEqual(display, decision.display)
 
     def test_structured_delete_is_approval_eligible(self):
         for payload in (
