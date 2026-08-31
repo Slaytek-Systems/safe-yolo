@@ -141,6 +141,22 @@ class V2ConsequenceKernelTests(unittest.TestCase):
                 self.assertEqual("approval_required", decision.outcome)
                 self.assertEqual("git.history_mutation", decision.consequence)
 
+    def test_git_push_unterminated_heredoc_falls_back_to_original_args(self):
+        cases = (
+            "git push origin HEAD:topic/main <<EOF\nsafe\n--force-with-lease",
+            "git push origin HEAD:topic/main << EOF\nsafe\n+topic/main:topic/main",
+        )
+        for command in cases:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual("git.history_mutation", decision.consequence)
+
+    def test_git_push_literal_hash_delimiter_keeps_post_declaration_force_flag(self):
+        decision = self._shell("git push origin HEAD:topic/main << # --force-with-lease\nsafe\n#")
+        self.assertEqual("approval_required", decision.outcome)
+        self.assertEqual("git.history_mutation", decision.consequence)
+
     def test_structured_delete_is_approval_eligible(self):
         for payload in (
             {"tool_name": "delete_file", "tool_input": {"path": "/workspace/obsolete.py"}},

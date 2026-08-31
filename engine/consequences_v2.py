@@ -369,6 +369,8 @@ class ConsequenceKernel:
 
     @staticmethod
     def _git_push_args_without_heredoc_bodies(command: str, args: list[str]) -> list[str]:
+        if "<<" not in command:
+            return args
         kept: list[str] = []
         delimiter: str | None = None
         strip_tabs = False
@@ -377,6 +379,7 @@ class ConsequenceKernel:
                 kept.append(line)
                 lexer = shlex.shlex(line, posix=True, punctuation_chars="<>|&;")
                 lexer.whitespace_split = True
+                lexer.commenters = ""
                 tokens = list(lexer)
                 for index, token in enumerate(tokens[:-1]):
                     if token == "<<":
@@ -388,6 +391,8 @@ class ConsequenceKernel:
             if (line.lstrip("\t") if strip_tabs else line) == delimiter:
                 delimiter = None
                 strip_tabs = False
+        if delimiter is not None:
+            return args
         masked = "\n".join(kept)
         if masked == command:
             return args
