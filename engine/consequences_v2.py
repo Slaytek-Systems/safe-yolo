@@ -310,6 +310,7 @@ class ConsequenceKernel:
         if not args:
             return False
         if args[0] == "push":
+            args = [args[0], *ConsequenceKernel._shell_segment(args[1:])]
             return any(
                 token in {
                     "-f",
@@ -367,6 +368,13 @@ class ConsequenceKernel:
         return remaining
 
     @staticmethod
+    def _shell_segment(tokens: list[str]) -> list[str]:
+        for index, token in enumerate(tokens):
+            if token in {"&&", "||", ";", "|", "|&", "&"}:
+                return tokens[:index]
+        return tokens
+
+    @staticmethod
     def _ssh_host(args: list[str]) -> str:
         options_with_values = {
             "-B",
@@ -408,7 +416,9 @@ class ConsequenceKernel:
     @staticmethod
     def _git_display(args: list[str]) -> str:
         if args and args[0] == "push":
-            targets = [token for token in args[1:] if not token.startswith("-")]
+            targets = [
+                token for token in ConsequenceKernel._shell_segment(args[1:]) if not token.startswith("-")
+            ]
             return "git push to " + (" ".join(targets) if targets else "configured remote/ref")
         return "git " + " ".join(args[:2])
 

@@ -70,6 +70,30 @@ class V2ConsequenceKernelTests(unittest.TestCase):
                 self.assertEqual("approval_required", decision.outcome)
                 self.assertEqual(consequence, decision.consequence)
 
+    def test_safe_push_stops_scanning_at_following_control_flow(self):
+        decision = self._shell(
+            "git push origin HEAD:feature/safe && gh pr create --body-file - <<'EOF'\n"
+            "Summary\n"
+            "+1 ms\n"
+            "EOF"
+        )
+
+        self.assertEqual("allow", decision.outcome)
+
+    def test_git_push_force_detection_stops_at_shell_control_tokens(self):
+        for token in ("&&", "||", ";", "|", "|&", "&"):
+            with self.subTest(token=token):
+                force_before = self._shell(
+                    f"git push origin +topic/main:topic/main {token} echo safe"
+                )
+                self.assertEqual("approval_required", force_before.outcome)
+                self.assertEqual("git push to origin +topic/main:topic/main", force_before.display)
+                decision = self._shell(
+                    f"git push origin HEAD:topic/main {token} echo +topic/main:topic/main"
+                )
+                self.assertEqual("allow", decision.outcome)
+                self.assertIsNone(decision.display)
+
     def test_structured_delete_is_approval_eligible(self):
         for payload in (
             {"tool_name": "delete_file", "tool_input": {"path": "/workspace/obsolete.py"}},
