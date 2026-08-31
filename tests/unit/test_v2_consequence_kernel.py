@@ -23,7 +23,6 @@ class V2ConsequenceKernelTests(unittest.TestCase):
             "curl http://127.0.0.1:3000/health",
             "bunx unknown-package --help",
             "docker ps",
-            "git status && rm obsolete.txt",
             "git clean --dry-run",
             "git clean -n",
         )
@@ -206,6 +205,71 @@ class V2ConsequenceKernelTests(unittest.TestCase):
         self.assertIn("production.example.com", remote.display)
         self.assertNotIn("to 2222", remote.display)
 
+    def test_compound_push_and_pr_body_with_plus_text_stays_allowed(self):
+        command = self._feature_push_with_pr_body("+1 ms", separator="&&")
+
+        decision = self._shell(command)
+
+        self.assertEqual("allow", decision.outcome)
+        self.assertIsNone(decision.consequence)
+
+    def test_shell_invocation_boundaries_classify_later_simple_commands(self):
+        cases = (
+            (
+                self._feature_push_with_pr_body("+1 ms", separator="\n"),
+                "allow",
+                None,
+            ),
+            (
+                self._feature_push_with_pr_body("+1 ms", separator=";"),
+                "allow",
+                None,
+            ),
+            (
+                self._feature_push_with_pr_body("+1 ms", separator="|"),
+                "allow",
+                None,
+            ),
+            (
+                "git push origin HEAD:refs/heads/feature/safe-yolo ; "
+                "printf '%s\n' '+1 ms'",
+                "allow",
+                None,
+            ),
+            (
+                "git status && rm obsolete.txt",
+                "approval_required",
+                "filesystem.delete",
+            ),
+            (
+                "git push origin HEAD:refs/heads/feature/safe-yolo\n"
+                "gh pr merge 123",
+                "approval_required",
+                "production.mutate",
+            ),
+            (
+                "printf ready ; git push origin :feature/safe-yolo",
+                "approval_required",
+                "git.history_mutation",
+            ),
+            (
+                "git push origin +main:main",
+                "approval_required",
+                "git.history_mutation",
+            ),
+            (
+                "git push origin HEAD:refs/heads/feature/safe-yolo && "
+                "printf 'unterminated",
+                "allow",
+                None,
+            ),
+        )
+        for command, outcome, consequence in cases:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual(outcome, decision.outcome)
+                self.assertEqual(consequence, decision.consequence)
+
     def test_credential_dump_is_operator_only(self):
         for command in (
             "env",
@@ -259,6 +323,18 @@ class V2ConsequenceKernelTests(unittest.TestCase):
     def _shell(self, command):
         return self.kernel.evaluate(
             {"tool_name": "Bash", "tool_input": {"command": command}}
+        )
+
+    @staticmethod
+    def _feature_push_with_pr_body(body_line, *, separator):
+        return (
+            "git push origin HEAD:refs/heads/feature/safe-yolo "
+            f"{separator} "
+            "gh pr create --base main --head feature/safe-yolo "
+            "--title 'safe-yolo' --body-file - <<'EOF'\n"
+            "Summary\n\n"
+            f"{body_line}\n"
+            "EOF"
         )
 
 

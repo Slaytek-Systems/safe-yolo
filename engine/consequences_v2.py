@@ -16,6 +16,13 @@ class Decision:
     display: str | None = None
 
 
+@dataclass(frozen=True)
+class ShellInvocation:
+    executable: str
+    argv: tuple[str, ...]
+    source_span: tuple[int, int]
+
+
 class ConsequenceKernel:
     """Minimal direct-tool consequence detector.
 
@@ -151,13 +158,19 @@ class ConsequenceKernel:
         return False
 
     def _shell(self, command: str, cwd: Path) -> Decision:
-        try:
-            tokens = shlex.split(command, posix=True)
-        except ValueError:
+        invocations = self._shell_invocations(command)
+        if invocations is None:
             return Decision("allow")
-        if not tokens:
-            return Decision("allow")
-        executable = Path(tokens[0]).name
+        best = Decision("allow")
+        for invocation in invocations:
+            decision = self._shell_invocation_decision(invocation, cwd)
+            if self._decision_rank(decision) > self._decision_rank(best):
+                best = decision
+        return best
+
+    def _shell_invocation_decision(self, invocation: ShellInvocation, cwd: Path) -> Decision:
+        tokens = list(invocation.argv)
+        executable = invocation.executable
         token_paths, redirects_output = self._shell_paths(tokens[1:], cwd)
         if any(self._inside(path, self.credential_paths) for path in token_paths):
             return Decision(
@@ -229,6 +242,184 @@ class ConsequenceKernel:
                 "bind a development service to a public interface",
             )
         return Decision("allow")
+
+    @classmethod
+    def _shell_invocations(cls, command: str) -> tuple[ShellInvocation, ...] | None:
+        invocations: list[ShellInvocation] = []
+        pending_heredocs: list[tuple[str, bool]] = []
+        segment_start = 0
+        quote: str | None = None
+        index = 0
+        while index < len(command):
+            char = command[index]
+            if quote is not None:
+                if char == "\\" and quote == '"' and index + 1 < len(command):
+                    index += 2
+                    continue
+                if char == quote:
+                    quote = None
+                index += 1
+                continue
+            if char == "\\":
+                index += 2 if index + 1 < len(command) else 1
+                continue
+            if char in {"'", '"'}:
+                quote = char
+                index += 1
+                continue
+            heredoc = cls._heredoc_delimiter(command, index)
+            if heredoc is not None:
+                pending_heredocs.append((heredoc[0], heredoc[1]))
+                index += heredoc[2]
+                continue
+            separator = cls._shell_separator(command, index)
+            if separator is None:
+                index += 1
+                continue
+            invocation = cls._build_invocation(command, segment_start, index)
+            if invocation is None and command[segment_start:index].strip():
+                return None
+            if invocation is not None:
+                invocations.append(invocation)
+            index += separator[1]
+            if separator[0] == "newline" and pending_heredocs:
+                index = cls._consume_heredoc_bodies(command, index, pending_heredocs)
+                pending_heredocs.clear()
+            segment_start = index
+        if quote is not None:
+            return None
+        invocation = cls._build_invocation(command, segment_start, len(command))
+        if invocation is None and command[segment_start:].strip():
+            return None
+        if invocation is not None:
+            invocations.append(invocation)
+        return tuple(invocations)
+
+    @staticmethod
+    def _decision_rank(decision: Decision) -> tuple[int, int]:
+        outcome_rank = {
+            "allow": 0,
+            "approval_required": 1,
+            "operator_only": 2,
+        }
+        consequence_rank = {
+            None: 0,
+            "filesystem.delete": 1,
+            "git.history_mutation": 2,
+            "network.public_exposure": 3,
+            "remote.execute": 4,
+            "privilege.modify": 5,
+            "production.mutate": 6,
+            "enforcement.modify": 7,
+            "credentials.access": 8,
+        }
+        return (
+            outcome_rank[decision.outcome],
+            consequence_rank.get(decision.consequence, 0),
+        )
+
+    @staticmethod
+    def _shell_separator(command: str, index: int) -> tuple[str, int] | None:
+        if command.startswith("&&", index):
+            return ("and", 2)
+        if command.startswith("||", index):
+            return ("or", 2)
+        if command[index] == ";":
+            return ("semicolon", 1)
+        if command[index] == "|":
+            return ("pipe", 1)
+        if command[index] == "\n":
+            return ("newline", 1)
+        return None
+
+    @classmethod
+    def _build_invocation(
+        cls,
+        command: str,
+        start: int,
+        end: int,
+    ) -> ShellInvocation | None:
+        segment = command[start:end]
+        stripped = segment.strip()
+        if not stripped:
+            return None
+        trimmed_start = start + len(segment) - len(segment.lstrip())
+        trimmed_end = end - (len(segment) - len(segment.rstrip()))
+        try:
+            argv = tuple(shlex.split(command[trimmed_start:trimmed_end], posix=True))
+        except ValueError:
+            return None
+        if not argv:
+            return None
+        return ShellInvocation(
+            executable=Path(argv[0]).name,
+            argv=argv,
+            source_span=(trimmed_start, trimmed_end),
+        )
+
+    @classmethod
+    def _heredoc_delimiter(cls, command: str, index: int) -> tuple[str, bool, int] | None:
+        if not command.startswith("<<", index):
+            return None
+        cursor = index + 2
+        strip_tabs = cursor < len(command) and command[cursor] == "-"
+        if strip_tabs:
+            cursor += 1
+        while cursor < len(command) and command[cursor] in {" ", "\t"}:
+            cursor += 1
+        start = cursor
+        quote: str | None = None
+        while cursor < len(command):
+            char = command[cursor]
+            if quote is not None:
+                if char == "\\" and quote == '"' and cursor + 1 < len(command):
+                    cursor += 2
+                    continue
+                if char == quote:
+                    quote = None
+                cursor += 1
+                continue
+            if char in {"'", '"'}:
+                quote = char
+                cursor += 1
+                continue
+            if char in {" ", "\t", "\n", ";", "|", "&", "<", ">"}:
+                break
+            if char == "\\" and cursor + 1 < len(command):
+                cursor += 2
+                continue
+            cursor += 1
+        if quote is not None or start == cursor:
+            return None
+        try:
+            parsed = shlex.split(command[start:cursor], posix=True)
+        except ValueError:
+            return None
+        if len(parsed) != 1 or not parsed[0]:
+            return None
+        return parsed[0], strip_tabs, cursor - index
+
+    @staticmethod
+    def _consume_heredoc_bodies(
+        command: str,
+        index: int,
+        pending_heredocs: list[tuple[str, bool]],
+    ) -> int:
+        cursor = index
+        for delimiter, strip_tabs in pending_heredocs:
+            while cursor < len(command):
+                newline = command.find("\n", cursor)
+                if newline < 0:
+                    line = command[cursor:]
+                    cursor = len(command)
+                else:
+                    line = command[cursor:newline]
+                    cursor = newline + 1
+                if strip_tabs:
+                    line = line.lstrip("\t")
+                if line == delimiter:
+                    break
+        return cursor
 
     @classmethod
     def _shell_paths(
