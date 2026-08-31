@@ -151,6 +151,7 @@ class ConsequenceKernel:
         return False
 
     def _shell(self, command: str, cwd: Path) -> Decision:
+        command = self._mask_direct_git_push_heredoc_body(command)
         try:
             tokens = shlex.split(command, posix=True)
         except ValueError:
@@ -367,6 +368,59 @@ class ConsequenceKernel:
         return remaining
 
     @staticmethod
+    def _mask_direct_git_push_heredoc_body(command: str) -> str:
+        if "<<" not in command or "\n" not in command:
+            return command
+        normalized = command.replace("\\\n", "") if "\\\n" in command else command
+        declaration_end = normalized.find("\n")
+        if declaration_end < 0:
+            return command
+        try:
+            tokens = ConsequenceKernel._line_tokens(normalized[:declaration_end])
+        except ValueError:
+            return command
+        if not tokens or Path(tokens[0]).name != "git":
+            return command
+        if ConsequenceKernel._git_command_args(tokens[1:])[:1] != ["push"]:
+            return command
+        delimiter = ConsequenceKernel._heredoc_delimiter(tokens)
+        if delimiter is None:
+            return command
+        marker, strip_tabs = delimiter
+        body_start = declaration_end + 1
+        offset = body_start
+        while True:
+            newline = normalized.find("\n", offset)
+            line_end = len(normalized) if newline < 0 else newline
+            line = normalized[offset:line_end]
+            if (line.lstrip("\t") if strip_tabs else line) == marker:
+                suffix_start = line_end + 1
+                return (
+                    normalized[: body_start - 1]
+                    if suffix_start >= len(normalized)
+                    else normalized[:body_start] + normalized[suffix_start:]
+                )
+            if newline < 0:
+                return command
+            offset = newline + 1
+
+    @staticmethod
+    def _line_tokens(line: str) -> list[str]:
+        lexer = shlex.shlex(line, posix=True, punctuation_chars="<>|&;")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        return list(lexer)
+
+    @staticmethod
+    def _heredoc_delimiter(tokens: list[str]) -> tuple[str, bool] | None:
+        for index, token in enumerate(tokens[:-1]):
+            if token == "<<":
+                delimiter = tokens[index + 1]
+                strip_tabs = delimiter.startswith("-") and len(delimiter) > 1
+                return (delimiter[1:] if strip_tabs else delimiter), strip_tabs
+        return None
+
+    @staticmethod
     def _ssh_host(args: list[str]) -> str:
         options_with_values = {
             "-B",
@@ -408,7 +462,11 @@ class ConsequenceKernel:
     @staticmethod
     def _git_display(args: list[str]) -> str:
         if args and args[0] == "push":
-            targets = [token for token in args[1:] if not token.startswith("-")]
+            targets = [
+                token
+                for token in args[1:]
+                if not token.startswith("-")
+            ]
             return "git push to " + (" ".join(targets) if targets else "configured remote/ref")
         return "git " + " ".join(args[:2])
 

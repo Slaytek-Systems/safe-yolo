@@ -109,6 +109,25 @@ class V2HookRuntimeTests(unittest.TestCase):
                     denial["hookSpecificOutput"]["permissionDecisionReason"],
                 )
 
+    def test_executable_hook_does_not_crash_on_backslash_continued_heredoc_declaration(self):
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "session_id": "session-heredoc",
+            "turn_id": "turn-heredoc",
+            "cwd": "/workspace",
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": "git push origin HEAD:topic/main <<EOF \\\n--force-with-lease\nsafe\nEOF"
+            },
+        }
+
+        result = self._run(self.direct_command, payload)
+        self.assertEqual(0, result.returncode, result.stderr)
+        denial = json.loads(result.stdout)
+        reason = denial["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("git.history_mutation", reason)
+        self.assertIn("SAFE_YOLO_REQUEST_USER_INPUT=", reason)
+
     def _assert_block_ask_approve_retry(self, command):
         action = {
             "hook_event_name": "PreToolUse",

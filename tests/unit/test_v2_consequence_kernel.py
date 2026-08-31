@@ -70,6 +70,100 @@ class V2ConsequenceKernelTests(unittest.TestCase):
                 self.assertEqual("approval_required", decision.outcome)
                 self.assertEqual(consequence, decision.consequence)
 
+    def test_safe_push_stops_scanning_at_heredoc_payload(self):
+        decision = self._shell(
+            "git push origin HEAD:feature/safe && gh pr create --body-file - <<'EOF'\n"
+            "Summary\n"
+            "+1 ms\n"
+            "EOF"
+        )
+
+        self.assertEqual("allow", decision.outcome)
+
+    def test_git_push_force_detection_stops_at_heredoc_tokens(self):
+        for marker in ("<<EOF", "<< EOF", "<<'EOF'", "<<-EOF"):
+            with self.subTest(marker=marker):
+                decision = self._shell(
+                    f"git push origin HEAD:topic/main {marker}\n"
+                    "+topic/main:topic/main\n"
+                    "EOF"
+                )
+                self.assertEqual("allow", decision.outcome)
+                self.assertIsNone(decision.display)
+
+    def test_git_push_force_detection_keeps_force_tokens_before_heredoc(self):
+        cases = (
+            ("git push origin '&&' --force-with-lease <<EOF\nsafe\nEOF", "git push to origin && <<EOF"),
+            ("git push origin '&&' +topic/main:topic/main <<EOF\nsafe\nEOF", "git push to origin && +topic/main:topic/main <<EOF"),
+            ("git push origin HEAD:topic/main &&keep --force-with-lease <<EOF\nsafe\nEOF", "git push to origin HEAD:topic/main &&keep <<EOF"),
+            ("git push origin :topic/main <<EOF\nsafe\nEOF", "git push to origin :topic/main <<EOF"),
+        )
+        for command, display in cases:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual("git.history_mutation", decision.consequence)
+                self.assertEqual(display, decision.display)
+
+    def test_git_push_split_delimiter_keeps_post_declaration_force_and_refspec(self):
+        cases = (
+            "git push origin HEAD:topic/main << EOF --force-with-lease\nsafe\nEOF",
+            "git push origin HEAD:topic/main << EOF :topic/main\nsafe\nEOF",
+        )
+        for command in cases:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual("git.history_mutation", decision.consequence)
+
+    def test_git_push_here_strings_do_not_hide_force_flags(self):
+        cases = (
+            "git push origin HEAD:topic/main <<< '+1 ms' --force-with-lease",
+            "git push origin HEAD:topic/main <<<word --force-with-lease",
+            "git push origin HEAD:topic/main <<<<EOF --force-with-lease",
+        )
+        for command in cases:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual("git.history_mutation", decision.consequence)
+
+    def test_git_push_quoted_heredoc_like_args_do_not_hide_force_or_refspec(self):
+        cases = (
+            "git push origin '<<EOF' --force-with-lease topic",
+            "git push origin '<<-EOF' --force-with-lease topic",
+            'git push origin "<<EOF" +topic/main:topic/main',
+            r"git push origin \<<EOF --force-with-lease topic",
+        )
+        for command in cases:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual("git.history_mutation", decision.consequence)
+
+    def test_git_push_unterminated_heredoc_falls_back_to_original_args(self):
+        cases = (
+            "git push origin HEAD:topic/main <<EOF\nsafe\n--force-with-lease",
+            "git push origin HEAD:topic/main << EOF\nsafe\n+topic/main:topic/main",
+        )
+        for command in cases:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual("git.history_mutation", decision.consequence)
+
+    def test_git_push_literal_hash_delimiter_keeps_post_declaration_force_flag(self):
+        decision = self._shell("git push origin HEAD:topic/main << # --force-with-lease\nsafe\n#")
+        self.assertEqual("approval_required", decision.outcome)
+        self.assertEqual("git.history_mutation", decision.consequence)
+
+    def test_git_push_backslash_continued_heredoc_declaration_keeps_force_flag(self):
+        decision = self._shell(
+            "git push origin HEAD:topic/main <<EOF \\\n--force-with-lease\nsafe\nEOF"
+        )
+        self.assertEqual("approval_required", decision.outcome)
+        self.assertEqual("git.history_mutation", decision.consequence)
+
     def test_structured_delete_is_approval_eligible(self):
         for payload in (
             {"tool_name": "delete_file", "tool_input": {"path": "/workspace/obsolete.py"}},
