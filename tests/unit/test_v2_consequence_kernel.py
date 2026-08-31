@@ -157,6 +157,13 @@ class V2ConsequenceKernelTests(unittest.TestCase):
         self.assertEqual("approval_required", decision.outcome)
         self.assertEqual("git.history_mutation", decision.consequence)
 
+    def test_git_push_backslash_continued_heredoc_declaration_keeps_force_flag(self):
+        decision = self._shell(
+            "git push origin HEAD:topic/main <<EOF \\\n--force-with-lease\nsafe\nEOF"
+        )
+        self.assertEqual("approval_required", decision.outcome)
+        self.assertEqual("git.history_mutation", decision.consequence)
+
     def test_structured_delete_is_approval_eligible(self):
         for payload in (
             {"tool_name": "delete_file", "tool_input": {"path": "/workspace/obsolete.py"}},

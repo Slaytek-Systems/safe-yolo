@@ -369,33 +369,45 @@ class ConsequenceKernel:
 
     @staticmethod
     def _git_push_args_without_heredoc_bodies(command: str, args: list[str]) -> list[str]:
-        if "<<" not in command:
+        if "<<" not in command or "\n" not in command:
             return args
-        kept: list[str] = []
+        command = command.replace("\\\n", "") if "\\\n" in command else command
         delimiter: str | None = None
         strip_tabs = False
-        for line in command.splitlines():
+        body_start = 0
+        offset = 0
+        masked = ""
+        while True:
+            newline = command.find("\n", offset)
+            line_end = len(command) if newline < 0 else newline
+            line = command[offset:line_end]
             if delimiter is None:
-                kept.append(line)
                 lexer = shlex.shlex(line, posix=True, punctuation_chars="<>|&;")
                 lexer.whitespace_split = True
                 lexer.commenters = ""
-                tokens = list(lexer)
+                try:
+                    tokens = list(lexer)
+                except ValueError:
+                    return args
                 for index, token in enumerate(tokens[:-1]):
                     if token == "<<":
                         delimiter = tokens[index + 1]
                         strip_tabs = delimiter.startswith("-") and len(delimiter) > 1
                         delimiter = delimiter[1:] if strip_tabs else delimiter
+                        body_start = line_end + 1
                         break
-                continue
-            if (line.lstrip("\t") if strip_tabs else line) == delimiter:
+            elif (line.lstrip("\t") if strip_tabs else line) == delimiter:
+                suffix_start = line_end + 1
+                masked = (
+                    command[: body_start - 1]
+                    if suffix_start >= len(command)
+                    else command[:body_start] + command[suffix_start:]
+                )
                 delimiter = None
-                strip_tabs = False
-        if delimiter is not None:
-            return args
-        masked = "\n".join(kept)
-        if masked == command:
-            return args
+                break
+            if newline < 0:
+                return args
+            offset = newline + 1
         try:
             masked_args = ConsequenceKernel._git_command_args(shlex.split(masked, posix=True)[1:])
         except ValueError:
