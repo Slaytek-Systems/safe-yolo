@@ -93,10 +93,10 @@ class V2ConsequenceKernelTests(unittest.TestCase):
 
     def test_git_push_force_detection_keeps_force_tokens_before_heredoc(self):
         cases = (
-            ("git push origin '&&' --force-with-lease <<EOF\nsafe\nEOF", "git push to origin &&"),
-            ("git push origin '&&' +topic/main:topic/main <<EOF\nsafe\nEOF", "git push to origin && +topic/main:topic/main"),
-            ("git push origin HEAD:topic/main &&keep --force-with-lease <<EOF\nsafe\nEOF", "git push to origin HEAD:topic/main &&keep"),
-            ("git push origin :topic/main <<EOF\nsafe\nEOF", "git push to origin :topic/main"),
+            ("git push origin '&&' --force-with-lease <<EOF\nsafe\nEOF", "git push to origin && <<EOF"),
+            ("git push origin '&&' +topic/main:topic/main <<EOF\nsafe\nEOF", "git push to origin && +topic/main:topic/main <<EOF"),
+            ("git push origin HEAD:topic/main &&keep --force-with-lease <<EOF\nsafe\nEOF", "git push to origin HEAD:topic/main &&keep <<EOF"),
+            ("git push origin :topic/main <<EOF\nsafe\nEOF", "git push to origin :topic/main <<EOF"),
         )
         for command, display in cases:
             with self.subTest(command=command):
@@ -105,11 +105,35 @@ class V2ConsequenceKernelTests(unittest.TestCase):
                 self.assertEqual("git.history_mutation", decision.consequence)
                 self.assertEqual(display, decision.display)
 
+    def test_git_push_split_delimiter_keeps_post_declaration_force_and_refspec(self):
+        cases = (
+            "git push origin HEAD:topic/main << EOF --force-with-lease\nsafe\nEOF",
+            "git push origin HEAD:topic/main << EOF :topic/main\nsafe\nEOF",
+        )
+        for command in cases:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual("git.history_mutation", decision.consequence)
+
     def test_git_push_here_strings_do_not_hide_force_flags(self):
         cases = (
             "git push origin HEAD:topic/main <<< '+1 ms' --force-with-lease",
             "git push origin HEAD:topic/main <<<word --force-with-lease",
             "git push origin HEAD:topic/main <<<<EOF --force-with-lease",
+        )
+        for command in cases:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual("git.history_mutation", decision.consequence)
+
+    def test_git_push_quoted_heredoc_like_args_do_not_hide_force_or_refspec(self):
+        cases = (
+            "git push origin '<<EOF' --force-with-lease topic",
+            "git push origin '<<-EOF' --force-with-lease topic",
+            'git push origin "<<EOF" +topic/main:topic/main',
+            r"git push origin \<<EOF --force-with-lease topic",
         )
         for command in cases:
             with self.subTest(command=command):

@@ -197,6 +197,7 @@ class ConsequenceKernel:
             display = "delete " + (", ".join(targets) if targets else "filesystem targets")
             return Decision("approval_required", "filesystem.delete", display)
         git_args = self._git_command_args(tokens[1:]) if executable == "git" else []
+        git_args = self._git_push_args_without_heredoc_bodies(command, git_args) if git_args[:1] == ["push"] else git_args
         if executable == "git" and self._git_history_mutation(git_args):
             return Decision(
                 "approval_required",
@@ -310,7 +311,6 @@ class ConsequenceKernel:
         if not args:
             return False
         if args[0] == "push":
-            args = [args[0], *ConsequenceKernel._push_args_before_heredoc(args[1:])]
             return any(
                 token in {
                     "-f",
@@ -368,13 +368,34 @@ class ConsequenceKernel:
         return remaining
 
     @staticmethod
-    def _push_args_before_heredoc(tokens: list[str]) -> list[str]:
-        for index, token in enumerate(tokens):
-            if token == "<<" or (
-                token.startswith("<<") and len(token) > 2 and token[2] != "<"
-            ):
-                return tokens[:index]
-        return tokens
+    def _git_push_args_without_heredoc_bodies(command: str, args: list[str]) -> list[str]:
+        kept: list[str] = []
+        delimiter: str | None = None
+        strip_tabs = False
+        for line in command.splitlines():
+            if delimiter is None:
+                kept.append(line)
+                lexer = shlex.shlex(line, posix=True, punctuation_chars="<>|&;")
+                lexer.whitespace_split = True
+                tokens = list(lexer)
+                for index, token in enumerate(tokens[:-1]):
+                    if token == "<<":
+                        delimiter = tokens[index + 1]
+                        strip_tabs = delimiter.startswith("-") and len(delimiter) > 1
+                        delimiter = delimiter[1:] if strip_tabs else delimiter
+                        break
+                continue
+            if (line.lstrip("\t") if strip_tabs else line) == delimiter:
+                delimiter = None
+                strip_tabs = False
+        masked = "\n".join(kept)
+        if masked == command:
+            return args
+        try:
+            masked_args = ConsequenceKernel._git_command_args(shlex.split(masked, posix=True)[1:])
+        except ValueError:
+            return args
+        return masked_args if masked_args[:1] == ["push"] else args
 
     @staticmethod
     def _ssh_host(args: list[str]) -> str:
@@ -420,7 +441,7 @@ class ConsequenceKernel:
         if args and args[0] == "push":
             targets = [
                 token
-                for token in ConsequenceKernel._push_args_before_heredoc(args[1:])
+                for token in args[1:]
                 if not token.startswith("-")
             ]
             return "git push to " + (" ".join(targets) if targets else "configured remote/ref")
