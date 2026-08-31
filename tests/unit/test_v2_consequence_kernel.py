@@ -81,7 +81,7 @@ class V2ConsequenceKernelTests(unittest.TestCase):
         self.assertEqual("allow", decision.outcome)
 
     def test_git_push_force_detection_stops_at_heredoc_tokens(self):
-        for marker in ("<<EOF", "<< EOF", "<<'EOF'"):
+        for marker in ("<<EOF", "<< EOF", "<<'EOF'", "<<-EOF"):
             with self.subTest(marker=marker):
                 decision = self._shell(
                     f"git push origin HEAD:topic/main {marker}\n"
@@ -104,6 +104,18 @@ class V2ConsequenceKernelTests(unittest.TestCase):
                 self.assertEqual("approval_required", decision.outcome)
                 self.assertEqual("git.history_mutation", decision.consequence)
                 self.assertEqual(display, decision.display)
+
+    def test_git_push_here_strings_do_not_hide_force_flags(self):
+        cases = (
+            "git push origin HEAD:topic/main <<< '+1 ms' --force-with-lease",
+            "git push origin HEAD:topic/main <<<word --force-with-lease",
+            "git push origin HEAD:topic/main <<<<EOF --force-with-lease",
+        )
+        for command in cases:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual("git.history_mutation", decision.consequence)
 
     def test_structured_delete_is_approval_eligible(self):
         for payload in (

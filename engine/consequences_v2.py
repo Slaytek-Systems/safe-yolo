@@ -370,7 +370,9 @@ class ConsequenceKernel:
     @staticmethod
     def _push_args_before_heredoc(tokens: list[str]) -> list[str]:
         for index, token in enumerate(tokens):
-            if token == "<<" or token.startswith("<<"):
+            if token == "<<" or (
+                token.startswith("<<") and len(token) > 2 and token[2] != "<"
+            ):
                 return tokens[:index]
         return tokens
 
