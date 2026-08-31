@@ -249,11 +249,12 @@ class ConsequenceKernel:
         pending_heredocs: list[tuple[str, bool]] = []
         segment_start = 0
         quote: str | None = None
+        nesting: list[tuple[str, int]] = []
         index = 0
         while index < len(command):
             char = command[index]
             if quote is not None:
-                if char == "\\" and quote == '"' and index + 1 < len(command):
+                if char == "\\" and quote in {'"', "`"} and index + 1 < len(command):
                     index += 2
                     continue
                 if char == quote:
@@ -263,7 +264,15 @@ class ConsequenceKernel:
             if char == "\\":
                 index += 2 if index + 1 < len(command) else 1
                 continue
-            if char in {"'", '"'}:
+            nested_start = cls._nested_start(command, index)
+            if nested_start is not None:
+                nesting.append(nested_start[0])
+                index = nested_start[1]
+                continue
+            if nesting:
+                nesting, index = cls._advance_nested_state(command, index, nesting)
+                continue
+            if char in {"'", '"', "`"}:
                 quote = char
                 index += 1
                 continue
@@ -276,23 +285,17 @@ class ConsequenceKernel:
             if separator is None:
                 index += 1
                 continue
-            invocation = cls._build_invocation(command, segment_start, index)
-            if invocation is None and command[segment_start:index].strip():
-                return None
-            if invocation is not None:
-                invocations.append(invocation)
+            if not cls._append_invocation(invocations, command, segment_start, index):
+                return tuple(invocations) if invocations else None
             index += separator[1]
             if separator[0] == "newline" and pending_heredocs:
                 index = cls._consume_heredoc_bodies(command, index, pending_heredocs)
                 pending_heredocs.clear()
             segment_start = index
-        if quote is not None:
-            return None
-        invocation = cls._build_invocation(command, segment_start, len(command))
-        if invocation is None and command[segment_start:].strip():
-            return None
-        if invocation is not None:
-            invocations.append(invocation)
+        if quote is not None or nesting or pending_heredocs:
+            return tuple(invocations) if invocations else None
+        if not cls._append_invocation(invocations, command, segment_start, len(command)):
+            return tuple(invocations) if invocations else None
         return tuple(invocations)
 
     @staticmethod
@@ -324,13 +327,31 @@ class ConsequenceKernel:
             return ("and", 2)
         if command.startswith("||", index):
             return ("or", 2)
+        if command.startswith("|&", index):
+            return ("pipe_stderr", 2)
         if command[index] == ";":
             return ("semicolon", 1)
         if command[index] == "|":
             return ("pipe", 1)
+        if command[index] == "&":
+            return ("background", 1)
         if command[index] == "\n":
             return ("newline", 1)
         return None
+
+    @classmethod
+    def _append_invocation(
+        cls,
+        invocations: list[ShellInvocation],
+        command: str,
+        start: int,
+        end: int,
+    ) -> bool:
+        invocation = cls._build_invocation(command, start, end)
+        if invocation is None:
+            return not command[start:end].strip()
+        invocations.append(invocation)
+        return True
 
     @classmethod
     def _build_invocation(
@@ -359,7 +380,11 @@ class ConsequenceKernel:
 
     @classmethod
     def _heredoc_delimiter(cls, command: str, index: int) -> tuple[str, bool, int] | None:
-        if not command.startswith("<<", index):
+        if (
+            not command.startswith("<<", index)
+            or command.startswith("<<<", index)
+            or (index > 0 and command[index - 1] == "<")
+        ):
             return None
         cursor = index + 2
         strip_tabs = cursor < len(command) and command[cursor] == "-"
@@ -398,6 +423,65 @@ class ConsequenceKernel:
         if len(parsed) != 1 or not parsed[0]:
             return None
         return parsed[0], strip_tabs, cursor - index
+
+    @staticmethod
+    def _nested_start(
+        command: str,
+        index: int,
+    ) -> tuple[tuple[str, int], int] | None:
+        if command.startswith("$((", index):
+            return ("arith", 1), index + 3
+        if command.startswith("$(", index):
+            return ("command", 1), index + 2
+        if command.startswith("${", index):
+            return ("param", 1), index + 2
+        return None
+
+    @staticmethod
+    def _advance_nested_state(
+        command: str,
+        index: int,
+        nesting: list[tuple[str, int]],
+    ) -> tuple[list[tuple[str, int]], int]:
+        kind, depth = nesting[-1]
+        char = command[index]
+        if kind == "command":
+            if char == "(":
+                nesting[-1] = (kind, depth + 1)
+                return nesting, index + 1
+            if char == ")":
+                depth -= 1
+                if depth == 0:
+                    nesting.pop()
+                else:
+                    nesting[-1] = (kind, depth)
+                return nesting, index + 1
+            return nesting, index + 1
+        if kind == "param":
+            if char == "{":
+                nesting[-1] = (kind, depth + 1)
+                return nesting, index + 1
+            if char == "}":
+                depth -= 1
+                if depth == 0:
+                    nesting.pop()
+                else:
+                    nesting[-1] = (kind, depth)
+                return nesting, index + 1
+            return nesting, index + 1
+        if char == "(":
+            nesting[-1] = (kind, depth + 1)
+            return nesting, index + 1
+        if command.startswith("))", index):
+            depth -= 1
+            if depth == 0:
+                nesting.pop()
+            else:
+                nesting[-1] = (kind, depth)
+            return nesting, index + 2
+        if char == ")" and depth > 1:
+            nesting[-1] = (kind, depth - 1)
+        return nesting, index + 1
 
     @staticmethod
     def _consume_heredoc_bodies(

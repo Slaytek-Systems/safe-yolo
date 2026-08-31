@@ -270,6 +270,100 @@ class V2ConsequenceKernelTests(unittest.TestCase):
                 self.assertEqual(outcome, decision.outcome)
                 self.assertEqual(consequence, decision.consequence)
 
+    def test_malformed_later_segment_does_not_erase_earlier_consequence(self):
+        cases = (
+            (
+                "git push origin +main:main && printf 'unterminated",
+                "git.history_mutation",
+            ),
+            (
+                "rm obsolete.txt && printf 'unterminated",
+                "filesystem.delete",
+            ),
+            (
+                "gh pr merge 123 && printf 'unterminated",
+                "production.mutate",
+            ),
+        )
+        for command, consequence in cases:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual(consequence, decision.consequence)
+
+    def test_pipe_and_stderr_separator_classifies_rhs_command(self):
+        cases = (
+            ("printf ready |& rm obsolete.txt", "filesystem.delete"),
+            ("printf ready |& sudo touch /tmp/probe", "privilege.modify"),
+            ("printf ready |& gh pr merge 123", "production.mutate"),
+        )
+        for command, consequence in cases:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual(consequence, decision.consequence)
+
+    def test_here_strings_and_arithmetic_shifts_do_not_enter_heredoc_mode(self):
+        cases = (
+            ("cat <<< 'hello'\nrm obsolete.txt", "filesystem.delete"),
+            ("printf '%s\n' \"$((1 << 2))\"\ngh pr merge 123", "production.mutate"),
+        )
+        for command, consequence in cases:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual(consequence, decision.consequence)
+
+    def test_expansions_suppress_top_level_separator_scanning(self):
+        commands = (
+            "printf %s $(echo hi; rm obsolete.txt)",
+            "printf '%s\n' \"$(echo hi; rm obsolete.txt)\"",
+            "printf '%s\n' `echo hi; gh pr merge 123`",
+            "printf %s ${VALUE:-$(echo hi; rm obsolete.txt)}",
+            "printf '%s\n' \"${VALUE:-$(echo hi; rm obsolete.txt)}\"",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertEqual("allow", self._shell(command).outcome)
+
+    def test_top_level_separator_after_expansion_is_still_classified(self):
+        cases = (
+            (
+                "printf '%s\n' \"$(echo hi; rm ignored.txt)\" ; rm obsolete.txt",
+                "filesystem.delete",
+            ),
+            (
+                "printf '%s\n' `echo hi; rm ignored.txt`\n"
+                "gh pr merge 123",
+                "production.mutate",
+            ),
+        )
+        for command, consequence in cases:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual(consequence, decision.consequence)
+
+    def test_unsupported_grouping_forms_stay_on_documented_default_path(self):
+        commands = (
+            "(rm obsolete.txt)",
+            "{ rm obsolete.txt; }",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertEqual("allow", self._shell(command).outcome)
+
+    def test_background_separator_classifies_direct_commands(self):
+        cases = (
+            ("rm obsolete.txt &", "filesystem.delete"),
+            ("printf ready & gh pr merge 123", "production.mutate"),
+        )
+        for command, consequence in cases:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual(consequence, decision.consequence)
+
     def test_credential_dump_is_operator_only(self):
         for command in (
             "env",
