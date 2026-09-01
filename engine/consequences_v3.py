@@ -49,9 +49,16 @@ class DenyOnlyKernel(ConsequenceKernel):
         command = tool_input.get("command") or tool_input.get("cmd")
         if not isinstance(command, str):
             return False
+        if "\n" in command:
+            return False
         try:
-            tokens = shlex.split(command, posix=True)
+            lexer = shlex.shlex(command, posix=True, punctuation_chars="|&;<>")
+            lexer.whitespace_split = True
+            lexer.commenters = ""
+            tokens = list(lexer)
         except ValueError:
+            return False
+        if any(token and set(token) <= set("|&;<>") for token in tokens):
             return False
         return any(token in {"-h", "--help", "-V", "--version"} for token in tokens[1:])
 

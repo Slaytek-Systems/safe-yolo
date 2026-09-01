@@ -117,6 +117,25 @@ class V3DenyOnlyTests(unittest.TestCase):
                     denial["hookSpecificOutput"]["permissionDecision"],
                 )
 
+    def test_help_flags_cannot_bypass_shell_composition_denials(self):
+        commands = (
+            "rm obsolete.txt ; env --help",
+            "rm obsolete.txt && env --help",
+            "git push --force-with-lease origin topic ; env --help",
+            "ssh example.com ; env --help",
+            "sudo touch /tmp/x ; env --help",
+            "vite --host 0.0.0.0 ; env --help",
+            "rm obsolete.txt\nenv --help",
+        )
+
+        for command in commands:
+            with self.subTest(command=command):
+                denial = handle_pre_tool(self.payload(command), self.kernel)
+                self.assertEqual(
+                    "deny",
+                    denial["hookSpecificOutput"]["permissionDecision"],
+                )
+
     def test_request_user_input_is_not_part_of_the_runtime(self):
         payload = {
             "hook_event_name": "PostToolUse",
