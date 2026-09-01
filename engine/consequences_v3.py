@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import shlex
 from typing import Any, Literal
 
 from engine.consequences_v2 import ConsequenceKernel
@@ -25,12 +26,31 @@ class DenyOnlyKernel(ConsequenceKernel):
     """
 
     def evaluate(self, payload: dict[str, Any]) -> Decision:
+        if self._direct_help_request(payload):
+            return Decision("allow")
         recognized = super().evaluate(payload)
         return Decision(
             "allow" if recognized.outcome == "allow" else "deny",
             recognized.consequence,
             recognized.display,
         )
+
+    @staticmethod
+    def _direct_help_request(payload: dict[str, Any]) -> bool:
+        tool_name = str(payload.get("tool_name") or "").lower()
+        tool_input = payload.get("tool_input")
+        if tool_name not in {"bash", "shell", "exec_command"} or not isinstance(
+            tool_input, dict
+        ):
+            return False
+        command = tool_input.get("command") or tool_input.get("cmd")
+        if not isinstance(command, str):
+            return False
+        try:
+            tokens = shlex.split(command, posix=True)
+        except ValueError:
+            return False
+        return any(token in {"-h", "--help", "-V", "--version"} for token in tokens[1:])
 
     @staticmethod
     def _production_mutation(tokens: list[str]) -> bool:
@@ -53,7 +73,9 @@ class DenyOnlyKernel(ConsequenceKernel):
     @staticmethod
     def _gh_repo_override(args: list[str]) -> bool:
         return any(
-            token in {"-R", "--repo"} or token.startswith("--repo=")
+            token == "--repo"
+            or token.startswith("--repo=")
+            or token.startswith("-R")
             for token in args
         )
 
@@ -66,6 +88,9 @@ class DenyOnlyKernel(ConsequenceKernel):
                 if len(remaining) < 2:
                     return []
                 remaining = remaining[2:]
+                continue
+            if token.startswith("-R") and token != "-R":
+                remaining = remaining[1:]
                 continue
             if token.startswith(("--repo=", "--hostname=")):
                 remaining = remaining[1:]

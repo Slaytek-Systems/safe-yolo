@@ -38,6 +38,11 @@ class V3DenyOnlyTests(unittest.TestCase):
             "git push -u origin fix/safe-yolo",
             "gh pr create --fill",
             "gh pr merge 232 --merge --delete-branch",
+            "gh release create --help",
+            "railway up --help",
+            "kubectl delete --help",
+            "ssh -V",
+            "sudo --version",
             "python3 -m unittest discover -s tests/unit",
         )
 
@@ -60,6 +65,9 @@ class V3DenyOnlyTests(unittest.TestCase):
             "gh pr merge 232 --merge --admin": "production.mutate",
             "gh pr merge 232 --merge --admin=true": "production.mutate",
             "gh -R owner/other pr merge 232 --merge": "production.mutate",
+            "gh -Rowner/other pr merge 232 --merge": "production.mutate",
+            "gh -R=owner/other pr merge 232 --merge": "production.mutate",
+            "gh pr merge 232 -Rowner/other --merge": "production.mutate",
             "gh pr merge 232 --repo=owner/other --merge": "production.mutate",
             "gh release create v3.0.0": "production.mutate",
             "railway up": "production.mutate",

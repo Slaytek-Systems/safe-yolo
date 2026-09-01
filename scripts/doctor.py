@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.release_manifest import verify_manifest
+from scripts.release_manifest import ENTRYPOINTS, verify_manifest
 
 
 def inspect_release(release_dir: str | Path, expected_manifest_hash: str | None = None) -> dict[str, Any]:
@@ -58,6 +58,8 @@ def inspect_codex_wiring(
         entry=entry,
     ):
         problems.append("PreToolUse hook is not pinned to the expected Safe YOLO bootstrap release")
+    if not _release_exposes_entry(release_path, entry):
+        problems.append(f"release does not expose the expected entrypoint: {entry}")
     if approval_post_tool:
         posttool = _command_hooks(hooks, "PostToolUse")
         if len(posttool) != 1 or posttool[0][0] != "request_user_input":
@@ -77,6 +79,22 @@ def inspect_codex_wiring(
     if entry == "codex_v3" and _command_hooks(hooks, "PostToolUse"):
         problems.append("PostToolUse command hooks must be absent for codex_v3")
     return {"healthy": not problems, "problems": problems}
+
+
+def _release_exposes_entry(release_path: str | Path, entry: str) -> bool:
+    expected = ENTRYPOINTS.get(entry)
+    if expected is None:
+        return False
+    release = Path(release_path)
+    try:
+        manifest = json.loads((release / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(manifest.get("entrypoints"), dict)
+        and manifest["entrypoints"].get(entry) == expected
+        and (release / expected).is_file()
+    )
 
 
 def _command_hooks(hooks: Any, event: str) -> list[tuple[str, str]]:

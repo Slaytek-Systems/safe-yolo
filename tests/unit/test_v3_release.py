@@ -51,6 +51,43 @@ class V3ReleaseTests(unittest.TestCase):
 
         self.assertTrue(report["healthy"], report)
 
+        digest = manifest_digest(self.release)
+        config = Path(self.temp.name) / "old-config.toml"
+        hooks = Path(self.temp.name) / "old-hooks.json"
+        config.write_text('approval_policy = "never"\nsandbox_mode = "danger-full-access"\n')
+        command = (
+            f"python3 /safe-yolo/bootstrap.py --release {self.release} "
+            f"--manifest-sha256 {digest} --entry codex_v3"
+        )
+        hooks.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "PreToolUse": [
+                            {
+                                "matcher": "*",
+                                "hooks": [{"type": "command", "command": command}],
+                            }
+                        ]
+                    }
+                }
+            )
+        )
+        wiring = inspect_codex_wiring(
+            config,
+            hooks,
+            "/safe-yolo/bootstrap.py",
+            digest,
+            release_path=self.release,
+            entry="codex_v3",
+        )
+
+        self.assertFalse(wiring["healthy"], wiring)
+        self.assertIn(
+            "release does not expose the expected entrypoint: codex_v3",
+            wiring["problems"],
+        )
+
     def test_doctor_requires_pretool_only_and_rejects_approval_hook(self):
         build_manifest(self.release)
         digest = manifest_digest(self.release)
