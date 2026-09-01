@@ -23,7 +23,7 @@ python3 scripts/doctor.py \
   --entry codex_v3
 ```
 
-The v3 doctor requires one `PreToolUse` command matched to `*`, pinned to the exact bootstrap, manifest hash, and `codex_v3` entrypoint. It rejects a stale `request_user_input` `PostToolUse` hook.
+The v3 doctor requires one `PreToolUse` command matched to `*`, pinned to the exact bootstrap, manifest hash, and `codex_v3` entrypoint. It rejects every stale `PostToolUse` command hook.
 
 ## Deferred parity debt
 

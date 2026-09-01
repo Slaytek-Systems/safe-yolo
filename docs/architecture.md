@@ -13,7 +13,7 @@ The runtime returns exactly two outcomes:
 - `allow` — continue immediately;
 - `deny` — stop the method and name the safer route.
 
-Default is `allow`. Unknown tools are allowed. There is no tool-name registry, script registry, interpreter registry, trusted-path list, shell data-flow analysis, provenance inference, or generic fail-closed classification.
+Default is `allow`. Unknown tools and unreadable hook payloads are allowed because they do not establish an explicit restricted action. There is no tool-name registry, script registry, interpreter registry, trusted-path list, shell data-flow analysis, provenance inference, or generic fail-closed classification.
 
 Restricted direct actions are:
 
@@ -26,7 +26,7 @@ Restricted direct actions are:
 - credential material access or environment-wide credential dumping;
 - modification of Safe YOLO or the hook surface that enforces it.
 
-Protected pull-request merges are ordinary shipping and remain allowed. A bypass such as `gh pr merge --admin` is denied. Direct deployment CLIs remain denied in favor of repository-owned merge and deployment workflows.
+Current-repository pull-request merges are ordinary shipping and remain allowed. Protection bypasses such as `gh pr merge --admin` and cross-repository `-R/--repo` merges are denied. Direct deployment CLIs remain denied in favor of repository-owned merge and deployment workflows.
 
 The direct recognizers are deliberately narrow. Composition such as wrappers, scripts, inline programs, shell chains, or a new semantic tool can route around them. That is an accepted property of backpressure and must not be repaired with another general classifier.
 

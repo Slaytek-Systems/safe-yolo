@@ -58,6 +58,9 @@ class V3DenyOnlyTests(unittest.TestCase):
             "rm obsolete.txt": "filesystem.delete",
             "git push --force-with-lease": "git.history_mutation",
             "gh pr merge 232 --merge --admin": "production.mutate",
+            "gh pr merge 232 --merge --admin=true": "production.mutate",
+            "gh -R owner/other pr merge 232 --merge": "production.mutate",
+            "gh pr merge 232 --repo=owner/other --merge": "production.mutate",
             "railway up": "production.mutate",
             "ssh example.com": "remote.execute",
             "sudo apt update": "privilege.modify",
@@ -78,6 +81,14 @@ class V3DenyOnlyTests(unittest.TestCase):
                 self.assertIn("different safe method", reason)
                 self.assertNotIn("request_user_input", reason)
                 self.assertNotIn("approval", reason.lower())
+
+    def test_kernel_contract_has_only_allow_or_deny_outcomes(self):
+        allowed = self.kernel.evaluate(self.payload("git status --short"))
+        denied = self.kernel.evaluate(self.payload("rm obsolete.txt"))
+
+        self.assertEqual("allow", allowed.outcome)
+        self.assertEqual("deny", denied.outcome)
+        self.assertNotIn(denied.outcome, {"approval_required", "operator_only"})
 
     def test_request_user_input_is_not_part_of_the_runtime(self):
         payload = {
@@ -130,6 +141,22 @@ class V3DenyOnlyTests(unittest.TestCase):
             denial["hookSpecificOutput"]["permissionDecision"],
         )
         self.assertFalse((Path(self.temp.name) / "unused-state").exists())
+
+    def test_unreadable_payload_does_not_invent_a_restriction(self):
+        command = [sys.executable, str(ROOT / "adapters" / "codex_v3.py")]
+
+        for raw_payload in ("", "not-json", "[]"):
+            with self.subTest(raw_payload=raw_payload):
+                result = subprocess.run(
+                    command,
+                    cwd=ROOT,
+                    input=raw_payload,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual("", result.stdout)
 
 
 if __name__ == "__main__":

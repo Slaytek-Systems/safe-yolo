@@ -48,7 +48,7 @@ def build_manifest(release_dir: str | Path) -> dict[str, Any]:
         raise ValueError(f"Release entrypoints missing: {', '.join(missing)}")
     manifest = {
         "version": version,
-        "entrypoints": ENTRYPOINTS,
+        "entrypoints": dict(ENTRYPOINTS),
         "files": {str(path.relative_to(release)): _sha256(path) for path in source_files(release)},
     }
     target = release / MANIFEST_NAME
@@ -82,7 +82,16 @@ def verify_manifest(release_dir: str | Path, expected_manifest_hash: str | None 
             problems.append(f"missing: {relative_path}")
         elif _sha256(path) != expected_hash:
             problems.append(f"hash mismatch: {relative_path}")
-    for name, relative_path in ENTRYPOINTS.items():
-        if manifest.get("entrypoints", {}).get(name) != relative_path:
+    entrypoints = manifest.get("entrypoints")
+    if not isinstance(entrypoints, dict):
+        problems.append("manifest entrypoints entry is invalid")
+        return problems
+    for name, relative_path in entrypoints.items():
+        expected_path = ENTRYPOINTS.get(name)
+        if expected_path is None:
+            problems.append(f"unknown entrypoint: {name}")
+        elif relative_path != expected_path:
             problems.append(f"entrypoint mismatch: {name}")
+        elif not (release / relative_path).is_file():
+            problems.append(f"missing entrypoint: {name}")
     return problems

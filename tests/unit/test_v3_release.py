@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from scripts.bootstrap import verified_entry
-from scripts.doctor import inspect_codex_wiring
+from scripts.doctor import inspect_codex_wiring, inspect_release
 from scripts.install import install_release
 from scripts.release_manifest import build_manifest, manifest_digest
 
@@ -36,6 +36,20 @@ class V3ReleaseTests(unittest.TestCase):
         )
 
         self.assertEqual((self.release / "adapters" / "codex_v3.py").resolve(), entry)
+
+    def test_current_doctor_still_accepts_an_older_verified_release(self):
+        build_manifest(self.release)
+        manifest = json.loads((self.release / "manifest.json").read_text())
+        del manifest["entrypoints"]["codex_v3"]
+        del manifest["files"]["adapters/codex_v3.py"]
+        (self.release / "adapters" / "codex_v3.py").unlink()
+        (self.release / "manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+        )
+
+        report = inspect_release(self.release)
+
+        self.assertTrue(report["healthy"], report)
 
     def test_doctor_requires_pretool_only_and_rejects_approval_hook(self):
         build_manifest(self.release)
@@ -69,7 +83,7 @@ class V3ReleaseTests(unittest.TestCase):
         )
         document["hooks"]["PostToolUse"] = [
             {
-                "matcher": "request_user_input",
+                "matcher": "*",
                 "hooks": [{"type": "command", "command": command}],
             }
         ]
@@ -86,7 +100,7 @@ class V3ReleaseTests(unittest.TestCase):
         self.assertTrue(healthy["healthy"], healthy)
         self.assertFalse(stale["healthy"], stale)
         self.assertIn(
-            "request_user_input PostToolUse hook must be absent for codex_v3",
+            "PostToolUse command hooks must be absent for codex_v3",
             stale["problems"],
         )
 

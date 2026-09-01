@@ -86,7 +86,7 @@ def main() -> int:
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         payload = None
     if not isinstance(payload, dict):
-        response = _deny("Safe YOLO received an unreadable hook payload.")
+        response = None
     else:
         kernel = build_kernel(
             safe_yolo_home=args.safe_yolo_home,
