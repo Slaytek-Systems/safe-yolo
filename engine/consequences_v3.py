@@ -26,9 +26,12 @@ class DenyOnlyKernel(ConsequenceKernel):
     """
 
     def evaluate(self, payload: dict[str, Any]) -> Decision:
-        if self._direct_help_request(payload):
-            return Decision("allow")
         recognized = super().evaluate(payload)
+        if (
+            self._direct_help_request(payload)
+            and recognized.outcome == "approval_required"
+        ):
+            return Decision("allow")
         return Decision(
             "allow" if recognized.outcome == "allow" else "deny",
             recognized.consequence,

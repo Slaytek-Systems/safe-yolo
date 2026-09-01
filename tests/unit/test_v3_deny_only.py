@@ -15,6 +15,7 @@ class V3DenyOnlyTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
+        self.root = root
         self.kernel = build_kernel(
             safe_yolo_home=root / "safe-yolo",
             codex_home=root / "codex",
@@ -98,6 +99,23 @@ class V3DenyOnlyTests(unittest.TestCase):
         self.assertEqual("allow", allowed.outcome)
         self.assertEqual("deny", denied.outcome)
         self.assertNotIn(denied.outcome, {"approval_required", "operator_only"})
+
+    def test_help_flags_cannot_bypass_protected_path_denials(self):
+        commands = (
+            f"env --help >{self.root / 'codex' / 'hooks.json'}",
+            f"printenv --version >{self.root / 'codex' / 'hooks.json'}",
+            f"rm --help >{self.root / 'codex' / 'hooks.json'}",
+            f"env --help >{self.root / 'codex' / 'auth.json'}",
+            f"ssh -V >{self.root / 'home' / '.ssh' / 'probe'}",
+        )
+
+        for command in commands:
+            with self.subTest(command=command):
+                denial = handle_pre_tool(self.payload(command), self.kernel)
+                self.assertEqual(
+                    "deny",
+                    denial["hookSpecificOutput"]["permissionDecision"],
+                )
 
     def test_request_user_input_is_not_part_of_the_runtime(self):
         payload = {
