@@ -19,9 +19,6 @@ def inspect_release(release_dir: str | Path, expected_manifest_hash: str | None 
     problems = verify_manifest(release, expected_manifest_hash)
     version_path = release / "VERSION"
     version = version_path.read_text(encoding="utf-8").strip() if version_path.is_file() else "unknown"
-    for entry in ENTRYPOINTS.values():
-        if not (release / entry).is_file() and f"missing: {entry}" not in problems:
-            problems.append(f"missing: {entry}")
     return {"release": str(release), "version": version, "healthy": not problems, "problems": problems}
 
 
@@ -61,6 +58,8 @@ def inspect_codex_wiring(
         entry=entry,
     ):
         problems.append("PreToolUse hook is not pinned to the expected Safe YOLO bootstrap release")
+    if not _release_exposes_entry(release_path, entry):
+        problems.append(f"release does not expose the expected entrypoint: {entry}")
     if approval_post_tool:
         posttool = _command_hooks(hooks, "PostToolUse")
         if len(posttool) != 1 or posttool[0][0] != "request_user_input":
@@ -77,7 +76,25 @@ def inspect_codex_wiring(
             problems.append(
                 "PostToolUse hook is not pinned to the expected Safe YOLO bootstrap release"
             )
+    if entry == "codex_v3" and _command_hooks(hooks, "PostToolUse"):
+        problems.append("PostToolUse command hooks must be absent for codex_v3")
     return {"healthy": not problems, "problems": problems}
+
+
+def _release_exposes_entry(release_path: str | Path, entry: str) -> bool:
+    expected = ENTRYPOINTS.get(entry)
+    if expected is None:
+        return False
+    release = Path(release_path)
+    try:
+        manifest = json.loads((release / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(manifest.get("entrypoints"), dict)
+        and manifest["entrypoints"].get(entry) == expected
+        and (release / expected).is_file()
+    )
 
 
 def _command_hooks(hooks: Any, event: str) -> list[tuple[str, str]]:
@@ -147,7 +164,7 @@ def _command_is_pinned(
             index += 1
             continue
         return False
-    if entry == "codex_v2" and (
+    if entry in {"codex_v2", "codex_v3"} and (
         "--host-contract" in values or "--audit-only" in booleans
     ):
         return False
@@ -190,7 +207,7 @@ def main() -> int:
     parser.add_argument("--codex-config", type=Path)
     parser.add_argument("--codex-hooks", type=Path)
     parser.add_argument("--bootstrap", type=Path)
-    parser.add_argument("--entry", choices=("codex", "codex_v2"), default="codex")
+    parser.add_argument("--entry", choices=("codex", "codex_v2", "codex_v3"), default="codex")
     args = parser.parse_args()
     report = inspect_release(args.release, args.manifest_sha256)
     wiring_values = (args.codex_config, args.codex_hooks, args.bootstrap)

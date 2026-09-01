@@ -2,31 +2,31 @@
 
 Safe YOLO is small, deterministic backpressure for high-agency coding agents.
 
-The 2.0 candidate defaults to allow. It interrupts only direct, visible consequences and never asks whether an unknown tool, script, interpreter, wrapper, or composed shell program is generally trustworthy.
+Everything is allowed except a short, explicit set of direct actions. A restricted action is denied with a safer route. It is never converted into a human approval prompt.
 
-An approval-eligible action follows one contract:
+The deny set is:
 
-1. deny the first attempt;
-2. ask the person through Codex `request_user_input` with a sanitized action summary and exact fingerprint;
-3. retain the same pending request when Codex returns empty answers, so the identical prompt can be presented again;
-4. record an explicit host-observed approval without exposing a token to the model;
-5. allow one identical retry in the same task turn;
-6. consume the receipt.
+- permanent filesystem deletion;
+- raw Git history or ref destruction;
+- direct deployment or infrastructure mutation, including protection bypasses;
+- remote or privileged execution;
+- public network exposure;
+- credential access; and
+- modification of Safe YOLO or its hook surface.
 
-Credential access and modification of the enforcement surface are operator-only. They never offer an in-task approval route.
+Ordinary feature-branch pushes, pull-request creation, and protected merges without bypass flags remain allowed. Repository checks and branch protection decide whether a merge is ready.
 
 ## Status
 
-`2.0.0-alpha.3` is the current source candidate. Repository state does not prove installation or activation; hosts install immutable releases through separately reviewed operator maintenance. Earlier immutable releases and the legacy engine/adapters remain available for rollback and comparison.
+`3.0.0-alpha.1` is the current source candidate. Repository state does not prove installation or activation; hosts install immutable releases through separately reviewed operator maintenance. Earlier immutable releases and adapters remain available for rollback and comparison.
 
 ## Candidate implementation
 
-- `engine/consequences_v2.py` — default-allow direct consequence kernel.
-- `engine/approvals_v2.py` — exact, expiring, one-shot approval ledger.
-- `adapters/codex_v2.py` — Codex `PreToolUse` and `PostToolUse` transport.
-- `tests/unit/test_v2_*` — kernel, receipt, and executable-hook journeys.
-- `hosts/linux/devbox.v2-candidate.hooks.json` — non-active cutover example.
+- `engine/consequences_v3.py` — current deny-only direct consequence policy.
+- `adapters/codex_v3.py` — stateless Codex `PreToolUse` transport.
+- `tests/unit/test_v3_*` — allow, deny, release, and executable-hook journeys.
+- `hosts/linux/devbox.v3-candidate.hooks.json` — non-active cutover example.
 
-Existing release verification and immutable installation plumbing is reused. Existing 1.x classification and prompt-capability code is not imported by the 2.0 candidate.
+Existing release verification and immutable installation plumbing is reused. The 3.0 runtime has no approval ledger, receipt, expiry, retry, or `PostToolUse` path.
 
 See the [architecture contract](docs/architecture.md) and [reversible cutover plan](docs/cutover.md).
