@@ -49,7 +49,9 @@ class DenyOnlyKernel(ConsequenceKernel):
         command = tool_input.get("command") or tool_input.get("cmd")
         if not isinstance(command, str):
             return False
-        if "\n" in command:
+        if "\n" in command or any(
+            marker in command for marker in ("$", "`", "(", ")", "{", "}", "#")
+        ):
             return False
         try:
             lexer = shlex.shlex(command, posix=True, punctuation_chars="|&;<>")

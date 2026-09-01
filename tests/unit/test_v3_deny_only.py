@@ -126,6 +126,9 @@ class V3DenyOnlyTests(unittest.TestCase):
             "sudo touch /tmp/x ; env --help",
             "vite --host 0.0.0.0 ; env --help",
             "rm obsolete.txt\nenv --help",
+            "rm obsolete.txt $(env --help )",
+            "rm obsolete.txt `env --help`",
+            "rm obsolete.txt # --help",
         )
 
         for command in commands:
