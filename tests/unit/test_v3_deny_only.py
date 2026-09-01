@@ -61,6 +61,7 @@ class V3DenyOnlyTests(unittest.TestCase):
             "gh pr merge 232 --merge --admin=true": "production.mutate",
             "gh -R owner/other pr merge 232 --merge": "production.mutate",
             "gh pr merge 232 --repo=owner/other --merge": "production.mutate",
+            "gh release create v3.0.0": "production.mutate",
             "railway up": "production.mutate",
             "ssh example.com": "remote.execute",
             "sudo apt update": "privilege.modify",

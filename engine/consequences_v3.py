@@ -43,7 +43,11 @@ class DenyOnlyKernel(ConsequenceKernel):
                     token == "--admin" or token.startswith("--admin=")
                     for token in command[2:]
                 )
-            return command[:2] in (["release", "delete"], ["repo", "delete"])
+            return command[:2] in (
+                ["release", "create"],
+                ["release", "delete"],
+                ["repo", "delete"],
+            )
         return ConsequenceKernel._production_mutation(tokens)
 
     @staticmethod
