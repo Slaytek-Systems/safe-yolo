@@ -62,7 +62,12 @@ class DenyOnlyKernel(ConsequenceKernel):
             return False
         if any(token and set(token) <= set("|&;<>") for token in tokens):
             return False
-        return any(token in {"-h", "--help", "-V", "--version"} for token in tokens[1:])
+        for token in tokens[1:]:
+            if token == "--":
+                break
+            if token in {"-h", "--help", "-V", "--version"}:
+                return True
+        return False
 
     @staticmethod
     def _production_mutation(tokens: list[str]) -> bool:

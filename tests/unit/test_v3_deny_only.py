@@ -129,6 +129,7 @@ class V3DenyOnlyTests(unittest.TestCase):
             "rm obsolete.txt $(env --help )",
             "rm obsolete.txt `env --help`",
             "rm obsolete.txt # --help",
+            "rm -- --help obsolete.txt",
         )
 
         for command in commands:
