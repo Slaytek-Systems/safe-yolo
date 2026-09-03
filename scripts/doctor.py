@@ -76,8 +76,43 @@ def inspect_codex_wiring(
             problems.append(
                 "PostToolUse hook is not pinned to the expected Safe YOLO bootstrap release"
             )
-    if entry == "codex_v3" and _command_hooks(hooks, "PostToolUse"):
-        problems.append("PostToolUse command hooks must be absent for codex_v3")
+    if entry in {"codex_v3", "claude_code_v3"} and _command_hooks(hooks, "PostToolUse"):
+        problems.append(f"PostToolUse command hooks must be absent for {entry}")
+    return {"healthy": not problems, "problems": problems}
+
+
+def inspect_claude_code_wiring(
+    settings_path: str | Path,
+    bootstrap_path: str | Path,
+    manifest_sha256: str,
+    *,
+    release_path: str | Path,
+    entry: str = "claude_code_v3",
+) -> dict[str, Any]:
+    """Read-only check that Claude Code user settings pin one Safe YOLO PreToolUse hook."""
+    problems: list[str] = []
+    try:
+        document = json.loads(Path(settings_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        return {"healthy": False, "problems": [f"settings unreadable: {type(error).__name__}"]}
+    if not isinstance(document, dict):
+        return {"healthy": False, "problems": ["settings document must be an object"]}
+    if document.get("disableAllHooks"):
+        problems.append("disableAllHooks must not be set")
+    hooks = document.get("hooks", {})
+    pretool = _command_hooks(hooks, "PreToolUse")
+    if len(pretool) != 1:
+        problems.append("exactly one PreToolUse command hook is required")
+    elif pretool[0][0] not in {"*", ""} or not _command_is_pinned(
+        pretool[0][1],
+        bootstrap_path=bootstrap_path,
+        release_path=release_path,
+        manifest_sha256=manifest_sha256,
+        entry=entry,
+    ):
+        problems.append("PreToolUse hook is not pinned to the expected Safe YOLO bootstrap release")
+    if not _release_exposes_entry(release_path, entry):
+        problems.append(f"release does not expose the expected entrypoint: {entry}")
     return {"healthy": not problems, "problems": problems}
 
 
@@ -164,7 +199,7 @@ def _command_is_pinned(
             index += 1
             continue
         return False
-    if entry in {"codex_v2", "codex_v3"} and (
+    if entry in {"codex_v2", "codex_v3", "claude_code_v3"} and (
         "--host-contract" in values or "--audit-only" in booleans
     ):
         return False
@@ -207,9 +242,27 @@ def main() -> int:
     parser.add_argument("--codex-config", type=Path)
     parser.add_argument("--codex-hooks", type=Path)
     parser.add_argument("--bootstrap", type=Path)
-    parser.add_argument("--entry", choices=("codex", "codex_v2", "codex_v3"), default="codex")
+    parser.add_argument("--entry", choices=("codex", "codex_v2", "codex_v3", "claude_code_v3"), default="codex")
+    parser.add_argument("--claude-settings", type=Path)
     args = parser.parse_args()
     report = inspect_release(args.release, args.manifest_sha256)
+    if args.claude_settings is not None:
+        if args.bootstrap is None or not args.manifest_sha256:
+            parser.error("--claude-settings requires --bootstrap and --manifest-sha256")
+        wiring = inspect_claude_code_wiring(
+            args.claude_settings,
+            args.bootstrap,
+            str(args.manifest_sha256),
+            release_path=args.release,
+            entry="claude_code_v3",
+        )
+        report["claude_code_wiring"] = wiring
+        report["healthy"] = bool(report["healthy"] and wiring["healthy"])
+        report["problems"].extend(
+            f"claude code wiring: {problem}" for problem in wiring["problems"]
+        )
+        print(json.dumps(report, sort_keys=True))
+        return 0
     wiring_values = (args.codex_config, args.codex_hooks, args.bootstrap)
     if any(value is not None for value in wiring_values):
         if not all(value is not None for value in wiring_values):
