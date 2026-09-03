@@ -22,6 +22,7 @@ SAFE_METHODS = {
     "network.public_exposure": "bind to loopback and use the approved preview or forwarding path",
     "credentials.access": "use the approved credential broker or value-blind readiness check",
     "enforcement.modify": "publish an immutable reviewed Safe YOLO release through operator maintenance",
+    "interactive.process_write": "use a fresh one-shot command with an explicit working directory",
 }
 
 

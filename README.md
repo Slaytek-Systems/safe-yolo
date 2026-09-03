@@ -18,13 +18,14 @@ Ordinary feature-branch pushes, pull-request creation, and protected merges with
 
 ## Status
 
-`3.0.0-alpha.1` is the current source candidate. Repository state does not prove installation or activation; hosts install immutable releases through separately reviewed operator maintenance. Earlier immutable releases and adapters remain available for rollback and comparison.
+`3.0.0-alpha.2` is the current source candidate. Repository state does not prove installation or activation; hosts install immutable releases through separately reviewed operator maintenance. Earlier immutable releases and adapters remain available for rollback and comparison.
 
 ## Candidate implementation
 
 - `engine/consequences_v3.py` — current deny-only direct consequence policy.
 - `adapters/codex_v3.py` — stateless Codex `PreToolUse` transport.
-- `tests/unit/test_v3_*` — allow, deny, release, and executable-hook journeys.
+- `adapters/devin_v3.py` — stateless Devin `PreToolUse` transport over the same kernel.
+- `tests/unit/test_v3_*` and `tests/unit/test_devin_adapter.py` — allow, deny, release, and executable-hook journeys.
 - `hosts/linux/devbox.v3-candidate.hooks.json` — non-active cutover example.
 
 Existing release verification and immutable installation plumbing is reused. The 3.0 runtime has no approval ledger, receipt, expiry, retry, or `PostToolUse` path.
