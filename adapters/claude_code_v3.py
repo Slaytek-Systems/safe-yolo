@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from adapters.codex_v3 import SAFE_METHODS, expand_scratch_paths
+from adapters import grok_v3
 from adapters.hook_payload import normalize_hook_payload
 from engine.consequences_v3 import DenyOnlyKernel
 
@@ -69,6 +70,12 @@ def normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(notebook, str) and notebook:
             normalized["tool_input"] = {**tool_input, "file_path": notebook}
         normalized["tool_name"] = "edit"
+    lower = tool_name.lower()
+    if (
+        lower in grok_v3.BASH_NAMES | grok_v3.READ_NAMES | grok_v3.EDIT_NAMES | grok_v3.DELETE_NAMES
+        and lower not in {"bash", "read", "edit", "write", "multiedit"}
+    ):
+        return grok_v3.normalize_payload(normalized)
     return normalized
 
 

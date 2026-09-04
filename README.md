@@ -18,7 +18,7 @@ Ordinary feature-branch pushes, pull-request creation, and protected merges with
 
 ## Status
 
-`3.0.0-alpha.5` is the current source candidate. Repository state does not prove installation or activation; hosts install immutable releases through separately reviewed operator maintenance. Earlier immutable releases and adapters remain available for rollback and comparison.
+`3.0.0-alpha.6` is the current source candidate. Repository state does not prove installation or activation; hosts install immutable releases through separately reviewed operator maintenance. Earlier immutable releases and adapters remain available for rollback and comparison.
 
 ## Candidate implementation
 
@@ -29,6 +29,7 @@ Ordinary feature-branch pushes, pull-request creation, and protected merges with
 - `adapters/grok_v3.py` — stateless Grok CLI `PreToolUse` transport over the same kernel (see `hosts/linux/devbox.grok-candidate.hooks.json`).
 - `adapters/cursor_v3.py` — stateless Cursor Agent transport over the same kernel (see `hosts/linux/devbox.cursor-candidate.hooks.json`).
 - `adapters/opencode_v3.py` — stateless OpenCode `tool.execute.before` transport over the same kernel (see `hosts/linux/devbox.opencode-candidate.plugin.js`).
+- `adapters/antigravity_v3.py` — stateless Antigravity ACP `PreToolUse` transport over the same kernel (see `hosts/linux/devbox.antigravity-candidate.hooks.json`).
 - `tests/unit/test_v3_*`, `tests/unit/test_devin_adapter.py`, `tests/unit/test_claude_code_adapter.py`, `tests/unit/test_grok_adapter.py`, `tests/unit/test_cursor_v3_adapter.py`, and `tests/unit/test_opencode_v3_adapter.py` — allow, deny, release, and executable-hook journeys.
 - `hosts/linux/devbox.v3-candidate.hooks.json` — non-active cutover example.
 

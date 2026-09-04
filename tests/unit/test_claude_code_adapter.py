@@ -223,6 +223,25 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
         self.assertEqual("deny", denied["hookSpecificOutput"]["permissionDecision"])
         self.assertIn("filesystem.delete", denied["hookSpecificOutput"]["permissionDecisionReason"])
 
+    def test_grok_run_terminal_command_is_denied(self):
+        payload = {
+            "hookEventName": "pre_tool_use",
+            "sessionId": "abc",
+            "cwd": str(self.project),
+            "workspaceRoot": str(self.project),
+            "permissionMode": "bypassPermissions",
+            "toolName": "run_terminal_command",
+            "toolInput": {"command": "rm -rf /home/test/project/src"},
+            "toolUseId": "t1",
+            "promptId": "p1",
+        }
+
+        denied = handle_pre_tool(payload, self.kernel)
+
+        self.assertIsNotNone(denied)
+        self.assertEqual("deny", denied["hookSpecificOutput"]["permissionDecision"])
+        self.assertIn("filesystem.delete", denied["hookSpecificOutput"]["permissionDecisionReason"])
+
     def test_non_pretool_event_is_ignored(self):
         payload = self.payload("Bash", {"command": "rm obsolete.txt"})
         payload["hook_event_name"] = "PostToolUse"
