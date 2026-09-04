@@ -224,6 +224,48 @@ class V2ConsequenceKernelTests(unittest.TestCase):
                 self.assertEqual("operator_only", decision.outcome)
                 self.assertEqual(consequence, decision.consequence)
 
+    def test_output_redirects_bind_enforcement_to_the_redirect_target(self):
+        allowed = (
+            "jq . /home/test/.safe-yolo/policy.json > /tmp/out.json",
+            "cat /home/test/.safe-yolo/policy.json > /tmp/p.json",
+            "cp /home/test/.safe-yolo/policy.json /tmp/backup.json",
+            "printf 'a -> b' /home/test/.safe-yolo/README.md",
+        )
+        for command in allowed:
+            with self.subTest(command=command):
+                self.assertEqual("allow", self._shell(command).outcome)
+
+        denied = (
+            "echo '{}' > /home/test/.safe-yolo/policy.json",
+            "tee /home/test/.safe-yolo/policy.json",
+            "sed -i s/a/b/ /home/test/.safe-yolo/bootstrap.py",
+            "cp /tmp/x /home/test/.safe-yolo/policy.json",
+            "mv /home/test/.safe-yolo/policy.json /tmp/x",
+            "mv /tmp/x /home/test/.safe-yolo/policy.json",
+            "chmod 600 /home/test/.safe-yolo/bootstrap.py",
+            "truncate -s0 /home/test/.codex/hooks.json",
+            "rm /home/test/.safe-yolo/bootstrap.py",
+            "install /tmp/x /home/test/.safe-yolo/bootstrap.py",
+        )
+        for command in denied:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("operator_only", decision.outcome)
+                self.assertEqual("enforcement.modify", decision.consequence)
+
+    def test_credential_access_stays_broad_across_argument_positions(self):
+        commands = (
+            "jq . /home/test/.codex/auth.json > /tmp/out.json",
+            "cat /home/test/.codex/auth.json > /tmp/p.json",
+            "cp /home/test/.ssh/id_ed25519 /tmp/backup.json",
+            "printf 'a -> b' /home/test/.ssh/config",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("operator_only", decision.outcome)
+                self.assertEqual("credentials.access", decision.consequence)
+
     def test_direct_shell_write_variants_honor_enforcement_roots(self):
         commands = (
             "cp --target-directory=/home/test/.codex/hooks probe.py",
@@ -314,6 +356,55 @@ class V2ConsequenceKernelTests(unittest.TestCase):
                 decision = self._shell(command)
                 self.assertEqual("operator_only", decision.outcome)
                 self.assertEqual("credentials.access", decision.consequence)
+
+    def test_empty_scratch_paths_keep_delete_approval(self):
+        for command in (
+            "rm /tmp/stale.json",
+            "unlink /tmp/stale.json",
+            "rmdir /tmp/scratch-dir",
+        ):
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual("filesystem.delete", decision.consequence)
+
+    def test_scratch_paths_allow_rm_only_when_every_target_is_inside(self):
+        kernel = ConsequenceKernel(
+            enforcement_paths=self.kernel.enforcement_paths,
+            credential_paths=self.kernel.credential_paths,
+            scratch_paths=("/tmp", "/home/test/tmp"),
+        )
+
+        def shell(command: str):
+            return kernel.evaluate(
+                {"tool_name": "Bash", "tool_input": {"command": command}}
+            )
+
+        for command in (
+            "rm /tmp/stale.json",
+            "unlink /tmp/stale.json",
+            "rmdir /tmp/scratch-dir",
+            "rm -rf /tmp/nested/out.json",
+            "rm /home/test/tmp/probe.json",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual("allow", shell(command).outcome)
+
+        mixed = shell("rm /tmp/stale.json /workspace/keep.txt")
+        self.assertEqual("approval_required", mixed.outcome)
+        self.assertEqual("filesystem.delete", mixed.consequence)
+
+        outside = shell("rm /var/tmp/stale.json")
+        self.assertEqual("approval_required", outside.outcome)
+        self.assertEqual("filesystem.delete", outside.consequence)
+
+        enforcement = shell("rm /home/test/.safe-yolo/bootstrap.py")
+        self.assertEqual("operator_only", enforcement.outcome)
+        self.assertEqual("enforcement.modify", enforcement.consequence)
+
+        credential = shell("rm /home/test/.ssh/id_ed25519")
+        self.assertEqual("operator_only", credential.outcome)
+        self.assertEqual("credentials.access", credential.consequence)
 
     def test_codex_adapter_factory_protects_only_fixed_enforcement_and_credential_roots(self):
         kernel = build_kernel(

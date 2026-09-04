@@ -41,6 +41,7 @@ def build_kernel(
     safe_yolo_home: str | Path,
     codex_home: str | Path,
     user_home: str | Path,
+    scratch_paths: tuple[str, ...] | None = None,
 ) -> DenyOnlyKernel:
     safe_yolo = Path(safe_yolo_home).expanduser()
     codex = Path(codex_home).expanduser()
@@ -57,7 +58,22 @@ def build_kernel(
             str(home / ".ssh"),
             str(home / ".gnupg"),
         ),
+        scratch_paths=expand_scratch_paths(scratch_paths, home),
     )
+
+
+def expand_scratch_paths(
+    scratch_paths: tuple[str, ...] | None,
+    user_home: Path,
+) -> tuple[str, ...]:
+    selected = ("/tmp", "~/tmp") if scratch_paths is None else scratch_paths
+    expanded: list[str] = []
+    for path in selected:
+        if path.startswith("~/"):
+            expanded.append(str(user_home / path[2:]))
+        else:
+            expanded.append(path)
+    return tuple(expanded)
 
 
 def handle_pre_tool(
@@ -81,6 +97,13 @@ def main() -> int:
     parser.add_argument("--safe-yolo-home", type=Path, default=Path("~/.safe-yolo").expanduser())
     parser.add_argument("--codex-home", type=Path, default=Path("~/.codex").expanduser())
     parser.add_argument("--user-home", type=Path, default=Path.home())
+    parser.add_argument(
+        "--scratch",
+        action="append",
+        default=None,
+        metavar="PATH",
+        help="Trusted scratch root. Repeatable; replaces the default /tmp and ~/tmp.",
+    )
     args = parser.parse_args()
     try:
         payload = json.load(sys.stdin)
@@ -93,6 +116,7 @@ def main() -> int:
             safe_yolo_home=args.safe_yolo_home,
             codex_home=args.codex_home,
             user_home=args.user_home,
+            scratch_paths=tuple(args.scratch) if args.scratch is not None else None,
         )
         response = handle_pre_tool(payload, kernel)
     if response is not None:

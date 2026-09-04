@@ -44,7 +44,7 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
     def test_bash_uses_shared_deny_only_kernel(self):
         self.assertIsNone(handle_pre_tool(self.payload("Bash", {"command": "git status --short"}), self.kernel))
 
-        denied = handle_pre_tool(self.payload("Bash", {"command": "rm -rf build"}), self.kernel)
+        denied = handle_pre_tool(self.payload("Bash", {"command": "rm -rf /workspace/build"}), self.kernel)
 
         output = denied["hookSpecificOutput"]
         self.assertEqual("PreToolUse", output["hookEventName"])
@@ -101,6 +101,87 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
                 self.assertIsNotNone(denied, command)
                 self.assertIn("enforcement.modify", denied["hookSpecificOutput"]["permissionDecisionReason"])
 
+    def test_shell_reads_of_enforcement_redirected_outside_are_allowed(self):
+        settings = self.root / "home" / ".claude" / "settings.json"
+        for command in (
+            f"jq . {settings} > /tmp/out.json",
+            f"cat {settings} > /tmp/p.json",
+            f"cp {settings} /tmp/backup.json",
+            f"printf 'a -> b' {settings}",
+        ):
+            with self.subTest(command=command):
+                self.assertIsNone(handle_pre_tool(self.payload("Bash", {"command": command}), self.kernel))
+
+    def test_mutating_shell_targets_stay_denied(self):
+        settings = self.root / "home" / ".claude" / "settings.json"
+        local_settings = self.root / "home" / ".claude" / "settings.local.json"
+        bootstrap = self.root / "safe-yolo" / "bootstrap.py"
+        for command in (
+            f"echo '{{}}' > {settings}",
+            f"tee {settings}",
+            f"sed -i s/a/b/ {bootstrap}",
+            f"cp /tmp/x {settings}",
+            f"mv {settings} /tmp/x",
+            f"mv /tmp/x {settings}",
+            f"chmod 600 {bootstrap}",
+            f"truncate -s0 {local_settings}",
+            f"rm {bootstrap}",
+            f"install /tmp/x {bootstrap}",
+        ):
+            with self.subTest(command=command):
+                denied = handle_pre_tool(self.payload("Bash", {"command": command}), self.kernel)
+                self.assertIsNotNone(denied, command)
+                self.assertIn(
+                    "enforcement.modify",
+                    denied["hookSpecificOutput"]["permissionDecisionReason"],
+                )
+
+    def test_default_scratch_roots_allow_tmp_deletes(self):
+        self.assertIsNone(handle_pre_tool(self.payload("Bash", {"command": "rm /tmp/stale.json"}), self.kernel))
+        home_tmp = self.root / "home" / "tmp" / "stale.json"
+        self.assertIsNone(
+            handle_pre_tool(self.payload("Bash", {"command": f"rm {home_tmp}"}), self.kernel)
+        )
+        denied = handle_pre_tool(self.payload("Bash", {"command": "rm /var/tmp/stale.json"}), self.kernel)
+        self.assertIn("filesystem.delete", denied["hookSpecificOutput"]["permissionDecisionReason"])
+
+    def test_scratch_cli_flag_replaces_default_roots(self):
+        custom = self.root / "custom-scratch"
+        command = [
+            sys.executable,
+            str(ROOT / "adapters" / "claude_code_v3.py"),
+            "--safe-yolo-home",
+            str(self.root / "safe-yolo"),
+            "--claude-home",
+            str(self.root / "home" / ".claude"),
+            "--user-home",
+            str(self.root / "home"),
+            "--scratch",
+            str(custom),
+        ]
+        payload = self.payload("Bash", {"command": f"rm {custom / 'stale.json'}"})
+        allowed = subprocess.run(
+            command,
+            cwd=ROOT,
+            input=json.dumps(payload),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, allowed.returncode, allowed.stderr)
+        self.assertEqual("", allowed.stdout)
+
+        denied = subprocess.run(
+            command,
+            cwd=ROOT,
+            input=json.dumps(self.payload("Bash", {"command": "rm /tmp/stale.json"})),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, denied.returncode, denied.stderr)
+        self.assertIn("filesystem.delete", denied.stdout)
+
     def test_notebook_edit_is_normalized_to_a_path_edit(self):
         notebook = self.root / "home" / ".claude" / "settings.json"
         normalized = normalize_payload(self.payload("NotebookEdit", {"notebook_path": str(notebook)}))
@@ -147,7 +228,7 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
         result = subprocess.run(
             command,
             cwd=ROOT,
-            input=json.dumps(self.payload("Bash", {"command": "rm obsolete.txt"})),
+            input=json.dumps(self.payload("Bash", {"command": "rm /workspace/obsolete.txt"})),
             text=True,
             capture_output=True,
             check=False,

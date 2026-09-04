@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from adapters.codex_v3 import SAFE_METHODS
+from adapters.codex_v3 import SAFE_METHODS, expand_scratch_paths
 from engine.consequences_v3 import DenyOnlyKernel
 
 
@@ -20,6 +20,7 @@ def build_kernel(
     safe_yolo_home: str | Path,
     devin_config: str | Path,
     user_home: str | Path,
+    scratch_paths: tuple[str, ...] | None = None,
 ) -> DenyOnlyKernel:
     home = Path(user_home).expanduser()
     config = Path(devin_config).expanduser()
@@ -32,6 +33,7 @@ def build_kernel(
             str(home / ".ssh"),
             str(home / ".gnupg"),
         ),
+        scratch_paths=expand_scratch_paths(scratch_paths, home),
     )
 
 
@@ -84,6 +86,13 @@ def main() -> int:
         default=Path("~/.config/devin/config.json").expanduser(),
     )
     parser.add_argument("--user-home", type=Path, default=Path.home())
+    parser.add_argument(
+        "--scratch",
+        action="append",
+        default=None,
+        metavar="PATH",
+        help="Trusted scratch root. Repeatable; replaces the default /tmp and ~/tmp.",
+    )
     args = parser.parse_args()
     try:
         payload = json.load(sys.stdin)
@@ -96,6 +105,7 @@ def main() -> int:
                 safe_yolo_home=args.safe_yolo_home,
                 devin_config=args.devin_config,
                 user_home=args.user_home,
+                scratch_paths=tuple(args.scratch) if args.scratch is not None else None,
             ),
         )
         if response is not None:
