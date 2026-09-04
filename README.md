@@ -18,11 +18,11 @@ Ordinary feature-branch pushes, pull-request creation, and protected merges with
 
 ## Status
 
-`3.0.0-alpha.3` is the current source candidate. Repository state does not prove installation or activation; hosts install immutable releases through separately reviewed operator maintenance. Earlier immutable releases and adapters remain available for rollback and comparison.
+`3.0.0-alpha.4` is the current source candidate. Repository state does not prove installation or activation; hosts install immutable releases through separately reviewed operator maintenance. Earlier immutable releases and adapters remain available for rollback and comparison.
 
 ## Candidate implementation
 
-- `engine/consequences_v3.py` — current deny-only direct consequence policy.
+- `engine/consequences_v3.py` — current deny-only direct consequence policy. Output redirects and mutating executables bind `enforcement.modify` to the actual write target; v3 adapters declare trusted scratch roots (`/tmp` and `~/tmp` by default, replaceable with `--scratch`) so `rm`/`unlink`/`rmdir` inside those roots is allowed.
 - `adapters/codex_v3.py` — stateless Codex `PreToolUse` transport.
 - `adapters/devin_v3.py` — stateless Devin `PreToolUse` transport over the same kernel.
 - `adapters/claude_code_v3.py` — stateless Claude Code `PreToolUse` transport over the same kernel; wired from `~/.claude/settings.json` (see `hosts/linux/devbox.claude-code-candidate.settings.json`).

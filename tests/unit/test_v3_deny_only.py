@@ -192,6 +192,70 @@ class V3DenyOnlyTests(unittest.TestCase):
         )
         self.assertFalse((Path(self.temp.name) / "unused-state").exists())
 
+    def test_default_scratch_roots_allow_tmp_deletes(self):
+        self.assertIsNone(handle_pre_tool(self.payload("rm /tmp/stale.json"), self.kernel))
+        home_tmp = self.root / "home" / "tmp" / "stale.json"
+        self.assertIsNone(handle_pre_tool(self.payload(f"rm {home_tmp}"), self.kernel))
+
+        denied = handle_pre_tool(self.payload("rm /var/tmp/stale.json"), self.kernel)
+        self.assertIn(
+            "filesystem.delete",
+            denied["hookSpecificOutput"]["permissionDecisionReason"],
+        )
+
+    def test_empty_scratch_paths_preserve_delete_denials(self):
+        kernel = build_kernel(
+            safe_yolo_home=self.root / "safe-yolo",
+            codex_home=self.root / "codex",
+            user_home=self.root / "home",
+            scratch_paths=(),
+        )
+        denied = handle_pre_tool(self.payload("rm /tmp/stale.json"), kernel)
+        self.assertIn(
+            "filesystem.delete",
+            denied["hookSpecificOutput"]["permissionDecisionReason"],
+        )
+
+    def test_scratch_cli_flag_replaces_default_roots(self):
+        custom = self.root / "custom-scratch"
+        extra = self.root / "extra-scratch"
+        command = [
+            sys.executable,
+            str(ROOT / "adapters" / "codex_v3.py"),
+            "--safe-yolo-home",
+            str(self.root / "safe-yolo"),
+            "--codex-home",
+            str(self.root / "codex"),
+            "--user-home",
+            str(self.root / "home"),
+            "--scratch",
+            str(custom),
+            "--scratch",
+            str(extra),
+        ]
+        for target in (custom / "stale.json", extra / "stale.json"):
+            allowed = subprocess.run(
+                command,
+                cwd=ROOT,
+                input=json.dumps(self.payload(f"rm {target}")),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, allowed.returncode, allowed.stderr)
+            self.assertEqual("", allowed.stdout)
+
+        denied = subprocess.run(
+            command,
+            cwd=ROOT,
+            input=json.dumps(self.payload("rm /tmp/stale.json")),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, denied.returncode, denied.stderr)
+        self.assertIn("filesystem.delete", denied.stdout)
+
     def test_unreadable_payload_does_not_invent_a_restriction(self):
         command = [sys.executable, str(ROOT / "adapters" / "codex_v3.py")]
 

@@ -28,9 +28,11 @@ class ConsequenceKernel:
         *,
         enforcement_paths: tuple[str, ...] = (),
         credential_paths: tuple[str, ...] = (),
+        scratch_paths: tuple[str, ...] = (),
     ) -> None:
         self.enforcement_paths = tuple(self._path(path) for path in enforcement_paths)
         self.credential_paths = tuple(self._path(path) for path in credential_paths)
+        self.scratch_paths = tuple(self._path(path) for path in scratch_paths)
 
     @staticmethod
     def _path(value: str) -> Path:
@@ -159,29 +161,21 @@ class ConsequenceKernel:
         if not tokens:
             return Decision("allow")
         executable = Path(tokens[0]).name
-        token_paths, redirects_output = self._shell_paths(tokens[1:], cwd)
+        token_paths, positionals, redirect_targets = self._shell_paths(tokens[1:], cwd)
         if any(self._inside(path, self.credential_paths) for path in token_paths):
             return Decision(
                 "operator_only",
                 "credentials.access",
                 "credential material is not available to the agent",
             )
-        mutating = executable in {
-            "rm",
-            "mv",
-            "cp",
-            "install",
-            "tee",
-            "chmod",
-            "chown",
-            "touch",
-            "truncate",
-            "unlink",
-            "rmdir",
-        }
-        mutating = mutating or (executable == "sed" and "-i" in tokens[1:])
-        mutating = mutating or redirects_output
-        if mutating and any(self._inside(path, self.enforcement_paths) for path in token_paths):
+        mutation_targets = self._mutation_targets(
+            executable,
+            tokens[1:],
+            cwd,
+            positionals,
+            redirect_targets,
+        )
+        if any(self._inside(path, self.enforcement_paths) for path in mutation_targets):
             return Decision(
                 "operator_only",
                 "enforcement.modify",
@@ -195,6 +189,15 @@ class ConsequenceKernel:
             )
         if executable in {"rm", "unlink", "rmdir"}:
             targets = [token for token in tokens[1:] if not token.startswith("-")]
+            resolved = [self._resolve_from(token, cwd) for token in targets]
+            if (
+                self.scratch_paths
+                and resolved
+                and all(self._inside(path, self.scratch_paths) for path in resolved)
+                and not any(self._inside(path, self.enforcement_paths) for path in resolved)
+                and not any(self._inside(path, self.credential_paths) for path in resolved)
+            ):
+                return Decision("allow")
             display = "delete " + (", ".join(targets) if targets else "filesystem targets")
             return Decision("approval_required", "filesystem.delete", display)
         git_args = self._git_command_args(tokens[1:]) if executable == "git" else []
@@ -232,33 +235,113 @@ class ConsequenceKernel:
         return Decision("allow")
 
     @classmethod
+    def _mutation_targets(
+        cls,
+        executable: str,
+        args: list[str],
+        cwd: Path,
+        positionals: tuple[Path, ...],
+        redirect_targets: tuple[Path, ...],
+    ) -> tuple[Path, ...]:
+        targets = list(redirect_targets)
+        destination_flags = cls._option_values(args, "-t", "--target-directory", cwd)
+        if executable in {
+            "rm",
+            "unlink",
+            "rmdir",
+            "chmod",
+            "chown",
+            "touch",
+            "truncate",
+            "tee",
+        }:
+            targets.extend(positionals)
+        elif executable == "install" and any(
+            token in {"-d", "--directory"} for token in args
+        ):
+            targets.extend(positionals)
+        elif executable in {"cp", "install"}:
+            if destination_flags:
+                targets.extend(destination_flags)
+            elif positionals:
+                targets.append(positionals[-1])
+        elif executable == "mv":
+            targets.extend(positionals)
+            targets.extend(destination_flags)
+        elif executable == "sed" and "-i" in args:
+            targets.extend(positionals)
+        return tuple(targets)
+
+    @classmethod
+    def _option_values(
+        cls,
+        args: list[str],
+        short_name: str,
+        long_name: str,
+        cwd: Path,
+    ) -> list[Path]:
+        found: list[Path] = []
+        prefix = long_name + "="
+        index = 0
+        while index < len(args):
+            token = args[index]
+            if token in {short_name, long_name} and index + 1 < len(args):
+                found.append(cls._resolve_from(args[index + 1], cwd))
+                index += 2
+                continue
+            if token.startswith(prefix):
+                value = token[len(prefix) :]
+                if value:
+                    found.append(cls._resolve_from(value, cwd))
+            index += 1
+        return found
+
+    @classmethod
     def _shell_paths(
         cls,
         tokens: list[str],
         cwd: Path,
-    ) -> tuple[tuple[Path, ...], bool]:
+    ) -> tuple[tuple[Path, ...], tuple[Path, ...], tuple[Path, ...]]:
         found: list[Path] = []
-        redirects_output = False
-        for token in tokens:
+        positionals: list[Path] = []
+        redirect_targets: list[Path] = []
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
             redirect = cls._output_redirection(token)
             if redirect is not None:
-                redirects_output = True
-                if redirect and not redirect.startswith("&"):
-                    found.append(cls._resolve_from(redirect, cwd))
+                target = redirect
+                if not target and index + 1 < len(tokens):
+                    index += 1
+                    target = tokens[index]
+                if target and not target.startswith("&"):
+                    path = cls._resolve_from(target, cwd)
+                    found.append(path)
+                    redirect_targets.append(path)
+                index += 1
                 continue
             redirect = cls._input_redirection(token)
             if redirect is not None:
-                if redirect:
-                    found.append(cls._resolve_from(redirect, cwd))
+                target = redirect
+                if not target and index + 1 < len(tokens):
+                    index += 1
+                    target = tokens[index]
+                if target:
+                    found.append(cls._resolve_from(target, cwd))
+                index += 1
                 continue
             if token.startswith("--") and "=" in token:
                 value = token.split("=", 1)[1]
                 if value:
                     found.append(cls._resolve_from(value, cwd))
+                index += 1
                 continue
             if not token.startswith("-"):
-                found.append(cls._resolve_from(token, cwd))
-        return tuple(found), redirects_output
+                path = cls._resolve_from(token, cwd)
+                found.append(path)
+                positionals.append(path)
+            index += 1
+        return tuple(found), tuple(positionals), tuple(redirect_targets)
 
     @staticmethod
     def _output_redirection(token: str) -> str | None:

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from adapters.codex_v3 import SAFE_METHODS
+from adapters.codex_v3 import SAFE_METHODS, expand_scratch_paths
 from engine.consequences_v3 import DenyOnlyKernel
 
 
@@ -33,6 +33,7 @@ def build_kernel(
     claude_home: str | Path,
     user_home: str | Path,
     cwd: str | Path | None = None,
+    scratch_paths: tuple[str, ...] | None = None,
 ) -> DenyOnlyKernel:
     safe_yolo = Path(safe_yolo_home).expanduser()
     claude = Path(claude_home).expanduser()
@@ -53,6 +54,7 @@ def build_kernel(
             str(home / ".ssh"),
             str(home / ".gnupg"),
         ),
+        scratch_paths=expand_scratch_paths(scratch_paths, home),
     )
 
 
@@ -92,6 +94,13 @@ def main() -> int:
     parser.add_argument("--safe-yolo-home", type=Path, default=Path("~/.safe-yolo").expanduser())
     parser.add_argument("--claude-home", type=Path, default=Path("~/.claude").expanduser())
     parser.add_argument("--user-home", type=Path, default=Path.home())
+    parser.add_argument(
+        "--scratch",
+        action="append",
+        default=None,
+        metavar="PATH",
+        help="Trusted scratch root. Repeatable; replaces the default /tmp and ~/tmp.",
+    )
     args = parser.parse_args()
     try:
         payload = json.load(sys.stdin)
@@ -105,6 +114,7 @@ def main() -> int:
             claude_home=args.claude_home,
             user_home=args.user_home,
             cwd=payload.get("cwd") if isinstance(payload.get("cwd"), str) else None,
+            scratch_paths=tuple(args.scratch) if args.scratch is not None else None,
         )
         response = handle_pre_tool(payload, kernel)
     if response is not None:

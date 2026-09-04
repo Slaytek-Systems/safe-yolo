@@ -68,6 +68,61 @@ class DevinAdapterTests(unittest.TestCase):
                 self.assertEqual("block", denied["decision"])
                 self.assertIn("enforcement.modify", denied["reason"])
 
+    def test_default_scratch_roots_allow_tmp_deletes(self):
+        self.assertIsNone(handle_pre_tool(self.payload("rm /tmp/stale.json"), self.kernel))
+        home_tmp = self.root / "home" / "tmp" / "stale.json"
+        self.assertIsNone(handle_pre_tool(self.payload(f"rm {home_tmp}"), self.kernel))
+        denied = handle_pre_tool(self.payload("rm /var/tmp/stale.json"), self.kernel)
+        self.assertEqual("block", denied["decision"])
+        self.assertIn("filesystem.delete", denied["reason"])
+
+    def test_empty_scratch_paths_preserve_delete_denials(self):
+        kernel = build_kernel(
+            safe_yolo_home=self.root / "safe-yolo",
+            devin_config=self.root / "config" / "devin" / "config.json",
+            user_home=self.root / "home",
+            scratch_paths=(),
+        )
+        denied = handle_pre_tool(self.payload("rm /tmp/stale.json"), kernel)
+        self.assertEqual("block", denied["decision"])
+        self.assertIn("filesystem.delete", denied["reason"])
+
+    def test_scratch_cli_flag_replaces_default_roots(self):
+        custom = self.root / "custom-scratch"
+        command = [
+            sys.executable,
+            str(ROOT / "adapters" / "devin_v3.py"),
+            "--safe-yolo-home",
+            str(self.root / "safe-yolo"),
+            "--devin-config",
+            str(self.root / "config" / "devin" / "config.json"),
+            "--user-home",
+            str(self.root / "home"),
+            "--scratch",
+            str(custom),
+        ]
+        allowed = subprocess.run(
+            command,
+            cwd=ROOT,
+            input=json.dumps(self.payload(f"rm {custom / 'stale.json'}")),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, allowed.returncode, allowed.stderr)
+        self.assertEqual("", allowed.stdout)
+
+        denied = subprocess.run(
+            command,
+            cwd=ROOT,
+            input=json.dumps(self.payload("rm /tmp/stale.json")),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, denied.returncode, denied.stderr)
+        self.assertIn("filesystem.delete", denied.stdout)
+
     def test_workdir_overrides_stale_top_level_cwd(self):
         payload = self.payload("printf safe")
         payload["cwd"] = "/stale"
