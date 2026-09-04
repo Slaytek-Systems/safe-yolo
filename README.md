@@ -36,3 +36,5 @@ Ordinary feature-branch pushes, pull-request creation, and protected merges with
 Existing release verification and immutable installation plumbing is reused. The 3.0 runtime has no approval ledger, receipt, expiry, retry, or `PostToolUse` path.
 
 See the [architecture contract](docs/architecture.md) and [reversible cutover plan](docs/cutover.md).
+
+Antigravity hook files must contain only named hook objects: the Antigravity CLI's Go loader rejects the whole `hooks.json` when any top-level value is not an object (for example a `description` string), and then logs `loaded 0 named hooks`. The ACP server's Python loader tolerates it, which is why the mistake is easy to miss. `GEMINI_HOME` is read from the hook environment because the bootstrap forwards no adapter flags.

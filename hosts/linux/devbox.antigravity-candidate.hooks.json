@@ -1,5 +1,4 @@
 {
-  "description": "Non-active Safe YOLO 3.0 deny-only candidate for Antigravity ACP; GEMINI_HOME is read from the hook environment because bootstrap does not forward --gemini-home.",
   "safe-yolo": {
     "enabled": true,
     "PreToolUse": [
