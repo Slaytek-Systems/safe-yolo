@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from adapters.codex_v3 import SAFE_METHODS, expand_scratch_paths
+from adapters.hook_payload import normalize_hook_payload
 from engine.consequences_v3 import DenyOnlyKernel
 
 
@@ -75,6 +76,7 @@ def handle_pre_tool(
     payload: dict[str, Any],
     kernel: DenyOnlyKernel,
 ) -> dict[str, Any] | None:
+    payload = normalize_hook_payload(payload)
     if payload.get("hook_event_name") != "PreToolUse":
         return None
     decision = kernel.evaluate(normalize_payload(payload))
