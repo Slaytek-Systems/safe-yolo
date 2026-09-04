@@ -256,6 +256,10 @@ class ConsequenceKernel:
             "tee",
         }:
             targets.extend(positionals)
+        elif executable == "install" and any(
+            token in {"-d", "--directory"} for token in args
+        ):
+            targets.extend(positionals)
         elif executable in {"cp", "install"}:
             if destination_flags:
                 targets.extend(destination_flags)

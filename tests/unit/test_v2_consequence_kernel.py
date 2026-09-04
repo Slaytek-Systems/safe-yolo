@@ -246,6 +246,8 @@ class V2ConsequenceKernelTests(unittest.TestCase):
             "truncate -s0 /home/test/.codex/hooks.json",
             "rm /home/test/.safe-yolo/bootstrap.py",
             "install /tmp/x /home/test/.safe-yolo/bootstrap.py",
+            "install -d /home/test/.safe-yolo/newdir /tmp/y",
+            "install --directory /home/test/.codex/hooks/newdir /tmp/y",
         )
         for command in denied:
             with self.subTest(command=command):
