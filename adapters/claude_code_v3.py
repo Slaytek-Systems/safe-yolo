@@ -10,20 +10,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from adapters.codex_v3 import SAFE_METHODS
 from engine.consequences_v3 import DenyOnlyKernel
 
 
-SAFE_METHODS = {
-    "filesystem.delete": "move the target to managed quarantine or leave it for managed cleanup",
-    "git.history_mutation": "use an additive commit or the repository's guarded history workflow",
-    "production.mutate": "use the repository's protected merge and deployment workflow without bypass flags",
-    "remote.execute": "use the owning workspace or reviewed remote-operation interface",
-    "privilege.modify": "use the documented administrator-owned maintenance path",
-    "network.public_exposure": "bind to loopback and use the approved preview or forwarding path",
-    "credentials.access": "use the approved credential broker or value-blind readiness check",
-    "enforcement.modify": "publish an immutable reviewed Safe YOLO release through operator maintenance",
-    "interactive.process_write": "use a fresh one-shot command with an explicit working directory",
-}
+PROJECT_SETTINGS = ("settings.json", "settings.local.json")
 
 
 def _deny(reason: str) -> dict[str, Any]:
@@ -39,32 +30,52 @@ def _deny(reason: str) -> dict[str, Any]:
 def build_kernel(
     *,
     safe_yolo_home: str | Path,
-    codex_home: str | Path,
+    claude_home: str | Path,
     user_home: str | Path,
+    cwd: str | Path | None = None,
 ) -> DenyOnlyKernel:
     safe_yolo = Path(safe_yolo_home).expanduser()
-    codex = Path(codex_home).expanduser()
+    claude = Path(claude_home).expanduser()
     home = Path(user_home).expanduser()
+    enforcement = [
+        str(safe_yolo),
+        str(claude / "settings.json"),
+        str(claude / "settings.local.json"),
+        str(claude / "hooks"),
+    ]
+    if cwd:
+        project = Path(cwd).expanduser() / ".claude"
+        enforcement.extend(str(project / name) for name in PROJECT_SETTINGS)
     return DenyOnlyKernel(
-        enforcement_paths=(
-            str(safe_yolo),
-            str(codex / "config.toml"),
-            str(codex / "hooks.json"),
-            str(codex / "hooks"),
-        ),
+        enforcement_paths=tuple(enforcement),
         credential_paths=(
-            str(codex / "auth.json"),
+            str(claude / ".credentials.json"),
             str(home / ".ssh"),
             str(home / ".gnupg"),
         ),
     )
 
 
+def normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Map Claude Code tool shapes onto the kernel's recognizers."""
+    normalized = dict(payload)
+    tool_name = str(payload.get("tool_name") or "")
+    tool_input = payload.get("tool_input")
+    if tool_name == "NotebookEdit" and isinstance(tool_input, dict):
+        notebook = tool_input.get("notebook_path")
+        if isinstance(notebook, str) and notebook:
+            normalized["tool_input"] = {**tool_input, "file_path": notebook}
+        normalized["tool_name"] = "edit"
+    return normalized
+
+
 def handle_pre_tool(
     payload: dict[str, Any],
     kernel: DenyOnlyKernel,
 ) -> dict[str, Any] | None:
-    decision = kernel.evaluate(payload)
+    if payload.get("hook_event_name") != "PreToolUse":
+        return None
+    decision = kernel.evaluate(normalize_payload(payload))
     if decision.outcome == "allow":
         return None
     consequence = str(decision.consequence)
@@ -76,10 +87,10 @@ def handle_pre_tool(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Safe YOLO deny-only Codex consequence hook.")
+    parser = argparse.ArgumentParser(description="Safe YOLO deny-only Claude Code consequence hook.")
     parser.add_argument("--state-dir", type=Path)
     parser.add_argument("--safe-yolo-home", type=Path, default=Path("~/.safe-yolo").expanduser())
-    parser.add_argument("--codex-home", type=Path, default=Path("~/.codex").expanduser())
+    parser.add_argument("--claude-home", type=Path, default=Path("~/.claude").expanduser())
     parser.add_argument("--user-home", type=Path, default=Path.home())
     args = parser.parse_args()
     try:
@@ -91,8 +102,9 @@ def main() -> int:
     else:
         kernel = build_kernel(
             safe_yolo_home=args.safe_yolo_home,
-            codex_home=args.codex_home,
+            claude_home=args.claude_home,
             user_home=args.user_home,
+            cwd=payload.get("cwd") if isinstance(payload.get("cwd"), str) else None,
         )
         response = handle_pre_tool(payload, kernel)
     if response is not None:

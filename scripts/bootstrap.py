@@ -13,6 +13,8 @@ ENTRYPOINTS = {
     "codex": "adapters/codex.py",
     "codex_v2": "adapters/codex_v2.py",
     "codex_v3": "adapters/codex_v3.py",
+    "devin_v3": "adapters/devin_v3.py",
+    "claude_code_v3": "adapters/claude_code_v3.py",
     "prompt": "adapters/codex_prompt.py",
     "cursor": "adapters/cursor.py",
     "cursor_prompt": "adapters/cursor_prompt.py",

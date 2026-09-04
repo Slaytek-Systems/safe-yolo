@@ -26,6 +26,13 @@ class DenyOnlyKernel(ConsequenceKernel):
     """
 
     def evaluate(self, payload: dict[str, Any]) -> Decision:
+        tool_name = str(payload.get("tool_name") or "").lower()
+        if tool_name in {"stateful_shell", "write_to_process"}:
+            return Decision(
+                "deny",
+                "interactive.process_write",
+                "write to a process whose execution context cannot be classified",
+            )
         recognized = super().evaluate(payload)
         if (
             self._direct_help_request(payload)
