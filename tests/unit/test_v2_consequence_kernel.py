@@ -408,6 +408,29 @@ class V2ConsequenceKernelTests(unittest.TestCase):
         self.assertEqual("operator_only", credential.outcome)
         self.assertEqual("credentials.access", credential.consequence)
 
+        for tool_name in ("delete_file", "remove_file"):
+            with self.subTest(tool_name=tool_name):
+                allowed = kernel.evaluate(
+                    {"tool_name": tool_name, "tool_input": {"path": "/tmp/stale.json"}}
+                )
+                self.assertEqual("allow", allowed.outcome)
+                denied = kernel.evaluate(
+                    {
+                        "tool_name": tool_name,
+                        "tool_input": {"path": "/workspace/obsolete.py"},
+                    }
+                )
+                self.assertEqual("approval_required", denied.outcome)
+                self.assertEqual("filesystem.delete", denied.consequence)
+                protected = kernel.evaluate(
+                    {
+                        "tool_name": tool_name,
+                        "tool_input": {"path": "/home/test/.safe-yolo/bootstrap.py"},
+                    }
+                )
+                self.assertEqual("operator_only", protected.outcome)
+                self.assertEqual("enforcement.modify", protected.consequence)
+
     def test_codex_adapter_factory_protects_only_fixed_enforcement_and_credential_roots(self):
         kernel = build_kernel(
             safe_yolo_home="/home/test/.safe-yolo",

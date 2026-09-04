@@ -79,6 +79,14 @@ class ConsequenceKernel:
                 "Safe YOLO enforcement can only be changed through operator maintenance",
             )
         if tool_name in {"delete_file", "remove_file"}:
+            if (
+                self.scratch_paths
+                and paths
+                and all(self._inside(path, self.scratch_paths) for path in paths)
+                and not any(self._inside(path, self.enforcement_paths) for path in paths)
+                and not any(self._inside(path, self.credential_paths) for path in paths)
+            ):
+                return Decision("allow")
             display = "delete " + (", ".join(str(path) for path in paths) or "filesystem target")
             return Decision("approval_required", "filesystem.delete", display)
         if tool_name == "apply_patch" and isinstance(tool_input, dict):

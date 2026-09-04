@@ -15,7 +15,21 @@ from adapters.hook_payload import normalize_hook_payload
 from engine.consequences_v3 import DenyOnlyKernel
 
 
-PROJECT_SETTINGS = ("settings.json", "settings.local.json")
+BASH_NAMES = {"run_terminal_command", "bash"}
+READ_NAMES = {"read_file", "read"}
+EDIT_NAMES = {
+    "search_replace",
+    "write_file",
+    "create_file",
+    "edit_file",
+    "edit",
+    "write",
+    "multiedit",
+    "multi_edit",
+}
+DELETE_NAMES = {"delete_file", "delete"}
+PATH_KEYS = ("path", "file_path", "target_file", "filePath")
+PROJECT_CLAUDE = ("settings.json", "settings.local.json")
 
 
 def _deny(reason: str) -> dict[str, Any]:
@@ -31,27 +45,32 @@ def _deny(reason: str) -> dict[str, Any]:
 def build_kernel(
     *,
     safe_yolo_home: str | Path,
-    claude_home: str | Path,
+    grok_home: str | Path,
     user_home: str | Path,
     cwd: str | Path | None = None,
     scratch_paths: tuple[str, ...] | None = None,
 ) -> DenyOnlyKernel:
     safe_yolo = Path(safe_yolo_home).expanduser()
-    claude = Path(claude_home).expanduser()
+    grok = Path(grok_home).expanduser()
     home = Path(user_home).expanduser()
     enforcement = [
         str(safe_yolo),
-        str(claude / "settings.json"),
-        str(claude / "settings.local.json"),
-        str(claude / "hooks"),
+        str(grok / "config.toml"),
+        str(grok / "hooks"),
+        str(home / ".claude" / "settings.json"),
+        str(home / ".claude" / "settings.local.json"),
+        str(home / ".cursor" / "hooks.json"),
     ]
     if cwd:
-        project = Path(cwd).expanduser() / ".claude"
-        enforcement.extend(str(project / name) for name in PROJECT_SETTINGS)
+        project = Path(cwd).expanduser()
+        enforcement.append(str(project / ".grok" / "hooks"))
+        enforcement.extend(str(project / ".claude" / name) for name in PROJECT_CLAUDE)
+        enforcement.append(str(project / ".cursor" / "hooks.json"))
     return DenyOnlyKernel(
         enforcement_paths=tuple(enforcement),
         credential_paths=(
-            str(claude / ".credentials.json"),
+            str(grok / "auth.json"),
+            str(home / ".claude" / ".credentials.json"),
             str(home / ".ssh"),
             str(home / ".gnupg"),
         ),
@@ -59,16 +78,41 @@ def build_kernel(
     )
 
 
+def _first_path(tool_input: dict[str, Any]) -> str:
+    for key in PATH_KEYS:
+        value = tool_input.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
 def normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Map Claude Code tool shapes onto the kernel's recognizers."""
-    normalized = dict(payload)
-    tool_name = str(payload.get("tool_name") or "")
-    tool_input = payload.get("tool_input")
-    if tool_name == "NotebookEdit" and isinstance(tool_input, dict):
-        notebook = tool_input.get("notebook_path")
-        if isinstance(notebook, str) and notebook:
-            normalized["tool_input"] = {**tool_input, "file_path": notebook}
+    normalized = normalize_hook_payload(payload)
+    tool_name = str(normalized.get("tool_name") or "").lower()
+    tool_input = normalized.get("tool_input")
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+    mapped_input = dict(tool_input)
+    if tool_name in BASH_NAMES:
+        normalized["tool_name"] = "bash"
+    elif tool_name in READ_NAMES:
+        path = _first_path(mapped_input)
+        if path:
+            mapped_input["file_path"] = path
+        normalized["tool_name"] = "read"
+        normalized["tool_input"] = mapped_input
+    elif tool_name in EDIT_NAMES:
+        path = _first_path(mapped_input)
+        if path:
+            mapped_input["file_path"] = path
         normalized["tool_name"] = "edit"
+        normalized["tool_input"] = mapped_input
+    elif tool_name in DELETE_NAMES:
+        path = _first_path(mapped_input)
+        if path:
+            mapped_input["path"] = path
+        normalized["tool_name"] = "delete_file"
+        normalized["tool_input"] = mapped_input
     return normalized
 
 
@@ -91,10 +135,10 @@ def handle_pre_tool(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Safe YOLO deny-only Claude Code consequence hook.")
+    parser = argparse.ArgumentParser(description="Safe YOLO deny-only Grok consequence hook.")
     parser.add_argument("--state-dir", type=Path)
     parser.add_argument("--safe-yolo-home", type=Path, default=Path("~/.safe-yolo").expanduser())
-    parser.add_argument("--claude-home", type=Path, default=Path("~/.claude").expanduser())
+    parser.add_argument("--grok-home", type=Path, default=Path("~/.grok").expanduser())
     parser.add_argument("--user-home", type=Path, default=Path.home())
     parser.add_argument(
         "--scratch",
@@ -113,7 +157,7 @@ def main() -> int:
     else:
         kernel = build_kernel(
             safe_yolo_home=args.safe_yolo_home,
-            claude_home=args.claude_home,
+            grok_home=args.grok_home,
             user_home=args.user_home,
             cwd=payload.get("cwd") if isinstance(payload.get("cwd"), str) else None,
             scratch_paths=tuple(args.scratch) if args.scratch is not None else None,
