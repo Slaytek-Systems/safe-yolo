@@ -15,6 +15,7 @@ ENTRYPOINTS = {
     "grok_v3": "adapters/grok_v3.py",
     "cursor_v3": "adapters/cursor_v3.py",
     "opencode_v3": "adapters/opencode_v3.py",
+    "antigravity_v3": "adapters/antigravity_v3.py",
     "prompt": "adapters/codex_prompt.py",
     "cursor": "adapters/cursor.py",
     "cursor_prompt": "adapters/cursor_prompt.py",

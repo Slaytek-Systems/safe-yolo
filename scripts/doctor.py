@@ -76,7 +76,7 @@ def inspect_codex_wiring(
             problems.append(
                 "PostToolUse hook is not pinned to the expected Safe YOLO bootstrap release"
             )
-    if entry in {"codex_v3", "claude_code_v3", "grok_v3", "cursor_v3", "opencode_v3"} and _command_hooks(hooks, "PostToolUse"):
+    if entry in {"codex_v3", "claude_code_v3", "grok_v3", "cursor_v3", "opencode_v3", "antigravity_v3"} and _command_hooks(hooks, "PostToolUse"):
         problems.append(f"PostToolUse command hooks must be absent for {entry}")
     return {"healthy": not problems, "problems": problems}
 
@@ -199,7 +199,7 @@ def _command_is_pinned(
             index += 1
             continue
         return False
-    if entry in {"codex_v2", "codex_v3", "claude_code_v3", "grok_v3", "cursor_v3", "opencode_v3"} and (
+    if entry in {"codex_v2", "codex_v3", "claude_code_v3", "grok_v3", "cursor_v3", "opencode_v3", "antigravity_v3"} and (
         "--host-contract" in values or "--audit-only" in booleans
     ):
         return False
@@ -244,7 +244,7 @@ def main() -> int:
     parser.add_argument("--bootstrap", type=Path)
     parser.add_argument(
         "--entry",
-        choices=("codex", "codex_v2", "codex_v3", "claude_code_v3", "grok_v3", "cursor_v3", "opencode_v3"),
+        choices=("codex", "codex_v2", "codex_v3", "claude_code_v3", "grok_v3", "cursor_v3", "opencode_v3", "antigravity_v3"),
         default="codex",
     )
     parser.add_argument("--claude-settings", type=Path)
