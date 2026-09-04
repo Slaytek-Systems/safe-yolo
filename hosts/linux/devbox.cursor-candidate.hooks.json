@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "description": "Non-active Safe YOLO 3.0 deny-only candidate for Cursor Agent. Merge into ~/.cursor/hooks.json only through operator maintenance after install; replace placeholders in ./hooks/safe-yolo-cursor.sh with the installed release path and manifest digest.",
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "./hooks/safe-yolo-cursor.sh",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "./hooks/safe-yolo-cursor.sh",
+        "matcher": "Write|StrReplace|Delete|EditNotebook",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "beforeReadFile": [
+      {
+        "command": "./hooks/safe-yolo-cursor.sh",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": "./hooks/safe-yolo-cursor.sh",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "./hooks/safe-yolo-cursor.sh",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ]
+  }
+}

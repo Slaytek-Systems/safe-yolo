@@ -1,0 +1,17 @@
+{
+  "description": "Non-active Safe YOLO 3.0 deny-only candidate for Grok CLI. Copy into ~/.grok/hooks/ only through operator maintenance after install; replace placeholders with the installed release path and manifest digest.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 /home/dev/.safe-yolo/bootstrap.py --release /home/dev/.safe-yolo/releases/3.0.0-alpha.5 --manifest-sha256 REPLACE_AFTER_INSTALL --entry grok_v3 --state-dir /home/dev/.safe-yolo/state",
+            "timeout": 10,
+            "statusMessage": "Checking explicit Safe YOLO restrictions"
+          }
+        ]
+      }
+    ]
+  }
+}
