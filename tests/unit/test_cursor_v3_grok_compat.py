@@ -33,7 +33,7 @@ class CursorGrokCompatTests(unittest.TestCase):
 
     def test_grok_shell_payload_is_evaluated(self):
         self.assertEqual({"permission": "allow"}, handle(self.grok("run_terminal_command", {"command": "git status"}), self.kernel))
-        denied = handle(self.grok("run_terminal_command", {"command": "rm -rf src"}), self.kernel)
+        denied = handle(self.grok("run_terminal_command", {"command": "rm -rf /home/test/project/src"}), self.kernel)
         self.assertEqual("deny", denied["permission"])
         self.assertIn("filesystem.delete", denied["agent_message"])
 

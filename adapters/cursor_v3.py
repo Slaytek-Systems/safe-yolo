@@ -144,9 +144,6 @@ def normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(value, str) and value:
             path = value
             break
-    if lower in grok_v3.BASH_NAMES | grok_v3.READ_NAMES | grok_v3.EDIT_NAMES | grok_v3.DELETE_NAMES:
-        # Grok replays Cursor-compatible hooks with its own tool names.
-        return grok_v3.normalize_payload(normalized)
     if lower in WRITE_NAMES:
         if path:
             mapped_input["file_path"] = path
@@ -159,6 +156,9 @@ def normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if path:
             mapped_input["path"] = path
         normalized["tool_name"] = "delete_file"
+    elif lower in grok_v3.BASH_NAMES | grok_v3.READ_NAMES | grok_v3.EDIT_NAMES | grok_v3.DELETE_NAMES:
+        # Grok replays Cursor-compatible hooks with its own tool names.
+        return grok_v3.normalize_payload(normalized)
     normalized["tool_input"] = mapped_input
     return normalized
 
