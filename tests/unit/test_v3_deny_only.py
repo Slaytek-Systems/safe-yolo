@@ -43,6 +43,8 @@ class V3DenyOnlyTests(unittest.TestCase):
             "railway up --help",
             "kubectl delete --help",
             "ssh -V",
+            "ssh mbp-omarchy",
+            "ssh -n mbp-omarchy hostname",
             "sudo --version",
             "python3 -m unittest discover -s tests/unit",
         )
@@ -72,7 +74,7 @@ class V3DenyOnlyTests(unittest.TestCase):
             "gh pr merge 232 --repo=owner/other --merge": "production.mutate",
             "gh release create v3.0.0": "production.mutate",
             "railway up": "production.mutate",
-            "ssh example.com": "remote.execute",
+            "ssh example.com rm obsolete.txt": "filesystem.delete",
             "sudo apt update": "privilege.modify",
             "vite --host 0.0.0.0": "network.public_exposure",
         }
@@ -122,7 +124,7 @@ class V3DenyOnlyTests(unittest.TestCase):
             "rm obsolete.txt ; env --help",
             "rm obsolete.txt && env --help",
             "git push --force-with-lease origin topic ; env --help",
-            "ssh example.com ; env --help",
+            "ssh example.com rm obsolete.txt ; env --help",
             "sudo touch /tmp/x ; env --help",
             "vite --host 0.0.0.0 ; env --help",
             "rm obsolete.txt\nenv --help",

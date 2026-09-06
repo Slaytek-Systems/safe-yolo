@@ -20,7 +20,7 @@ Restricted direct actions are:
 - filesystem deletion;
 - Git history or destructive ref mutation;
 - production mutation;
-- remote shell execution;
+- remote commands whose local string carries a restricted consequence (`scp`/`rsync` remain `remote.execute` in the v1 inspector; interactive SSH is transport and is not inspected after login);
 - privilege-changing execution;
 - binding a service to a public interface;
 - credential material access or environment-wide credential dumping;

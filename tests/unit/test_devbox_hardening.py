@@ -50,7 +50,7 @@ class DevboxHardeningTests(unittest.TestCase):
             "git push --force-with-lease origin feature/x",
             "railway up",
             "printenv",
-            "ssh production.example.com",
+            "ssh production.example.com rm -rf /tmp/example",
         ):
             with self.subTest(command=command):
                 self.assertIn(

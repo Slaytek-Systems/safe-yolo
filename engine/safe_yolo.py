@@ -528,19 +528,66 @@ class SafeYoloEngine:
         return result("allow", "railway.inspect", "Railway status/list inspection is permitted.")
 
     def _inspect_remote(self, executable: str, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
+        if executable != "ssh":
+            return self.evaluate({"action": "remote.execute", **context})
+        host, remote_tokens = self._ssh_invocation(args)
         contract = self.host_contract.get("remote_maintenance") or {}
-        if executable != "ssh" or not contract:
-            return self.evaluate({"action": "remote.execute", **context})
-        remaining = list(args)
-        if remaining[:1] == ["-n"]:
-            remaining = remaining[1:]
-        if not remaining or remaining[0] != contract.get("host"):
-            return self.evaluate({"action": "remote.execute", **context})
-        remote_command = remaining[1:]
         allowed_commands = contract.get("commands") or []
-        if remote_command in allowed_commands:
-            return result("allow_report", "remote.safe_yolo_maintenance", "Exact verified Safe YOLO maintenance command for devbox is permitted.")
-        return self.evaluate({"action": "remote.execute", **context})
+        if contract and host == contract.get("host") and list(remote_tokens) in allowed_commands:
+            return result(
+                "allow_report",
+                "remote.safe_yolo_maintenance",
+                "Exact verified Safe YOLO maintenance command for devbox is permitted.",
+            )
+        if remote_tokens:
+            return self.inspect_command(shlex.join(remote_tokens), context)
+        return result(
+            "allow",
+            "remote.transport",
+            "SSH transport is permitted; this inspector does not see commands typed after an interactive login.",
+        )
+
+    @staticmethod
+    def _ssh_invocation(args: list[str]) -> tuple[str, tuple[str, ...]]:
+        options_with_values = {
+            "-B",
+            "-b",
+            "-c",
+            "-D",
+            "-E",
+            "-e",
+            "-F",
+            "-I",
+            "-i",
+            "-J",
+            "-L",
+            "-l",
+            "-m",
+            "-O",
+            "-o",
+            "-P",
+            "-p",
+            "-R",
+            "-S",
+            "-W",
+            "-w",
+        }
+        index = 0
+        while index < len(args):
+            token = args[index]
+            if token == "--":
+                rest = args[index + 1 :]
+                if not rest:
+                    return "remote host", ()
+                return rest[0], tuple(rest[1:])
+            if token in options_with_values:
+                index += 2
+                continue
+            if token.startswith("-"):
+                index += 1
+                continue
+            return token, tuple(args[index + 1 :])
+        return "remote host", ()
 
     @staticmethod
     def _git_value(args: list[str], cwd: str) -> str | None:

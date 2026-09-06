@@ -61,6 +61,15 @@ class CursorV3AdapterTests(unittest.TestCase):
         )
         self.assertEqual({"permission": "allow"}, structured)
 
+    def test_ssh_transport_allows_inspection_and_denies_restricted_remote_commands(self):
+        self.assertEqual(
+            {"permission": "allow"},
+            handle(self.shell_payload("ssh -n mbp-omarchy hostname"), self.kernel),
+        )
+        denied = handle(self.shell_payload("ssh mbp-omarchy rm -rf /workspace/build"), self.kernel)
+        self.assertEqual("deny", denied["permission"])
+        self.assertIn("filesystem.delete", denied["user_message"])
+
     def test_sudo_and_force_push_are_denied(self):
         for command, consequence in (
             ("sudo apt install jq", "privilege.modify"),

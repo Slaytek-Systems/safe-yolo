@@ -9,7 +9,7 @@ The deny set is:
 - permanent filesystem deletion;
 - raw Git history or ref destruction;
 - direct deployment or infrastructure mutation, including protection bypasses;
-- remote or privileged execution;
+- remote commands that carry a restricted consequence, plus privileged execution; interactive SSH is transport and is not inspected after login;
 - public network exposure;
 - credential access; and
 - modification of Safe YOLO or its hook surface.
@@ -18,7 +18,7 @@ Ordinary feature-branch pushes, pull-request creation, and protected merges with
 
 ## Status
 
-`3.0.0-alpha.6` is the current source candidate. Repository state does not prove installation or activation; hosts install immutable releases through separately reviewed operator maintenance. Earlier immutable releases and adapters remain available for rollback and comparison.
+`3.0.0-alpha.7` is the current source candidate. Repository state does not prove installation or activation; hosts install immutable releases through separately reviewed operator maintenance. Earlier immutable releases and adapters remain available for rollback and comparison.
 
 ## Candidate implementation
 

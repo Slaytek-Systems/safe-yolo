@@ -222,12 +222,12 @@ class ConsequenceKernel:
                 f"run {self._production_display(tokens)} production mutation",
             )
         if executable == "ssh":
-            host = self._ssh_host(tokens[1:])
-            return Decision(
-                "approval_required",
-                "remote.execute",
-                f"open a remote shell to {host}",
-            )
+            _host, remote_tokens = self._ssh_invocation(tokens[1:])
+            if remote_tokens:
+                return self._shell(shlex.join(remote_tokens), cwd)
+            # Interactive SSH is transport. This local classifier does not see
+            # commands typed after login on the remote host.
+            return Decision("allow")
         if executable in {"sudo", "doas", "su"}:
             return Decision(
                 "approval_required",
@@ -512,7 +512,7 @@ class ConsequenceKernel:
         return None
 
     @staticmethod
-    def _ssh_host(args: list[str]) -> str:
+    def _ssh_invocation(args: list[str]) -> tuple[str, tuple[str, ...]]:
         options_with_values = {
             "-B",
             "-b",
@@ -540,15 +540,18 @@ class ConsequenceKernel:
         while index < len(args):
             token = args[index]
             if token == "--":
-                return args[index + 1] if index + 1 < len(args) else "remote host"
+                rest = args[index + 1 :]
+                if not rest:
+                    return "remote host", ()
+                return rest[0], tuple(rest[1:])
             if token in options_with_values:
                 index += 2
                 continue
             if token.startswith("-"):
                 index += 1
                 continue
-            return token
-        return "remote host"
+            return token, tuple(args[index + 1 :])
+        return "remote host", ()
 
     @staticmethod
     def _git_display(args: list[str]) -> str:

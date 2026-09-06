@@ -55,8 +55,11 @@ class V2ConsequenceKernelTests(unittest.TestCase):
             "kubectl edit deployment web": "production.mutate",
             "kubectl rollout restart deployment/web": "production.mutate",
             "gh pr merge 123": "production.mutate",
-            "ssh production.example.com": "remote.execute",
-            "/usr/bin/ssh production.example.com": "remote.execute",
+            "ssh production.example.com rm -rf build": "filesystem.delete",
+            "/usr/bin/ssh production.example.com sudo touch /tmp/probe": "privilege.modify",
+            "ssh -n mbp-omarchy git push --force origin topic": "git.history_mutation",
+            "ssh -p 2222 host railway up": "production.mutate",
+            "ssh user@host vite --host 0.0.0.0": "network.public_exposure",
             "sudo touch /tmp/probe": "privilege.modify",
             "/usr/bin/sudo touch /tmp/probe": "privilege.modify",
             "vite --host 0.0.0.0": "network.public_exposure",
@@ -69,6 +72,21 @@ class V2ConsequenceKernelTests(unittest.TestCase):
                 decision = self._shell(command)
                 self.assertEqual("approval_required", decision.outcome)
                 self.assertEqual(consequence, decision.consequence)
+
+    def test_ssh_transport_is_not_a_denied_consequence(self):
+        allowed = (
+            "ssh mbp-omarchy",
+            "/usr/bin/ssh mbp-omarchy",
+            "ssh -n mbp-omarchy hostname",
+            "ssh -o BatchMode=yes -p 22 laptop uptime",
+            "ssh user@mbp-omarchy uname -a",
+            "ssh -nT alias cat /etc/os-release",
+        )
+        for command in allowed:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("allow", decision.outcome, decision)
+                self.assertIsNone(decision.consequence)
 
     def test_safe_push_stops_scanning_at_heredoc_payload(self):
         decision = self._shell(
@@ -336,13 +354,14 @@ class V2ConsequenceKernelTests(unittest.TestCase):
     def test_approval_summaries_name_the_direct_target(self):
         force_push = self._shell("git push --force-with-lease origin feature/x")
         production = self._shell("railway up")
-        remote = self._shell("ssh -p 2222 production.example.com")
+        remote = self._shell("ssh -p 2222 production.example.com rm -rf build")
 
         self.assertIn("origin", force_push.display)
         self.assertIn("feature/x", force_push.display)
         self.assertIn("railway up", production.display)
-        self.assertIn("production.example.com", remote.display)
-        self.assertNotIn("to 2222", remote.display)
+        self.assertEqual("filesystem.delete", remote.consequence)
+        self.assertIn("build", remote.display)
+        self.assertNotIn("2222", remote.display)
 
     def test_credential_dump_is_operator_only(self):
         for command in (
@@ -353,6 +372,7 @@ class V2ConsequenceKernelTests(unittest.TestCase):
             "printenv",
             "printenv -0",
             "printenv --null",
+            "ssh laptop printenv",
         ):
             with self.subTest(command=command):
                 decision = self._shell(command)
