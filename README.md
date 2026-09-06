@@ -18,7 +18,7 @@ Ordinary feature-branch pushes, pull-request creation, and protected merges with
 
 ## Status
 
-`3.0.0-alpha.7` is the current source candidate. Repository state does not prove installation or activation; hosts install immutable releases through separately reviewed operator maintenance. Earlier immutable releases and adapters remain available for rollback and comparison.
+`3.0.0-alpha.8` is the current source candidate. Repository state does not prove installation or activation; hosts install immutable releases through separately reviewed operator maintenance. Earlier immutable releases and adapters remain available for rollback and comparison.
 
 ## Candidate implementation
 

@@ -88,6 +88,29 @@ class V2ConsequenceKernelTests(unittest.TestCase):
                 self.assertEqual("allow", decision.outcome, decision)
                 self.assertIsNone(decision.consequence)
 
+    def test_ssh_identity_file_is_authentication_not_credential_access(self):
+        allowed = (
+            "ssh -i /home/test/.ssh/mbp_omarchy_ed25519 -o BatchMode=yes slayga@mbp-omarchy hostname",
+            "ssh -i /home/test/.ssh/mbp_omarchy_ed25519 slayga@mbp-omarchy",
+            "ssh -o IdentityFile=/home/test/.ssh/mbp_omarchy_ed25519 -o BatchMode=yes slayga@mbp-omarchy hostname",
+        )
+        for command in allowed:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("allow", decision.outcome, decision)
+                self.assertIsNone(decision.consequence)
+
+        denied = (
+            "cat /home/test/.ssh/mbp_omarchy_ed25519",
+            "cp /home/test/.ssh/mbp_omarchy_ed25519 /tmp/backup",
+            "ssh -i /home/test/.ssh/mbp_omarchy_ed25519 slayga@mbp-omarchy cat /home/test/.ssh/id_ed25519",
+        )
+        for command in denied:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("operator_only", decision.outcome, decision)
+                self.assertEqual("credentials.access", decision.consequence)
+
     def test_safe_push_stops_scanning_at_heredoc_payload(self):
         decision = self._shell(
             "git push origin HEAD:feature/safe && gh pr create --body-file - <<'EOF'\n"

@@ -170,7 +170,14 @@ class ConsequenceKernel:
             return Decision("allow")
         executable = Path(tokens[0]).name
         token_paths, positionals, redirect_targets = self._shell_paths(tokens[1:], cwd)
-        if any(self._inside(path, self.credential_paths) for path in token_paths):
+        credential_scan = token_paths
+        if executable == "ssh":
+            identity_files = {
+                self._resolve_from(value, cwd)
+                for value in self._ssh_identity_files(tokens[1:])
+            }
+            credential_scan = tuple(path for path in token_paths if path not in identity_files)
+        if any(self._inside(path, self.credential_paths) for path in credential_scan):
             return Decision(
                 "operator_only",
                 "credentials.access",
@@ -552,6 +559,48 @@ class ConsequenceKernel:
                 continue
             return token, tuple(args[index + 1 :])
         return "remote host", ()
+
+    @staticmethod
+    def _ssh_identity_files(args: list[str]) -> tuple[str, ...]:
+        found: list[str] = []
+        index = 0
+        while index < len(args):
+            token = args[index]
+            if token == "--":
+                break
+            if token == "-i" and index + 1 < len(args):
+                found.append(args[index + 1])
+                index += 2
+                continue
+            if token.startswith("-i") and len(token) > 2:
+                value = token[2:].removeprefix("=")
+                if value:
+                    found.append(value)
+                index += 1
+                continue
+            if token == "-o" and index + 1 < len(args):
+                identity = ConsequenceKernel._ssh_identity_option_value(args[index + 1])
+                if identity:
+                    found.append(identity)
+                index += 2
+                continue
+            if token.startswith("-o") and token != "-o":
+                identity = ConsequenceKernel._ssh_identity_option_value(token[2:].lstrip("="))
+                if identity:
+                    found.append(identity)
+                index += 1
+                continue
+            index += 1
+        return tuple(found)
+
+    @staticmethod
+    def _ssh_identity_option_value(option: str) -> str | None:
+        if "=" not in option:
+            return None
+        name, value = option.split("=", 1)
+        if name.lower() != "identityfile" or not value:
+            return None
+        return value
 
     @staticmethod
     def _git_display(args: list[str]) -> str:

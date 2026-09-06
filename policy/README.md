@@ -9,7 +9,7 @@ SSH is a transport. The local classifier inspects the local command string, not 
 - Options, destination aliases, and a remote command included in the local invocation are visible.
 - When a remote command is present, it is classified with the same direct-consequence rules as a local command. Paths in that string are resolved against the local working directory and local protected roots, not the remote filesystem.
 - `ssh destination` with no remote command starts an interactive remote shell. The local hook can allow that launch. It does not inspect commands typed after login. A local allow is not remote enforcement.
-- Destructive, secret, authentication, public-exposure, and host-policy restrictions still apply when those actions are visible in the local command string.
+- `ssh -i <key-path>` and `-o IdentityFile=` use a private key for authentication. That is not reading or exposing the key. Dumping or copying private keys remains denied.
 
 `scp` and `rsync` remain `remote.execute` in the v1 command inspector. The 3.0 kernel does not treat those executables as a distinct consequence.
 

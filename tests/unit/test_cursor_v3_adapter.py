@@ -70,6 +70,20 @@ class CursorV3AdapterTests(unittest.TestCase):
         self.assertEqual("deny", denied["permission"])
         self.assertIn("filesystem.delete", denied["user_message"])
 
+    def test_ssh_identity_file_is_allowed_and_key_dump_stays_denied(self):
+        identity = self.root / "home" / ".ssh" / "mbp_omarchy_ed25519"
+        allowed = handle(
+            self.shell_payload(
+                f"ssh -i {identity} -o BatchMode=yes slayga@mbp-omarchy hostname"
+            ),
+            self.kernel,
+        )
+        self.assertEqual({"permission": "allow"}, allowed)
+
+        dumped = handle(self.shell_payload(f"cat {identity}"), self.kernel)
+        self.assertEqual("deny", dumped["permission"])
+        self.assertIn("credentials.access", dumped["user_message"])
+
     def test_sudo_and_force_push_are_denied(self):
         for command, consequence in (
             ("sudo apt install jq", "privilege.modify"),
