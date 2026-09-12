@@ -14,7 +14,13 @@ The deny set is:
 - credential access; and
 - modification of Safe YOLO or its hook surface.
 
-Ordinary feature-branch pushes, pull-request creation, and protected merges without bypass flags remain allowed. Repository checks and branch protection decide whether a merge is ready.
+Ordinary feature-branch pushes, pull-request creation, and protected merges
+without bypass flags remain allowed. Verified merged-branch retirement is part
+of the repository's guarded landing workflow and remains allowed there,
+including GitHub's transactional `--delete-branch` merge option. Raw ref
+deletion remains denied because the command alone cannot prove that the ref is
+merged or unchanged. Repository checks and branch protection decide whether a
+merge is ready.
 
 ## Status
 

@@ -116,17 +116,27 @@ class FeaturePushTests(unittest.TestCase):
         self.assertEqual("require_capability", decision["decision"])
         self.assertEqual("git.push_protected", decision["policy_id"])
 
-    def test_force_broad_delete_and_forced_refspec_remain_hard_blocked(self):
+    def test_force_broad_and_forced_refspec_remain_hard_blocked(self):
         for command in (
             "git push --force origin task/repair-0160-attestation",
             "git push --force-with-lease origin task/repair-0160-attestation",
             "git push --all origin",
-            "git push --delete origin task/repair-0160-attestation",
             "git push origin +task/repair-0160-attestation",
         ):
             with self.subTest(command=command):
                 decision = self.inspect_push(command)
                 self.assertEqual("block_hard", decision["decision"])
+
+    def test_unverified_ref_deletion_is_distinctly_classified(self):
+        for command in (
+            "git push --delete origin task/repair-0160-attestation",
+            "git push -d origin task/repair-0160-attestation",
+            "git push origin :task/repair-0160-attestation",
+        ):
+            with self.subTest(command=command):
+                decision = self.inspect_push(command)
+                self.assertEqual("block_hard", decision["decision"])
+                self.assertEqual("git.delete_ref", decision["policy_id"])
 
 
 if __name__ == "__main__":

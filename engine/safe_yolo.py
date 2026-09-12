@@ -602,11 +602,13 @@ class SafeYoloEngine:
             return result("block_hard", "git.force_push", "Force push is always Red.")
         if any(arg.startswith("+") for arg in rest):
             return result("block_hard", "git.force_push", "Forced refspecs are always Red.")
-        if any(arg in {"--delete", "--mirror", "--all", "--tags", "--prune"} for arg in rest):
+        if any(arg in {"--delete", "-d"} for arg in rest):
+            return result("block_hard", "git.delete_ref", "Unverified ref deletion is Red.")
+        if any(arg in {"--mirror", "--all", "--tags", "--prune"} for arg in rest):
             return result("block_hard", "git.unsafe_push", "Broad or destructive push shape is blocked.")
         positional = [arg for arg in rest if not arg.startswith("-")]
         if any(arg.startswith(":") or arg.endswith(":") for arg in positional):
-            return result("block_hard", "git.delete_ref", "Ref deletion is Red.")
+            return result("block_hard", "git.delete_ref", "Unverified ref deletion is Red.")
         tag = next((arg for arg in positional if TAG_RE.fullmatch(arg) or "refs/tags/" in arg), None)
         if tag:
             return self.evaluate({"action": "git.push_tag", "target": tag.removeprefix("refs/tags/"), **git_context})
