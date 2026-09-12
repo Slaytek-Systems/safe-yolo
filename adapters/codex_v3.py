@@ -16,6 +16,7 @@ from engine.consequences_v3 import DenyOnlyKernel
 SAFE_METHODS = {
     "filesystem.delete": "move the target to managed quarantine or leave it for managed cleanup",
     "git.history_mutation": "use an additive commit or the repository's guarded history workflow",
+    "git.delete_ref": "use the repository's guarded merged-branch retirement workflow",
     "production.mutate": "use the repository's protected merge and deployment workflow without bypass flags",
     "remote.execute": "use the owning workspace or reviewed remote-operation interface",
     "privilege.modify": "use the documented administrator-owned maintenance path",

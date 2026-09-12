@@ -100,6 +100,19 @@ class V3DenyOnlyTests(unittest.TestCase):
         self.assertEqual("deny", denied.outcome)
         self.assertNotIn(denied.outcome, {"approval_required", "operator_only"})
 
+    def test_unverified_ref_deletion_routes_to_guarded_branch_retirement(self):
+        denial = handle_pre_tool(
+            self.payload(
+                "git push origin --delete task/one task/two release/candidate"
+            ),
+            self.kernel,
+        )
+
+        reason = denial["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("git.delete_ref", reason)
+        self.assertIn("guarded merged-branch retirement workflow", reason)
+        self.assertNotIn("additive commit", reason)
+
     def test_help_flags_cannot_bypass_protected_path_denials(self):
         commands = (
             f"env --help >{self.root / 'codex' / 'hooks.json'}",

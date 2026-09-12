@@ -40,7 +40,6 @@ class V2ConsequenceKernelTests(unittest.TestCase):
             "git push --force-with-lease origin feature/x": "git.history_mutation",
             "/usr/bin/git push --mirror origin": "git.history_mutation",
             "git push --prune origin": "git.history_mutation",
-            "git push -d origin feature/x": "git.history_mutation",
             "git -C /repo push --force origin feature/x": "git.history_mutation",
             "git reset --hard HEAD~1": "git.history_mutation",
             "git --no-pager reset --hard HEAD~1": "git.history_mutation",
@@ -70,6 +69,17 @@ class V2ConsequenceKernelTests(unittest.TestCase):
                 self.assertEqual("approval_required", decision.outcome)
                 self.assertEqual(consequence, decision.consequence)
 
+    def test_remote_branch_deletion_is_not_reported_as_history_rewrite(self):
+        for command in (
+            "git push -d origin feature/x",
+            "git push --delete origin feature/x",
+            "git push origin :feature/x",
+        ):
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual("git.delete_ref", decision.consequence)
+
     def test_safe_push_stops_scanning_at_heredoc_payload(self):
         decision = self._shell(
             "git push origin HEAD:feature/safe && gh pr create --body-file - <<'EOF'\n"
@@ -91,30 +101,30 @@ class V2ConsequenceKernelTests(unittest.TestCase):
                 self.assertEqual("allow", decision.outcome)
                 self.assertIsNone(decision.display)
 
-    def test_git_push_force_detection_keeps_force_tokens_before_heredoc(self):
+    def test_git_push_restrictions_keep_tokens_before_heredoc(self):
         cases = (
-            ("git push origin '&&' --force-with-lease <<EOF\nsafe\nEOF", "git push to origin && <<EOF"),
-            ("git push origin '&&' +topic/main:topic/main <<EOF\nsafe\nEOF", "git push to origin && +topic/main:topic/main <<EOF"),
-            ("git push origin HEAD:topic/main &&keep --force-with-lease <<EOF\nsafe\nEOF", "git push to origin HEAD:topic/main &&keep <<EOF"),
-            ("git push origin :topic/main <<EOF\nsafe\nEOF", "git push to origin :topic/main <<EOF"),
+            ("git push origin '&&' --force-with-lease <<EOF\nsafe\nEOF", "git push to origin && <<EOF", "git.history_mutation"),
+            ("git push origin '&&' +topic/main:topic/main <<EOF\nsafe\nEOF", "git push to origin && +topic/main:topic/main <<EOF", "git.history_mutation"),
+            ("git push origin HEAD:topic/main &&keep --force-with-lease <<EOF\nsafe\nEOF", "git push to origin HEAD:topic/main &&keep <<EOF", "git.history_mutation"),
+            ("git push origin :topic/main <<EOF\nsafe\nEOF", "git push to origin :topic/main <<EOF", "git.delete_ref"),
         )
-        for command, display in cases:
+        for command, display, consequence in cases:
             with self.subTest(command=command):
                 decision = self._shell(command)
                 self.assertEqual("approval_required", decision.outcome)
-                self.assertEqual("git.history_mutation", decision.consequence)
+                self.assertEqual(consequence, decision.consequence)
                 self.assertEqual(display, decision.display)
 
     def test_git_push_split_delimiter_keeps_post_declaration_force_and_refspec(self):
         cases = (
-            "git push origin HEAD:topic/main << EOF --force-with-lease\nsafe\nEOF",
-            "git push origin HEAD:topic/main << EOF :topic/main\nsafe\nEOF",
+            ("git push origin HEAD:topic/main << EOF --force-with-lease\nsafe\nEOF", "git.history_mutation"),
+            ("git push origin HEAD:topic/main << EOF :topic/main\nsafe\nEOF", "git.delete_ref"),
         )
-        for command in cases:
+        for command, consequence in cases:
             with self.subTest(command=command):
                 decision = self._shell(command)
                 self.assertEqual("approval_required", decision.outcome)
-                self.assertEqual("git.history_mutation", decision.consequence)
+                self.assertEqual(consequence, decision.consequence)
 
     def test_git_push_here_strings_do_not_hide_force_flags(self):
         cases = (

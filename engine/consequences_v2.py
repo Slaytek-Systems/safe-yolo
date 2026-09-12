@@ -215,6 +215,12 @@ class ConsequenceKernel:
                 "git.history_mutation",
                 self._git_display(git_args),
             )
+        if executable == "git" and self._git_ref_deletion(git_args):
+            return Decision(
+                "approval_required",
+                "git.delete_ref",
+                self._git_display(git_args),
+            )
         if self._production_mutation(tokens):
             return Decision(
                 "approval_required",
@@ -407,15 +413,12 @@ class ConsequenceKernel:
                     "-f",
                     "--force",
                     "--force-with-lease",
-                    "--delete",
-                    "-d",
                     "--tags",
                     "--mirror",
                     "--prune",
                 }
                 or token.startswith("--force-with-lease=")
                 or token.startswith("+")
-                or (token.startswith(":") and len(token) > 1)
                 for token in args[1:]
             )
         if args[0] == "rebase":
@@ -429,6 +432,16 @@ class ConsequenceKernel:
         if args[0] == "checkout" and "--" in args[1:]:
             return True
         return False
+
+    @staticmethod
+    def _git_ref_deletion(args: list[str]) -> bool:
+        if not args or args[0] != "push":
+            return False
+        return any(
+            token in {"--delete", "-d"}
+            or (token.startswith(":") and len(token) > 1)
+            for token in args[1:]
+        )
 
     @staticmethod
     def _git_command_args(args: list[str]) -> list[str]:
