@@ -32,3 +32,13 @@ The v3 doctor requires one `PreToolUse` command matched to `*`, pinned to the ex
 - Host activation remains separate from repository state; each host keeps its prior immutable release until its separately authorized review, recovery, and operator cutover complete.
 
 All installation and hook changes are operator-maintenance actions. A governed Codex session may inspect source and health but cannot replace its own enforcement runtime.
+
+The external Devbox operator uses the reviewed source checkout and exact commit pin:
+
+```sh
+python3 scripts/activate_v3.py \
+  --source /path/to/reviewed/safe-yolo \
+  --expected-source-commit FULL_REVIEWED_SHA
+```
+
+The operator verifies a clean exact source revision, installs or reuses only a matching immutable 3.x release, preserves a timestamped hook backup, atomically repins the single Codex `PreToolUse` hook, runs the doctor, and restores the old hook document if wiring validation fails. The command must run outside the governed agent session.

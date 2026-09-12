@@ -71,6 +71,24 @@ class CursorV3AdapterTests(unittest.TestCase):
                 self.assertEqual("deny", denied["permission"])
                 self.assertIn(consequence, denied["user_message"])
 
+    def test_ssh_transport_allows_inspection_and_denies_hidden_effects(self):
+        for command in (
+            "ssh -N -L 8080:localhost:80 devbox",
+            "ssh -n devbox hostname",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(
+                    {"permission": "allow"},
+                    handle(self.shell_payload(command), self.kernel),
+                )
+
+        denied = handle(
+            self.shell_payload('ssh devbox "rm -rf /workspace/build"'),
+            self.kernel,
+        )
+        self.assertEqual("deny", denied["permission"])
+        self.assertIn("filesystem.delete", denied["user_message"])
+
     def test_structured_edits_to_enforcement_are_denied(self):
         for tool_name, path in (
             ("Write", self.root / "home" / ".cursor" / "hooks.json"),

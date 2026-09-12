@@ -113,6 +113,30 @@ class V3DenyOnlyTests(unittest.TestCase):
         self.assertIn("guarded merged-branch retirement workflow", reason)
         self.assertNotIn("additive commit", reason)
 
+    def test_ssh_transport_and_visible_commands_share_the_consequence_kernel(self):
+        allowed = (
+            "ssh -N -L 8080:localhost:80 devbox",
+            "ssh -n devbox hostname",
+        )
+        for command in allowed:
+            with self.subTest(command=command):
+                self.assertIsNone(handle_pre_tool(self.payload(command), self.kernel))
+
+        denied = {
+            "ssh devbox": "remote.execute",
+            'ssh devbox "rm -rf build"': "filesystem.delete",
+            "ssh -o 'RemoteCommand=sudo touch /tmp/probe' devbox": "privilege.modify",
+            "ssh -F /tmp/alternate-config devbox hostname": "remote.execute",
+        }
+        for command, consequence in denied.items():
+            with self.subTest(command=command):
+                result = handle_pre_tool(self.payload(command), self.kernel)
+                self.assertEqual("deny", result["hookSpecificOutput"]["permissionDecision"])
+                self.assertIn(
+                    consequence,
+                    result["hookSpecificOutput"]["permissionDecisionReason"],
+                )
+
     def test_help_flags_cannot_bypass_protected_path_denials(self):
         commands = (
             f"env --help >{self.root / 'codex' / 'hooks.json'}",
