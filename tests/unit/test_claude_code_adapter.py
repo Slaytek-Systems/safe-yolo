@@ -56,7 +56,7 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
         for command, consequence in (
             ("sudo apt install jq", "privilege.modify"),
             ("git push --force origin main", "git.history_mutation"),
-            ("ssh devbox uptime", "remote.execute"),
+            ("ssh devbox", "remote.execute"),
             ("gh pr merge 12 --admin", "production.mutate"),
             ("vite --host 0.0.0.0", "network.public_exposure"),
             ("printenv", "credentials.access"),

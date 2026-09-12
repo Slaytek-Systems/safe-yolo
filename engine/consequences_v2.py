@@ -5,6 +5,8 @@ from pathlib import Path
 import shlex
 from typing import Any, Literal
 
+from engine.ssh_command import parse_ssh_invocation
+
 
 Outcome = Literal["allow", "approval_required", "operator_only"]
 
@@ -169,8 +171,16 @@ class ConsequenceKernel:
         if not tokens:
             return Decision("allow")
         executable = Path(tokens[0]).name
+        ssh_invocation = parse_ssh_invocation(tokens[1:]) if executable == "ssh" else None
         token_paths, positionals, redirect_targets = self._shell_paths(tokens[1:], cwd)
-        if any(self._inside(path, self.credential_paths) for path in token_paths):
+        credential_scan = token_paths
+        if ssh_invocation is not None:
+            identity_files = {
+                self._resolve_from(value, cwd)
+                for value in ssh_invocation.identity_files
+            }
+            credential_scan = tuple(path for path in token_paths if path not in identity_files)
+        if any(self._inside(path, self.credential_paths) for path in credential_scan):
             return Decision(
                 "operator_only",
                 "credentials.access",
@@ -228,12 +238,24 @@ class ConsequenceKernel:
                 f"run {self._production_display(tokens)} production mutation",
             )
         if executable == "ssh":
-            host = self._ssh_host(tokens[1:])
-            return Decision(
-                "approval_required",
-                "remote.execute",
-                f"open a remote shell to {host}",
-            )
+            assert ssh_invocation is not None
+            if (
+                ssh_invocation.opaque_config
+                or ssh_invocation.malformed
+                or ssh_invocation.subsystem
+            ):
+                return self._remote_execution(ssh_invocation.host)
+            for local_command in ssh_invocation.local_commands:
+                decision = self._remote_shell(local_command, cwd)
+                if decision.outcome != "allow":
+                    return decision
+            for remote_command in ssh_invocation.remote_commands:
+                decision = self._remote_shell(remote_command, cwd)
+                if decision.outcome != "allow":
+                    return decision
+            if ssh_invocation.remote_commands or ssh_invocation.transport_only:
+                return Decision("allow")
+            return self._remote_execution(ssh_invocation.host)
         if executable in {"sudo", "doas", "su"}:
             return Decision(
                 "approval_required",
@@ -247,6 +269,50 @@ class ConsequenceKernel:
                 "bind a development service to a public interface",
             )
         return Decision("allow")
+
+    def _remote_shell(self, command: str, cwd: Path) -> Decision:
+        try:
+            tokens = self._line_tokens(command)
+        except ValueError:
+            return Decision(
+                "approval_required",
+                "remote.execute",
+                "execute an unparseable remote command",
+            )
+        current: list[str] = []
+        separators = {"|", "||", "|&", "&&", ";"}
+        for token in [*tokens, ";"]:
+            if token not in separators:
+                current.append(token)
+                continue
+            if current:
+                decision = self._remote_segment(current, cwd)
+                if decision.outcome != "allow":
+                    return decision
+                current = []
+        return Decision("allow")
+
+    def _remote_segment(self, tokens: list[str], cwd: Path) -> Decision:
+        if not tokens:
+            return Decision("allow")
+        executable = Path(tokens[0]).name
+        if executable in {"command", "builtin", "exec"} and len(tokens) > 1:
+            return self._remote_segment(tokens[1:], cwd)
+        if executable in {"bash", "dash", "fish", "ksh", "sh", "zsh"}:
+            for index, token in enumerate(tokens[1:], start=1):
+                if token == "-c" or (token.startswith("-") and "c" in token[1:]):
+                    if index + 1 >= len(tokens):
+                        return self._remote_execution("remote host")
+                    return self._remote_shell(" ".join(tokens[index + 1 :]), cwd)
+        return self._shell(shlex.join(tokens), cwd)
+
+    @staticmethod
+    def _remote_execution(host: str | None) -> Decision:
+        return Decision(
+            "approval_required",
+            "remote.execute",
+            f"open a remote shell to {host or 'remote host'}",
+        )
 
     @classmethod
     def _mutation_targets(
@@ -523,45 +589,6 @@ class ConsequenceKernel:
                 strip_tabs = delimiter.startswith("-") and len(delimiter) > 1
                 return (delimiter[1:] if strip_tabs else delimiter), strip_tabs
         return None
-
-    @staticmethod
-    def _ssh_host(args: list[str]) -> str:
-        options_with_values = {
-            "-B",
-            "-b",
-            "-c",
-            "-D",
-            "-E",
-            "-e",
-            "-F",
-            "-I",
-            "-i",
-            "-J",
-            "-L",
-            "-l",
-            "-m",
-            "-O",
-            "-o",
-            "-P",
-            "-p",
-            "-R",
-            "-S",
-            "-W",
-            "-w",
-        }
-        index = 0
-        while index < len(args):
-            token = args[index]
-            if token == "--":
-                return args[index + 1] if index + 1 < len(args) else "remote host"
-            if token in options_with_values:
-                index += 2
-                continue
-            if token.startswith("-"):
-                index += 1
-                continue
-            return token
-        return "remote host"
 
     @staticmethod
     def _git_display(args: list[str]) -> str:

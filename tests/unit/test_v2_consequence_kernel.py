@@ -69,6 +69,83 @@ class V2ConsequenceKernelTests(unittest.TestCase):
                 self.assertEqual("approval_required", decision.outcome)
                 self.assertEqual(consequence, decision.consequence)
 
+    def test_ssh_visible_commands_are_classified_by_their_consequence(self):
+        allowed = (
+            "ssh -n mbp-omarchy hostname",
+            "ssh -o BatchMode=yes -p 22 laptop uptime",
+            "ssh user@mbp-omarchy uname -a",
+        )
+        for command in allowed:
+            with self.subTest(command=command):
+                self.assertEqual("allow", self._shell(command).outcome)
+
+        denied = {
+            "ssh production.example.com rm -rf build": "filesystem.delete",
+            "/usr/bin/ssh production.example.com sudo touch /tmp/probe": "privilege.modify",
+            "ssh -n mbp-omarchy git push --force origin topic": "git.history_mutation",
+            "ssh -p 2222 host railway up": "production.mutate",
+            "ssh user@host vite --host 0.0.0.0": "network.public_exposure",
+        }
+        for command, consequence in denied.items():
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual(consequence, decision.consequence)
+
+    def test_ssh_quoted_and_option_commands_cannot_hide_restricted_actions(self):
+        denied = {
+            'ssh host "rm -rf build"': "filesystem.delete",
+            "ssh host printf ok ';' rm -rf build": "filesystem.delete",
+            "ssh host sh -c 'rm -rf build'": "filesystem.delete",
+            "ssh -o 'RemoteCommand=rm -rf build' host": "filesystem.delete",
+            "ssh -o 'RemoteCommand=sh -c rm -rf build' host": "filesystem.delete",
+            "ssh -o 'ProxyCommand=rm -rf /tmp/proxy' host": "filesystem.delete",
+            "ssh -o PermitLocalCommand=yes -o 'LocalCommand=sudo touch /tmp/probe' host": "privilege.modify",
+        }
+        for command, consequence in denied.items():
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual(consequence, decision.consequence)
+
+    def test_ssh_allows_explicit_no_session_transport_but_not_hidden_or_interactive_execution(self):
+        allowed = (
+            "ssh -N -L 8080:localhost:80 devbox",
+            "ssh -W localhost:5432 jump-host",
+            "ssh -O check devbox",
+        )
+        for command in allowed:
+            with self.subTest(command=command):
+                self.assertEqual("allow", self._shell(command).outcome)
+
+        denied = (
+            "ssh devbox",
+            "ssh -T devbox",
+            "ssh -F /tmp/alternate-config devbox hostname",
+            "ssh -s devbox sftp",
+            "ssh -o RemoteCommand=none devbox",
+        )
+        for command in denied:
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual("remote.execute", decision.consequence)
+
+    def test_ssh_identity_file_is_authentication_not_credential_access(self):
+        allowed = (
+            "ssh -i /home/test/.ssh/mbp_omarchy_ed25519 -N -L 8080:localhost:80 slayga@mbp-omarchy",
+            "ssh -o IdentityFile=/home/test/.ssh/mbp_omarchy_ed25519 slayga@mbp-omarchy hostname",
+        )
+        for command in allowed:
+            with self.subTest(command=command):
+                self.assertEqual("allow", self._shell(command).outcome)
+
+        denied = self._shell(
+            "ssh -i /home/test/.ssh/mbp_omarchy_ed25519 slayga@mbp-omarchy cat /home/test/.ssh/id_ed25519"
+        )
+        self.assertEqual("operator_only", denied.outcome)
+        self.assertEqual("credentials.access", denied.consequence)
+
     def test_remote_branch_deletion_is_not_reported_as_history_rewrite(self):
         for command in (
             "git push -d origin feature/x",

@@ -17,7 +17,7 @@ Both hosts use `approval_policy = "never"` and `sandbox_mode = "danger-full-acce
 - Codex task/thread read, create, archive, message, and collaboration tools are classified rather than fail-closed as unknown.
 - macOS protects credential/system surfaces (`~/.ssh`, shell profiles, LaunchAgents, Keychain access).
 - Direct destructive filesystem actions, force pushes, secret exposure, control-plane mutation, and unproven production deploys receive deterministic backpressure.
-- macOS permits only two exact remote Safe YOLO maintenance actions for `devbox`: canonical-source fast-forward pull and the fixed remote updater. Arbitrary SSH remains blocked.
+- macOS permits only two exact remote Safe YOLO maintenance actions for `devbox`: canonical-source fast-forward pull and the fixed remote updater. Explicit no-session transport and visible ordinary remote commands are classified by their actual consequence; interactive, hidden, redirected-maintenance, and restricted remote execution remains blocked.
 
 ## Reopen protocol
 

@@ -9,7 +9,7 @@ The deny set is:
 - permanent filesystem deletion;
 - raw Git history or ref destruction;
 - direct deployment or infrastructure mutation, including protection bypasses;
-- remote or privileged execution;
+- interactive, hidden, or restricted remote execution, and privileged execution;
 - public network exposure;
 - credential access; and
 - modification of Safe YOLO or its hook surface.
@@ -24,11 +24,12 @@ merge is ready.
 
 ## Status
 
-`3.0.0-alpha.6` is the current source candidate. Repository state does not prove installation or activation; hosts install immutable releases through separately reviewed operator maintenance. Earlier immutable releases and adapters remain available for rollback and comparison.
+`3.0.0-alpha.9` is the current source candidate. Repository state does not prove installation or activation; hosts install immutable releases through separately reviewed operator maintenance. Earlier immutable releases and adapters remain available for rollback and comparison.
 
 ## Candidate implementation
 
 - `engine/consequences_v3.py` — current deny-only direct consequence policy. Output redirects and mutating executables bind `enforcement.modify` to the actual write target; v3 adapters declare trusted scratch roots (`/tmp` and `~/tmp` by default, replaceable with `--scratch`) so `rm`/`unlink`/`rmdir` and structured `delete_file`/`remove_file` inside those roots is allowed.
+- `engine/ssh_command.py` — shared SSH argv parser. Explicit no-session transport and visible ordinary remote commands are allowed; interactive shells, opaque config files, subsystems, command-bearing options with restricted effects, and redirected maintenance commands are denied.
 - `adapters/codex_v3.py` — stateless Codex `PreToolUse` transport.
 - `adapters/devin_v3.py` — stateless Devin `PreToolUse` transport over the same kernel.
 - `adapters/claude_code_v3.py` — stateless Claude Code `PreToolUse` transport over the same kernel; wired from `~/.claude/settings.json` (see `hosts/linux/devbox.claude-code-candidate.settings.json`).

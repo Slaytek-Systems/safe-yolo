@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+from engine.ssh_command import parse_ssh_invocation
 from urllib.parse import urlparse
 
 from .capabilities import CapabilityStore
@@ -528,18 +530,33 @@ class SafeYoloEngine:
         return result("allow", "railway.inspect", "Railway status/list inspection is permitted.")
 
     def _inspect_remote(self, executable: str, args: list[str], context: dict[str, Any]) -> dict[str, Any]:
+        if executable != "ssh":
+            return self.evaluate({"action": "remote.execute", **context})
+        invocation = parse_ssh_invocation(args)
         contract = self.host_contract.get("remote_maintenance") or {}
-        if executable != "ssh" or not contract:
-            return self.evaluate({"action": "remote.execute", **context})
-        remaining = list(args)
-        if remaining[:1] == ["-n"]:
-            remaining = remaining[1:]
-        if not remaining or remaining[0] != contract.get("host"):
-            return self.evaluate({"action": "remote.execute", **context})
-        remote_command = remaining[1:]
         allowed_commands = contract.get("commands") or []
-        if remote_command in allowed_commands:
+        matches_maintenance_command = list(invocation.remote_tokens) in allowed_commands
+        if matches_maintenance_command and (
+            invocation.host != contract.get("host")
+            or invocation.route_overridden
+            or invocation.opaque_config
+            or invocation.local_commands
+        ):
+            return self.evaluate({"action": "remote.execute", **context})
+        if matches_maintenance_command and invocation.host == contract.get("host"):
             return result("allow_report", "remote.safe_yolo_maintenance", "Exact verified Safe YOLO maintenance command for devbox is permitted.")
+        if invocation.opaque_config or invocation.malformed or invocation.subsystem:
+            return self.evaluate({"action": "remote.execute", **context})
+        for local_command in invocation.local_commands:
+            inspected = self.inspect_command(local_command, context)
+            if inspected["decision"] != "allow":
+                return inspected
+        for remote_command in invocation.remote_commands:
+            inspected = self.inspect_command(remote_command, context)
+            if inspected["decision"] != "allow":
+                return inspected
+        if invocation.remote_commands or invocation.transport_only:
+            return result("allow", "remote.transport", "Visible SSH transport and command consequences are permitted.")
         return self.evaluate({"action": "remote.execute", **context})
 
     @staticmethod
