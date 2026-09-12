@@ -28,9 +28,19 @@ _OPTIONS_WITH_VALUES = {
     "-w",
 }
 _ATTACHED_VALUE_OPTIONS = tuple(sorted(_OPTIONS_WITH_VALUES, key=len, reverse=True))
-_ROUTE_FLAGS = {"-F", "-J", "-l", "-p"}
+_ROUTE_FLAGS = {"-F", "-J", "-S", "-l", "-p"}
 _LOCAL_COMMAND_OPTIONS = {"localcommand", "proxycommand", "knownhostscommand"}
-_ROUTE_OPTIONS = {"hostname", "proxyjump", "proxycommand"}
+_ROUTE_OPTIONS = {
+    "canonicaldomains",
+    "canonicalizehostname",
+    "controlpath",
+    "hostname",
+    "include",
+    "port",
+    "proxycommand",
+    "proxyjump",
+    "user",
+}
 
 
 @dataclass(frozen=True)
@@ -110,6 +120,8 @@ def parse_ssh_invocation(args: list[str]) -> SshInvocation:
                     remote_commands.append(command_value)
                 if name == "sessiontype" and option_value.lower() == "none":
                     transport_only = True
+                if name == "include":
+                    opaque_config = True
                 if name in _ROUTE_OPTIONS:
                     route_overridden = True
             if flag in _ROUTE_FLAGS:

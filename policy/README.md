@@ -10,4 +10,4 @@ Raw deployment, destructive migration, and arbitrary shell-composed release path
 
 ## SSH rule
 
-SSH uses the shared `engine/ssh_command.py` parser across legacy and deny-only adapters. Explicit no-session transport and visible ordinary remote commands are allowed. Interactive shells, subsystems, opaque `-F` configuration, and restricted commands embedded in remote, proxy, local, or `RemoteCommand` options are denied. A host-contract maintenance command loses its exception when command-line routing, identity, port, user, jump, proxy, or configuration overrides can redirect it.
+SSH uses the shared `engine/ssh_command.py` parser across legacy and deny-only adapters. Explicit no-session transport and visible ordinary remote commands are allowed. Interactive shells, subsystems, opaque alternate configuration, and restricted commands embedded in remote, proxy, local, or `RemoteCommand` options are denied. A host-contract maintenance command loses its exception when command-line routing, port, user, jump, proxy, control-socket, or configuration overrides can redirect it.

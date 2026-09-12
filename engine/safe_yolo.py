@@ -536,11 +536,15 @@ class SafeYoloEngine:
         contract = self.host_contract.get("remote_maintenance") or {}
         allowed_commands = contract.get("commands") or []
         matches_maintenance_command = list(invocation.remote_tokens) in allowed_commands
+        has_remote_command_option = len(invocation.remote_commands) > (
+            1 if invocation.remote_tokens else 0
+        )
         if matches_maintenance_command and (
             invocation.host != contract.get("host")
             or invocation.route_overridden
             or invocation.opaque_config
             or invocation.local_commands
+            or has_remote_command_option
         ):
             return self.evaluate({"action": "remote.execute", **context})
         if matches_maintenance_command and invocation.host == contract.get("host"):

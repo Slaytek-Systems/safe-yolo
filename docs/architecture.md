@@ -30,7 +30,7 @@ Current-repository pull-request merges are ordinary shipping and remain allowed.
 
 The direct recognizers are deliberately narrow. Composition such as wrappers, scripts, inline programs, shell chains, or a new semantic tool can route around them. That is an accepted property of backpressure and must not be repaired with another general classifier.
 
-SSH is one shared recognizer rather than an adapter exception. Explicit no-session forwarding and visible ordinary remote commands are allowed. Interactive shells, subsystems, alternate configuration files, and restricted local or remote commands remain denied. The exact Devbox maintenance command is accepted only when its host and command match the contract and no command-line host, route, port, user, jump, proxy, or config override can redirect it.
+SSH is one shared recognizer rather than an adapter exception. Explicit no-session forwarding and visible ordinary remote commands are allowed. Interactive shells, subsystems, alternate configuration files, and restricted local or remote commands remain denied. The exact Devbox maintenance command is accepted only when its host and command match the contract and no command-line host, route, port, user, jump, proxy, control-socket, or config override can redirect it.
 
 ## No approval state
 

