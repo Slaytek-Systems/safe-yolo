@@ -40,7 +40,7 @@ Agents intentionally cannot deploy to production yet. A project-specific release
 
 ## Durable source of truth
 
-- Repository: `https://github.com/Mattslayga/safe-yolo`
+- Repository: `https://github.com/Slaytek-Systems/safe-yolo`
 - Active configuration: each host's `~/.codex/hooks.json`
 - Immutable releases: each host's `~/.safe-yolo/releases/`
 - Evidence: each host's `~/.safe-yolo/state/audit.jsonl`
