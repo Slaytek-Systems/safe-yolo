@@ -1,0 +1,20 @@
+[branches]
+production = "main"
+task_prefixes = [
+  "chore/",
+  "docs/",
+  "feat/",
+  "feature/",
+  "fix/",
+  "task/",
+]
+task_base = "main"
+release_prefix = "release/"
+sandbox = "sandbox/safe-yolo"
+experiment_prefix = "experiment/"
+
+[release]
+integration_merge_method = "squash"
+integration_merge_reason = "integrate one reviewed Safe YOLO change into main"
+production_merge_method = "merge"
+production_merge_reason = "preserve an explicitly reviewed release boundary"

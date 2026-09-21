@@ -328,7 +328,9 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
 
         del document["disableAllHooks"]
         document["hooks"]["PostToolUse"] = document["hooks"]["PreToolUse"]
-        document["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = command.replace("alpha", "beta")
+        document["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = command.replace(
+            str(installed["release"]), f"{installed['release']}-stale"
+        )
         settings.write_text(json.dumps(document))
         stale = inspect_claude_code_wiring(
             settings,
