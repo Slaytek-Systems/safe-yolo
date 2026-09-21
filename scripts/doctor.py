@@ -42,6 +42,9 @@ def inspect_codex_wiring(
         problems.append("approval_policy must be never")
     if config.get("sandbox_mode") != "danger-full-access":
         problems.append("sandbox_mode must be danger-full-access")
+    features = config.get("features", {})
+    if isinstance(features, dict) and features.get("hooks") is False:
+        problems.append("hooks feature must be enabled")
     try:
         document = json.loads(Path(hooks_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:

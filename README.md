@@ -24,7 +24,54 @@ merge is ready.
 
 ## Status
 
-`3.0.0-alpha.9` is the current source candidate. Repository state does not prove installation or activation; hosts install immutable releases through separately reviewed operator maintenance. Earlier immutable releases and adapters remain available for rollback and comparison.
+`3.0.0-beta.1` is the private Codex beta. It has a reversible source installer,
+an immutable runtime release, a read-only doctor, and allow/deny canaries.
+Repository state still does not prove activation in a running Codex session.
+
+## Install the private beta
+
+The supported beta target is a Linux host running Codex with Python 3.12+.
+Clone this private repository with your own GitHub account, then review and run:
+
+```bash
+git clone https://github.com/Slaytek-Systems/safe-yolo.git
+cd safe-yolo
+python3 safe-yolo install
+python3 safe-yolo doctor
+```
+
+Installation requires a clean Git checkout. It validates, but does not change,
+these Codex settings:
+
+```toml
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+
+[features]
+hooks = true
+```
+
+After installation, restart Codex. Open `/hooks`, review the exact Safe YOLO
+command, and trust its hash. This explicit trust step is part of installation;
+the CLI cannot honestly prove it from outside the new Codex session.
+
+To verify the immutable release, hook pin, configuration, and direct runtime
+canaries at any time:
+
+```bash
+python3 safe-yolo doctor
+```
+
+To restore the exact pre-install hook state:
+
+```bash
+python3 safe-yolo deactivate
+```
+
+Deactivation retains the immutable release and rollback evidence. It refuses to
+overwrite `~/.codex/hooks.json` if another tool or person changed that file
+after installation. See [Private beta operations](docs/private-beta.md) for
+distribution, upgrades, rollback, and limitations.
 
 ## Candidate implementation
 
