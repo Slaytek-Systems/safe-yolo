@@ -10,6 +10,8 @@ task_prefixes = [
 ]
 task_base = "main"
 release_prefix = "release/"
+sandbox = "sandbox/safe-yolo"
+experiment_prefix = "experiment/"
 
 [release]
 integration_merge_method = "squash"
