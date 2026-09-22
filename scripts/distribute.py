@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 from scripts.activate_v3 import _ensure_release, verify_source
 from scripts.doctor import inspect_claude_code_wiring, inspect_codex_wiring, inspect_release
 from scripts.harness_specs import HARNESS_BY_ID, HARNESS_HOME_ENV, HARNESSES, HarnessSpec
+from scripts.package import MANIFEST as DISTRIBUTION_MANIFEST, verify_bundle
 from scripts.harness_wiring import (
     inspect_cursor_wiring as _inspect_cursor_wiring,
     pinned_command as _pinned_command,
@@ -263,7 +264,13 @@ def install_harness(
     home = Path(safe_yolo_home).expanduser().resolve(strict=False)
     user = Path(user_home).expanduser().resolve(strict=False)
     target = _config_path(spec, user, config_home)
-    source_commit = verify_source(source_path, expected_commit)
+    source_commit = (
+        verify_bundle(source_path)
+        if (source_path / DISTRIBUTION_MANIFEST).is_file()
+        else verify_source(source_path, expected_commit)
+    )
+    if source_commit != expected_commit:
+        raise RuntimeError('Download source revision does not match the requested revision.')
     release, digest, version = _ensure_release(source_path, home)
     command = _pinned_command(
         home,
@@ -489,6 +496,8 @@ def deactivate_codex(*, safe_yolo_home: str | Path, codex_home: str | Path) -> d
 
 
 def _current_commit(source: Path) -> str:
+    if (source / DISTRIBUTION_MANIFEST).is_file():
+        return verify_bundle(source)
     completed = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=source,

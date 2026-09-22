@@ -24,13 +24,17 @@ merge is ready.
 
 ## Status
 
-`3.0.0-beta.2` is the private, harness-agnostic distribution beta. One
+`3.0.0-beta.3` is the harness-agnostic distribution beta. One
 immutable consequence-policy kernel is exposed through native harness adapters.
 Codex is supported; Claude Code and Cursor have beta lifecycle support. Other
 included adapters remain adapter-only until their install, doctor, and rollback
 journeys receive equivalent proof. See the [support matrix](docs/harness-support.md).
 
 ## Install the private beta
+
+For installation without Git or GitHub access, use the versioned ZIP and
+[download installation guide](docs/download-install.md). Source checkout
+installation remains available below.
 
 The proven platform is Linux with Python 3.12+. Clone this private repository
 with your own GitHub account, inspect the available harnesses, then explicitly
