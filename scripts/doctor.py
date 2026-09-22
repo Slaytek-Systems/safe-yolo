@@ -31,6 +31,9 @@ def inspect_codex_wiring(
     release_path: str | Path,
     entry: str = "codex",
     approval_post_tool: bool = False,
+    safe_yolo_home: str | Path | None = None,
+    user_home: str | Path | None = None,
+    harness_home: str | Path | None = None,
 ) -> dict[str, Any]:
     """Read-only check for the pinned Codex hook lifecycle of one release entry."""
     problems: list[str] = []
@@ -59,6 +62,9 @@ def inspect_codex_wiring(
         release_path=release_path,
         manifest_sha256=manifest_sha256,
         entry=entry,
+        safe_yolo_home=safe_yolo_home,
+        user_home=user_home,
+        harness_home=harness_home,
     ):
         problems.append("PreToolUse hook is not pinned to the expected Safe YOLO bootstrap release")
     if not _release_exposes_entry(release_path, entry):
@@ -91,6 +97,9 @@ def inspect_claude_code_wiring(
     *,
     release_path: str | Path,
     entry: str = "claude_code_v3",
+    safe_yolo_home: str | Path | None = None,
+    user_home: str | Path | None = None,
+    harness_home: str | Path | None = None,
 ) -> dict[str, Any]:
     """Read-only check that Claude Code user settings pin one Safe YOLO PreToolUse hook."""
     problems: list[str] = []
@@ -112,6 +121,9 @@ def inspect_claude_code_wiring(
         release_path=release_path,
         manifest_sha256=manifest_sha256,
         entry=entry,
+        safe_yolo_home=safe_yolo_home,
+        user_home=user_home,
+        harness_home=harness_home,
     ):
         problems.append("PreToolUse hook is not pinned to the expected Safe YOLO bootstrap release")
     if not _release_exposes_entry(release_path, entry):
@@ -166,6 +178,9 @@ def _command_is_pinned(
     release_path: str | Path,
     manifest_sha256: str,
     entry: str,
+    safe_yolo_home: str | Path | None = None,
+    user_home: str | Path | None = None,
+    harness_home: str | Path | None = None,
 ) -> bool:
     try:
         tokens = shlex.split(command, posix=True)
@@ -184,6 +199,9 @@ def _command_is_pinned(
         "--entry",
         "--host-contract",
         "--state-dir",
+        "--safe-yolo-home",
+        "--user-home",
+        "--harness-home",
     }
     boolean_flags = {"--audit-only"}
     index = 2
@@ -206,6 +224,18 @@ def _command_is_pinned(
         "--host-contract" in values or "--audit-only" in booleans
     ):
         return False
+    context_expected = {
+        "--safe-yolo-home": safe_yolo_home,
+        "--user-home": user_home,
+        "--harness-home": harness_home,
+    }
+    for flag, expected in context_expected.items():
+        actual = values.get(flag)
+        if expected is None:
+            if actual is not None:
+                return False
+        elif actual != str(expected):
+            return False
     return (
         values.get("--release") == str(release_path)
         and values.get("--manifest-sha256") == manifest_sha256

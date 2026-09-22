@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -18,20 +17,17 @@ from scripts.release_manifest import build_manifest, manifest_digest
 
 
 RELEASE_CONTENT = ("policy", "engine", "adapters")
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(65536), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+RELEASE_FILES = ("scripts/bootstrap.py",)
 
 
 def _copy_release(source: Path, staging: Path) -> None:
     for name in RELEASE_CONTENT:
         shutil.copytree(source / name, staging / name, ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copy2(source / "VERSION", staging / "VERSION")
+    for relative in RELEASE_FILES:
+        target = staging / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / relative, target)
 
 
 def install_release(source_dir: str | Path, safe_yolo_home: str | Path) -> dict[str, Any]:
@@ -46,9 +42,7 @@ def install_release(source_dir: str | Path, safe_yolo_home: str | Path) -> dict[
     if target.exists():
         raise FileExistsError(f"Safe YOLO release already exists: {target}")
     bootstrap_source = source / "scripts" / "bootstrap.py"
-    bootstrap_target = home / "bootstrap.py"
-    if bootstrap_target.exists() and _sha256(bootstrap_target) != _sha256(bootstrap_source):
-        raise FileExistsError("Existing bootstrap differs; replace it only through explicit maintenance.")
+    legacy_bootstrap = home / "bootstrap.py"
     releases.mkdir(parents=True, exist_ok=True)
     os.chmod(home, 0o700)
     os.chmod(releases, 0o700)
@@ -59,10 +53,17 @@ def install_release(source_dir: str | Path, safe_yolo_home: str | Path) -> dict[
         build_manifest(staging)
         digest = manifest_digest(staging)
         os.replace(staging, target)
-    if not bootstrap_target.exists():
-        shutil.copy2(bootstrap_source, bootstrap_target)
-        os.chmod(bootstrap_target, 0o700)
-    receipt = {"version": version, "release": target, "manifest_sha256": digest, "bootstrap": bootstrap_target}
+    bootstrap_target = target / "scripts" / "bootstrap.py"
+    os.chmod(bootstrap_target, 0o700)
+    if not legacy_bootstrap.exists():
+        shutil.copy2(bootstrap_source, legacy_bootstrap)
+        os.chmod(legacy_bootstrap, 0o700)
+    receipt = {
+        "version": version,
+        "release": target,
+        "manifest_sha256": digest,
+        "bootstrap": bootstrap_target,
+    }
     return receipt
 
 

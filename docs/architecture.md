@@ -38,7 +38,19 @@ The current runtime is stateless. It has no approval request, receipt, token, ti
 
 ## Shared truth and surfaces
 
-The direct consequence rules live in `engine/`; adapters only translate lifecycle payloads. Codex is the first 3.0 surface. Cursor parity and semantic consequence metadata from future tools are deferred until each surface can be observed and tested.
+The direct consequence rules live in `engine/`; adapters only translate native
+lifecycle payloads and responses. The distribution CLI owns discovery,
+installation receipts, immutable release pins, doctor checks, and rollback.
+No harness owns policy behavior that another adapter cannot reach.
+
+Every installed hook invokes a bootstrap inside the immutable, manifest-covered
+release and carries the selected Safe YOLO, user, and harness configuration
+roots. This keeps non-default installs inside the same protected path model.
+
+Harness lifecycle support is promoted independently. An included adapter is
+not called supported until its native configuration, direct allow/deny
+canaries, doctor, and exact deactivation journey pass. This keeps staged
+releases honest without turning Codex or any other harness into the product.
 
 ## Release boundary
 

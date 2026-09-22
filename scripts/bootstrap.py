@@ -66,6 +66,9 @@ def main() -> int:
     parser.add_argument("--host-contract", type=Path)
     parser.add_argument("--audit-only", action="store_true")
     parser.add_argument("--state-dir", type=Path, default=Path(os.environ.get("SAFE_YOLO_STATE", "~/.safe-yolo/state")).expanduser())
+    parser.add_argument("--safe-yolo-home", type=Path)
+    parser.add_argument("--user-home", type=Path)
+    parser.add_argument("--harness-home", type=Path)
     args = parser.parse_args()
     try:
         entry = verified_entry(args.release, args.entry, expected_manifest_hash=args.manifest_sha256)
@@ -73,6 +76,24 @@ def main() -> int:
         print(f"Safe YOLO fail-closed: {error}", file=sys.stderr)
         return 2
     command = [sys.executable, str(entry), "--state-dir", str(args.state_dir)]
+    if args.safe_yolo_home is not None:
+        command.extend(["--safe-yolo-home", str(args.safe_yolo_home)])
+    if args.user_home is not None:
+        command.extend(["--user-home", str(args.user_home)])
+    harness_home_flags = {
+        "codex_v3": "--codex-home",
+        "claude_code_v3": "--claude-home",
+        "cursor_v3": "--cursor-home",
+    }
+    if args.harness_home is not None:
+        harness_flag = harness_home_flags.get(args.entry)
+        if harness_flag is None:
+            print(
+                f"Safe YOLO fail-closed: harness home is unsupported for {args.entry}",
+                file=sys.stderr,
+            )
+            return 2
+        command.extend([harness_flag, str(args.harness_home)])
     if args.host_contract is not None:
         command.extend(["--host-contract", str(args.host_contract)])
     if args.audit_only:
