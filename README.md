@@ -24,24 +24,32 @@ merge is ready.
 
 ## Status
 
-`3.0.0-beta.1` is the private Codex beta. It has a reversible source installer,
-an immutable runtime release, a read-only doctor, and allow/deny canaries.
-Repository state still does not prove activation in a running Codex session.
+`3.0.0-beta.2` is the private, harness-agnostic distribution beta. One
+immutable consequence-policy kernel is exposed through native harness adapters.
+Codex is supported; Claude Code and Cursor have beta lifecycle support. Other
+included adapters remain adapter-only until their install, doctor, and rollback
+journeys receive equivalent proof. See the [support matrix](docs/harness-support.md).
 
 ## Install the private beta
 
-The supported beta target is a Linux host running Codex with Python 3.12+.
-Clone this private repository with your own GitHub account, then review and run:
+The proven platform is Linux with Python 3.12+. Clone this private repository
+with your own GitHub account, inspect the available harnesses, then explicitly
+select one:
 
 ```bash
 git clone https://github.com/Slaytek-Systems/safe-yolo.git
 cd safe-yolo
-python3 safe-yolo install
-python3 safe-yolo doctor
+python3 safe-yolo harnesses
+python3 safe-yolo install --harness codex
+python3 safe-yolo doctor --harness codex
 ```
 
-Installation requires a clean Git checkout. It validates, but does not change,
-these Codex settings:
+Use `claude-code` or `cursor` instead of `codex` for those beta integrations.
+Installation requires a clean Git checkout. Each harness receives an independent
+receipt, backup, doctor report, and deactivation path. The shared runtime is
+installed only once under `~/.safe-yolo/releases/`.
+
+The Codex integration validates, but does not change, these settings:
 
 ```toml
 approval_policy = "never"
@@ -51,26 +59,27 @@ sandbox_mode = "danger-full-access"
 hooks = true
 ```
 
-After installation, restart Codex. Open `/hooks`, review the exact Safe YOLO
-command, and trust its hash. This explicit trust step is part of installation;
-the CLI cannot honestly prove it from outside the new Codex session.
+The installer reports the native activation step for the selected harness.
+Codex and Claude Code require their own hook review/reload flow. Cursor watches
+its user hook file and reloads it automatically. These native observations are
+kept separate from direct adapter canaries.
 
 To verify the immutable release, hook pin, configuration, and direct runtime
 canaries at any time:
 
 ```bash
-python3 safe-yolo doctor
+python3 safe-yolo doctor --all
 ```
 
 To restore the exact pre-install hook state:
 
 ```bash
-python3 safe-yolo deactivate
+python3 safe-yolo deactivate --harness codex
 ```
 
 Deactivation retains the immutable release and rollback evidence. It refuses to
-overwrite `~/.codex/hooks.json` if another tool or person changed that file
-after installation. See [Private beta operations](docs/private-beta.md) for
+overwrite a harness configuration if another tool or person changed it after
+installation. See [Private beta operations](docs/private-beta.md) for
 distribution, upgrades, rollback, and limitations.
 
 ## Candidate implementation

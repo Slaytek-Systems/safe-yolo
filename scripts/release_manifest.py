@@ -21,6 +21,7 @@ ENTRYPOINTS = {
     "cursor_prompt": "adapters/cursor_prompt.py",
 }
 SOURCE_ROOTS = ("policy", "engine", "adapters")
+SOURCE_FILES = ("VERSION", "scripts/bootstrap.py")
 
 
 def _sha256(path: Path) -> str:
@@ -38,9 +39,7 @@ def source_files(release_dir: Path) -> list[Path]:
         if not root.is_dir():
             continue
         files.extend(path for path in root.rglob("*") if path.is_file() and "__pycache__" not in path.parts)
-    version = release_dir / "VERSION"
-    if version.is_file():
-        files.append(version)
+    files.extend(release_dir / relative for relative in SOURCE_FILES if (release_dir / relative).is_file())
     return sorted(files)
 
 
