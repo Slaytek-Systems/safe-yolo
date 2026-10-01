@@ -171,6 +171,26 @@ class DeletionObservationTests(unittest.TestCase):
             self.assert_unavailable_preserves_decision()
         self.assertEqual(before, self.database().read_bytes())
 
+    def test_sqlite_full_rolls_back_the_failed_event(self):
+        handle_pre_tool(self.payload(), self.kernel())
+        byte_limit = self.database().stat().st_size
+        expected = handle_pre_tool(self.payload(), self.kernel(False))
+        with mock.patch.object(deletion_observation, 'MAX_BYTES', byte_limit):
+            for _ in range(100):
+                count = self.report()['total_events']
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    self.assertEqual(expected, handle_pre_tool(self.payload(), self.kernel()))
+                if stderr.getvalue():
+                    self.assertEqual(deletion_observation.DIAGNOSTIC, stderr.getvalue())
+                    self.assertEqual(count, self.report()['total_events'])
+                    self.assertGreater(count, 1)
+                    self.assert_unavailable_preserves_decision()
+                    self.assertEqual(count, self.report()['total_events'])
+                    break
+            else:
+                self.fail('SQLite page limit was not exercised')
+
     def test_static_symlinks_are_refused_without_writing_the_target(self):
         for component in ('state', 'observations', 'deletions.sqlite3', 'deletions.sqlite3-journal'):
             with self.subTest(component=component), tempfile.TemporaryDirectory() as temporary:
