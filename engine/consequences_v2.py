@@ -93,6 +93,7 @@ class ConsequenceKernel:
             return Decision("approval_required", "filesystem.delete", display)
         if tool_name == "apply_patch" and isinstance(tool_input, dict):
             patch = tool_input.get("patch") or tool_input.get("command") or ""
+            patch = self._patch_directives(patch)
             if isinstance(patch, str) and "*** Delete File:" in patch:
                 targets = [
                     str(self._resolve_from(line.strip().removeprefix("*** Delete File: "), cwd))
@@ -105,6 +106,13 @@ class ConsequenceKernel:
                     "delete " + (", ".join(targets) if targets else "a file") + " through apply_patch",
                 )
         return Decision("allow")
+
+    @staticmethod
+    def _patch_directives(patch: Any) -> str:
+        """Patch body lines carry +, - or space; only bare headers are actions."""
+        if not isinstance(patch, str):
+            return ""
+        return "\n".join(line for line in patch.splitlines() if line.startswith("*** "))
 
     @classmethod
     def _structured_paths(cls, tool_input: Any, cwd: Path) -> tuple[Path, ...]:
