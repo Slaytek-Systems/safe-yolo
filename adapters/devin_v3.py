@@ -21,10 +21,13 @@ def build_kernel(
     devin_config: str | Path,
     user_home: str | Path,
     scratch_paths: tuple[str, ...] | None = None,
+    observation_dir: str | Path | None = None,
 ) -> DenyOnlyKernel:
     home = Path(user_home).expanduser()
     config = Path(devin_config).expanduser()
     return DenyOnlyKernel(
+        observation_dir=observation_dir,
+        observation_harness="devin",
         enforcement_paths=(
             str(Path(safe_yolo_home).expanduser()),
             str(config.parent),
@@ -106,6 +109,7 @@ def main() -> int:
                 devin_config=args.devin_config,
                 user_home=args.user_home,
                 scratch_paths=tuple(args.scratch) if args.scratch is not None else None,
+                observation_dir=args.state_dir,
             ),
         )
         if response is not None:

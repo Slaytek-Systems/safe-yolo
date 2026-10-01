@@ -49,6 +49,7 @@ def build_kernel(
     user_home: str | Path,
     cwd: str | Path | None = None,
     scratch_paths: tuple[str, ...] | None = None,
+    observation_dir: str | Path | None = None,
 ) -> DenyOnlyKernel:
     safe_yolo = Path(safe_yolo_home).expanduser()
     grok = Path(grok_home).expanduser()
@@ -67,6 +68,8 @@ def build_kernel(
         enforcement.extend(str(project / ".claude" / name) for name in PROJECT_CLAUDE)
         enforcement.append(str(project / ".cursor" / "hooks.json"))
     return DenyOnlyKernel(
+        observation_dir=observation_dir,
+        observation_harness="grok",
         enforcement_paths=tuple(enforcement),
         credential_paths=(
             str(grok / "auth.json"),
@@ -161,6 +164,7 @@ def main() -> int:
             user_home=args.user_home,
             cwd=payload.get("cwd") if isinstance(payload.get("cwd"), str) else None,
             scratch_paths=tuple(args.scratch) if args.scratch is not None else None,
+            observation_dir=args.state_dir,
         )
         response = handle_pre_tool(payload, kernel)
     if response is not None:
