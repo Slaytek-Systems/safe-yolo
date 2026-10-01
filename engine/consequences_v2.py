@@ -109,10 +109,15 @@ class ConsequenceKernel:
 
     @staticmethod
     def _patch_directives(patch: Any) -> str:
-        """Patch body lines carry +, - or space; only bare headers are actions."""
+        """Keep header-like lines, including whitespace accepted by patch parsers.
+
+        Ambiguous context lines stay in the deny scan. Added/removed content
+        and quoted source strings do not become actions merely by containing
+        a marker somewhere inside the line.
+        """
         if not isinstance(patch, str):
             return ""
-        return "\n".join(line for line in patch.splitlines() if line.startswith("*** "))
+        return "\n".join(line for line in patch.splitlines() if line.lstrip().startswith("*** "))
 
     @classmethod
     def _structured_paths(cls, tool_input: Any, cwd: Path) -> tuple[Path, ...]:
