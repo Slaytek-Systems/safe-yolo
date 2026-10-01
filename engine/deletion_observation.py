@@ -234,8 +234,15 @@ def observe(payload: dict[str, Any], decision: Any, kernel: Any) -> None:
                     raise RuntimeError("observation capacity reached")
                 session = payload.get("session_id")
                 values = payload.get("tool_input")
-                cwd = values.get("workdir") if isinstance(values, dict) else None
-                cwd = cwd if isinstance(cwd, str) and cwd else payload.get("cwd")
+                workdir = values.get("workdir") if isinstance(values, dict) else None
+                cwd = payload.get("cwd")
+                if isinstance(cwd, str) and cwd:
+                    base = kernel._path(cwd)
+                    cwd = str(kernel._resolve_from(workdir, base) if isinstance(workdir, str) and workdir else base)
+                elif isinstance(workdir, str) and workdir and Path(workdir).expanduser().is_absolute():
+                    cwd = str(kernel._path(workdir))
+                else:
+                    cwd = None
                 context = repr((tuple(map(str, kernel.enforcement_paths)),
                                 tuple(map(str, kernel.credential_paths)),
                                 tuple(map(str, kernel.scratch_paths))))

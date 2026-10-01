@@ -315,6 +315,27 @@ class DeletionObservationTests(unittest.TestCase):
         self.assertEqual(1, group['sessions'])
         self.assertNotIn('private-project', json.dumps(group))
 
+    def test_relative_workdirs_use_the_resolved_workspace_identity(self):
+        first = self.payload()
+        first['cwd'] = '/workspace/one'
+        first['tool_input']['workdir'] = '.'
+        second = self.payload()
+        second['cwd'] = '/workspace/two'
+        second['tool_input']['workdir'] = '.'
+        for payload in (first, second):
+            handle_pre_tool(payload, self.kernel())
+        self.assertEqual(2, self.report()['groups'][0]['workspaces'])
+
+    def test_absolute_and_relative_workdir_aliases_group_together(self):
+        first = self.payload()
+        first['cwd'] = '/workspace/one'
+        first['tool_input']['workdir'] = '.'
+        second = self.payload()
+        second['tool_input']['workdir'] = '/workspace/one'
+        for payload in (first, second):
+            handle_pre_tool(payload, self.kernel())
+        self.assertEqual(1, self.report()['groups'][0]['workspaces'])
+
     def test_cli_failure_is_fixed_and_read_only(self):
         handle_pre_tool(self.payload(), self.kernel())
         self.database().write_bytes(b'corrupt-private-database')
