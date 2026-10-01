@@ -104,7 +104,8 @@ def candidate(payload: dict[str, Any], decision: Any) -> tuple[str, str] | None:
         command = values.get("command") or values.get("cmd")
         if isinstance(command, str):
             try:
-                lexer = shlex.shlex(command, posix=True, punctuation_chars="|&;<>")
+                lexer = shlex.shlex(command, posix=True, punctuation_chars="\n|&;<>")
+                lexer.whitespace = " \t\r"
                 lexer.whitespace_split = True
                 lexer.commenters = ""
                 tokens = list(lexer)
@@ -130,7 +131,7 @@ def candidate(payload: dict[str, Any], decision: Any) -> tuple[str, str] | None:
                 if executable == "git" and decision.consequence == "git.delete_ref":
                     return ("git push <ref-delete>", "complete")
                 for index, token in enumerate(tokens[:-1]):
-                    if token in {";", "&&", "||", "|", "&", "|&"} and tokens[index + 1].rsplit("/", 1)[-1] in DELETE_COMMANDS:
+                    if token and set(token) <= set("\n|&;") and tokens[index + 1].rsplit("/", 1)[-1] in DELETE_COMMANDS:
                         return ("shell <compound-deletion-candidate>", "partial")
     if decision.consequence in {"filesystem.delete", "git.delete_ref"}:
         return ("tool <deletion-consequence>", "partial")

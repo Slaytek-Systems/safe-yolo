@@ -121,6 +121,22 @@ class DeletionObservationTests(unittest.TestCase):
         self.assertEqual(0, group['sessions'])
         self.assertEqual(2, group['missing_session_attempts'])
 
+    def test_newline_compounds_are_visible_without_changing_enforcement(self):
+        for command in ('echo ok\nrm -rf synthetic-private',
+                        'echo ok;\nrm -rf synthetic-private'):
+            payload = self.payload(command)
+            self.assertEqual(handle_pre_tool(payload, self.kernel(False)),
+                             handle_pre_tool(payload, self.kernel()))
+        quoted_data = self.payload('echo "data\nrm -rf synthetic-private"')
+        self.assertIsNone(handle_pre_tool(quoted_data, self.kernel()))
+        groups = self.report()['groups']
+        self.assertEqual(1, len(groups))
+        self.assertEqual(2, groups[0]['attempts'])
+        self.assertEqual('shell <compound-deletion-candidate>', groups[0]['shape'])
+        self.assertEqual('partial', groups[0]['coverage'])
+        self.assertEqual(0, groups[0]['recognized'])
+        self.assertEqual('allow', groups[0]['outcome'])
+
     def test_private_permissions_and_read_only_report(self):
         handle_pre_tool(self.payload(), self.kernel())
         database = self.database()
