@@ -193,7 +193,9 @@ class GrokAdapterTests(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("deny", json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"])
-        self.assertFalse((self.root / "unused-state").exists())
+        from engine.deletion_observation import report
+        self.assertEqual(1, report(self.root / "unused-state")["total_events"])
+        self.assertEqual({"observations"}, {path.name for path in (self.root / "unused-state").iterdir()})
         manifest = json.loads((installed["release"] / "manifest.json").read_text())
         self.assertIn("adapters/grok_v3.py", manifest["files"])
         self.assertEqual("adapters/grok_v3.py", manifest["entrypoints"]["grok_v3"])

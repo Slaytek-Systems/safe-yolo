@@ -510,6 +510,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--user-home", type=Path, default=Path.home())
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("harnesses", help="List adapters and honest lifecycle support levels.")
+    observations = subparsers.add_parser("observations", help="Read grouped local deletion observations as JSON.")
+    observations.add_argument("--state-dir", type=Path)
     install = subparsers.add_parser("install", help="Install and activate one supported harness integration.")
     install.add_argument("--harness", choices=tuple(HARNESS_BY_ID), required=True)
     install.add_argument("--source", type=Path, default=ROOT)
@@ -524,6 +526,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "harnesses":
             result: Any = {"harnesses": harness_catalog(args.user_home)}
+        elif args.command == "observations":
+            from engine.deletion_observation import report
+            result = report(args.state_dir if args.state_dir is not None else args.home / "state")
         elif args.command == "install":
             source = args.source.resolve()
             result = install_harness(

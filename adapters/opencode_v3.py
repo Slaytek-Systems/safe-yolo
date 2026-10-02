@@ -37,6 +37,7 @@ def build_kernel(
     user_home: str | Path,
     cwd: str | Path | None = None,
     scratch_paths: tuple[str, ...] | None = None,
+    observation_dir: str | Path | None = None,
 ) -> DenyOnlyKernel:
     safe_yolo = Path(safe_yolo_home).expanduser()
     config = Path(opencode_config).expanduser()
@@ -57,6 +58,8 @@ def build_kernel(
             )
         )
     return DenyOnlyKernel(
+        observation_dir=observation_dir,
+        observation_harness="opencode",
         enforcement_paths=tuple(enforcement),
         credential_paths=(
             str(home / ".local" / "share" / "opencode" / "auth.json"),
@@ -174,6 +177,7 @@ def main() -> int:
         user_home=args.user_home,
         cwd=cwd if isinstance(cwd, str) else None,
         scratch_paths=tuple(args.scratch) if args.scratch is not None else None,
+        observation_dir=args.state_dir,
     )
     json.dump(handle(payload, kernel), sys.stdout, sort_keys=True)
     sys.stdout.write("\n")

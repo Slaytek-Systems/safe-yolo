@@ -34,7 +34,13 @@ SSH is one shared recognizer rather than an adapter exception. Explicit no-sessi
 
 ## No approval state
 
-The current runtime is stateless. It has no approval request, receipt, token, timer, retry allowance, or `PostToolUse` hook. The same restricted action receives the same denial every time. Human silence or a tool timeout cannot change the result.
+Enforcement is stateless. It has no approval request, receipt, token, timer, retry allowance, or `PostToolUse` hook. The same restricted action receives the same denial every time. Human silence or a tool timeout cannot change the result.
+
+The optional shared deletion observer writes bounded, sanitized operational
+evidence after a decision. Enforcement never reads observations. Logger failure
+preserves the exact decision and native response; the CLI report is read-only.
+See [local deletion observations](deletion-observation.md) for schema, privacy,
+coverage, and capacity limits.
 
 ## Shared truth and surfaces
 

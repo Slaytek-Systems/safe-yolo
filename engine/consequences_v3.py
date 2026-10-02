@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 import shlex
 from typing import Any, Literal
 
@@ -25,7 +26,27 @@ class DenyOnlyKernel(ConsequenceKernel):
     human-response state exists in this release or its adapters.
     """
 
+    def __init__(self, *, observation_dir: str | Path | None = None,
+                 observation_harness: str = "unknown", **options: Any) -> None:
+        super().__init__(**options)
+        self.observation_dir = observation_dir
+        self.observation_harness = observation_harness
+
     def evaluate(self, payload: dict[str, Any]) -> Decision:
+        decision = self._evaluate(payload)
+        if self.observation_dir is not None:
+            try:
+                from engine.deletion_observation import observe
+                observe(payload, decision, self)
+            except Exception:
+                import sys
+                try:
+                    sys.stderr.write("Safe YOLO observation unavailable\n")
+                except Exception:
+                    pass
+        return decision
+
+    def _evaluate(self, payload: dict[str, Any]) -> Decision:
         tool_name = str(payload.get("tool_name") or "").lower()
         if tool_name in {"stateful_shell", "write_to_process"}:
             return Decision(

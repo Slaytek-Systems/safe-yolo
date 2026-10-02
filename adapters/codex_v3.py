@@ -43,11 +43,14 @@ def build_kernel(
     codex_home: str | Path,
     user_home: str | Path,
     scratch_paths: tuple[str, ...] | None = None,
+    observation_dir: str | Path | None = None,
 ) -> DenyOnlyKernel:
     safe_yolo = Path(safe_yolo_home).expanduser()
     codex = Path(codex_home).expanduser()
     home = Path(user_home).expanduser()
     return DenyOnlyKernel(
+        observation_dir=observation_dir,
+        observation_harness="codex",
         enforcement_paths=(
             str(safe_yolo),
             str(codex / "config.toml"),
@@ -118,6 +121,7 @@ def main() -> int:
             codex_home=args.codex_home,
             user_home=args.user_home,
             scratch_paths=tuple(args.scratch) if args.scratch is not None else None,
+            observation_dir=args.state_dir,
         )
         response = handle_pre_tool(payload, kernel)
     if response is not None:
