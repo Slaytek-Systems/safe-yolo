@@ -193,7 +193,9 @@ class V3ReleaseTests(unittest.TestCase):
             "approval",
             denial["hookSpecificOutput"]["permissionDecisionReason"].lower(),
         )
-        self.assertFalse((Path(self.temp.name) / "unused-state").exists())
+        from engine.deletion_observation import report
+        self.assertEqual(1, report(Path(self.temp.name) / "unused-state")["total_events"])
+        self.assertEqual({"observations"}, {path.name for path in (Path(self.temp.name) / "unused-state").iterdir()})
 
 
 if __name__ == "__main__":

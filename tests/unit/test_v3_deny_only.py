@@ -227,7 +227,9 @@ class V3DenyOnlyTests(unittest.TestCase):
             "deny",
             denial["hookSpecificOutput"]["permissionDecision"],
         )
-        self.assertFalse((Path(self.temp.name) / "unused-state").exists())
+        from engine.deletion_observation import report
+        self.assertEqual(2, report(Path(self.temp.name) / "unused-state")["total_events"])
+        self.assertEqual({"observations"}, {path.name for path in (Path(self.temp.name) / "unused-state").iterdir()})
 
     def test_default_scratch_roots_allow_tmp_deletes(self):
         self.assertIsNone(handle_pre_tool(self.payload("rm /tmp/stale.json"), self.kernel))

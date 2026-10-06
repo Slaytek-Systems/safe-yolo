@@ -87,6 +87,7 @@ def build_kernel(
     user_home: str | Path,
     cwd: str | Path | None = None,
     scratch_paths: tuple[str, ...] | None = None,
+    observation_dir: str | Path | None = None,
 ) -> DenyOnlyKernel:
     safe_yolo = Path(safe_yolo_home).expanduser()
     gemini = Path(gemini_home).expanduser()
@@ -104,6 +105,8 @@ def build_kernel(
         project = Path(cwd).expanduser()
         enforcement.extend(str(project / relative) for relative in PROJECT_HOOKS)
     return DenyOnlyKernel(
+        observation_dir=observation_dir,
+        observation_harness="antigravity",
         enforcement_paths=tuple(enforcement),
         credential_paths=(
             str(gemini / "antigravity-acp" / "acp_token.json"),
@@ -210,6 +213,7 @@ def main() -> int:
         user_home=args.user_home,
         cwd=_workspace_cwd(payload),
         scratch_paths=tuple(args.scratch) if args.scratch is not None else None,
+        observation_dir=args.state_dir,
     )
     response = handle_pre_tool(payload, kernel)
     if response is not None:

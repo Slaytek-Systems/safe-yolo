@@ -93,6 +93,7 @@ class ConsequenceKernel:
             return Decision("approval_required", "filesystem.delete", display)
         if tool_name == "apply_patch" and isinstance(tool_input, dict):
             patch = tool_input.get("patch") or tool_input.get("command") or ""
+            patch = self._patch_directives(patch)
             if isinstance(patch, str) and "*** Delete File:" in patch:
                 targets = [
                     str(self._resolve_from(line.strip().removeprefix("*** Delete File: "), cwd))
@@ -105,6 +106,18 @@ class ConsequenceKernel:
                     "delete " + (", ".join(targets) if targets else "a file") + " through apply_patch",
                 )
         return Decision("allow")
+
+    @staticmethod
+    def _patch_directives(patch: Any) -> str:
+        """Keep header-like lines, including whitespace accepted by patch parsers.
+
+        Ambiguous context lines stay in the deny scan. Added/removed content
+        and quoted source strings do not become actions merely by containing
+        a marker somewhere inside the line.
+        """
+        if not isinstance(patch, str):
+            return ""
+        return "\n".join(line for line in patch.splitlines() if line.lstrip().startswith("*** "))
 
     @classmethod
     def _structured_paths(cls, tool_input: Any, cwd: Path) -> tuple[Path, ...]:

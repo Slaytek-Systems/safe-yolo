@@ -45,6 +45,7 @@ def build_kernel(
     user_home: str | Path,
     cwd: str | Path | None = None,
     scratch_paths: tuple[str, ...] | None = None,
+    observation_dir: str | Path | None = None,
 ) -> DenyOnlyKernel:
     safe_yolo = Path(safe_yolo_home).expanduser()
     cursor = Path(cursor_home).expanduser()
@@ -57,6 +58,8 @@ def build_kernel(
     if cwd:
         enforcement.append(str(Path(cwd).expanduser() / ".cursor" / "hooks.json"))
     return DenyOnlyKernel(
+        observation_dir=observation_dir,
+        observation_harness="cursor",
         enforcement_paths=tuple(enforcement),
         credential_paths=(
             str(home / ".ssh"),
@@ -212,6 +215,7 @@ def main() -> int:
         user_home=args.user_home,
         cwd=_cwd(normalize_hook_payload(payload)),
         scratch_paths=tuple(args.scratch) if args.scratch is not None else None,
+        observation_dir=args.state_dir,
     )
     json.dump(handle(payload, kernel), sys.stdout, sort_keys=True)
     sys.stdout.write("\n")

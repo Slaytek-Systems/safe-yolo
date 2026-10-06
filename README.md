@@ -24,7 +24,8 @@ merge is ready.
 
 ## Status
 
-`3.0.0-beta.3` is the harness-agnostic distribution beta. One
+`3.0.0-beta.4` is the source candidate adding local deletion observations to the
+private, harness-agnostic distribution beta. Installed releases remain separate. One
 immutable consequence-policy kernel is exposed through native harness adapters.
 Codex is supported; Claude Code and Cursor have beta lifecycle support. Other
 included adapters remain adapter-only until their install, doctor, and rollback
@@ -103,5 +104,9 @@ distribution, upgrades, rollback, and limitations.
 Existing release verification and immutable installation plumbing is reused. The 3.0 runtime has no approval ledger, receipt, expiry, retry, or `PostToolUse` path.
 
 See the [architecture contract](docs/architecture.md) and [reversible cutover plan](docs/cutover.md).
+
+Deletion candidates can be recorded as private, sanitized local SQLite observations
+without changing any allow/deny decision. Use `python3 safe-yolo observations` for
+the read-only grouped JSON report. See [coverage, privacy, and capacity limits](docs/deletion-observation.md).
 
 Antigravity hook files must contain only named hook objects: the Antigravity CLI's Go loader rejects the whole `hooks.json` when any top-level value is not an object (for example a `description` string), and then logs `loaded 0 named hooks`. The ACP server's Python loader tolerates it, which is why the mistake is easy to miss. `GEMINI_HOME` is read from the hook environment because the bootstrap forwards no adapter flags.
