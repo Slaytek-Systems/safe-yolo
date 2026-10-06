@@ -58,6 +58,7 @@ def build_kernel(
     if cwd:
         enforcement.append(str(Path(cwd).expanduser() / ".cursor" / "hooks.json"))
     return DenyOnlyKernel(
+        customizations_path=safe_yolo / 'customizations.json',
         observation_dir=observation_dir,
         observation_harness="cursor",
         enforcement_paths=tuple(enforcement),

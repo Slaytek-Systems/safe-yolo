@@ -18,9 +18,14 @@ if str(ROOT) not in sys.path:
 from scripts.activate_v3 import verify_source
 
 MANIFEST = 'distribution.json'
-DIRECTORIES = {'adapters', 'engine', 'policy', 'scripts'}
+DIRECTORIES = {'adapters', 'engine', 'policy'}
 FILES = {'safe-yolo', 'VERSION', 'README.md', 'docs/download-install.md',
-         'docs/harness-support.md', 'docs/private-beta.md', 'docs/architecture.md'}
+         'docs/harness-support.md', 'docs/architecture.md', 'docs/deletion-observation.md',
+         'DISTRIBUTION-LICENSE.txt',
+         'scripts/__init__.py', 'scripts/activate_v3.py', 'scripts/bootstrap.py',
+         'scripts/distribute.py', 'scripts/doctor.py', 'scripts/download.py',
+         'scripts/global_cli.py', 'scripts/harness_specs.py', 'scripts/harness_wiring.py',
+         'scripts/install.py', 'scripts/package.py', 'scripts/release_manifest.py'}
 
 
 def digest(data: bytes) -> str:

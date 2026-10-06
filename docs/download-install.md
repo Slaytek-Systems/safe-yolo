@@ -1,12 +1,11 @@
-# Install a Safe YOLO download
+# Install Safe YOLO
 
-Give your coding agent this instruction with the release ZIP and its SHA-256:
+Give your coding agent this instruction:
 
-> Install Safe YOLO for my supported coding tools from this release. Verify the
-> ZIP checksum before extracting it. Read docs/download-install.md, detect the
-> harnesses I use, install each supported integration, and run doctor. Preserve
-> existing settings and report any conflict. Tell me which native activation
-> steps remain and the installed version.
+> Install Safe YOLO from https://github.com/Slaytek-Systems/safe-yolo-releases.
+> Read its installation guide, verify the release checksum, install my supported
+> coding tools globally, and run doctor. Preserve my existing settings. Report
+> the installed version and any native hook trust or restart step I need to do.
 
 ## Requirements
 
@@ -16,14 +15,28 @@ Python source. macOS and Windows acceptance is still pending.
 
 ## Install
 
-Download the ZIP and its `.zip.sha256` file from the publisher. On Linux,
-verify it before extracting (use the actual release filename):
+The public release repository contains a small standard-library installer. It
+downloads the newest complete 3.x release (including beta releases), verifies
+its SHA-256, and installs detected supported integrations:
 
 ```sh
-sha256sum -c safe-yolo-3.0.0-beta.3.zip.sha256
-unzip safe-yolo-3.0.0-beta.3.zip
-cd safe-yolo-3.0.0-beta.3
+curl -fsSL https://raw.githubusercontent.com/Slaytek-Systems/safe-yolo-releases/main/install.py -o /tmp/safe-yolo-install.py
+python3 /tmp/safe-yolo-install.py
+```
+
+Inspect the downloaded installer first if desired. To select one tool explicitly,
+use `python3 /tmp/safe-yolo-install.py --harness cursor` (or `codex`, `claude-code`).
+No administrator access is needed.
+
+For a manual or offline installation, download the ZIP and its `.zip.sha256`
+from Releases, verify before extraction, then run:
+
+```sh
+sha256sum -c safe-yolo-3.0.0-beta.5.zip.sha256
+unzip safe-yolo-3.0.0-beta.5.zip
+cd safe-yolo-3.0.0-beta.5
 python3 safe-yolo harnesses
+python3 safe-yolo install
 ```
 
 The checksum detects corruption. Obtain both files through a trusted publisher
@@ -44,31 +57,67 @@ enforcement hooks. Codex additionally requires the settings documented in the
 README. Follow each installer's native activation instructions; doctor checks
 the adapter directly and cannot prove that an already-running harness loaded it.
 
-The release runs locally from `~/.safe-yolo/releases/`. Keep the extracted
-download available to run doctor or deactivate; a standalone global management
-command is not installed yet. There are no network calls in normal hook checks.
+The release runs locally from `~/.safe-yolo/releases/`. Management files are
+retained under `~/.safe-yolo/management/`, so the extracted download can be moved
+after installation. The global command is `~/.local/bin/safe-yolo`. Add
+`~/.local/bin` to your PATH if needed, or invoke that absolute path directly.
+The installer does not edit your shell profile. There are no network calls in
+normal hook checks, and no background service.
 
 ## Updates and customization
 
-Download and verify the next release, extract it into a new directory, and run
-its install command for each harness. Existing release files are retained.
-This is the current manual update flow; `safe-yolo update` is not implemented.
-
-Unrelated harness settings are preserved. This release does not yet implement
-user policy overlays or automatic merging of custom code. Keep custom source
-changes separately: modified downloads fail verification. Local customization
-that survives upgrades is a remaining product milestone.
-
-## Reverse an installation
-
 ```sh
-python3 safe-yolo deactivate --harness cursor
+safe-yolo doctor
+safe-yolo update
+safe-yolo doctor
 ```
 
-Use the corresponding harness ID. This restores the configuration saved before
-the most recent installation. After an upgrade, that may reactivate the previous
-Safe YOLO version. It is not a complete uninstall. If configuration has changed
-since installation, deactivation refuses to overwrite the newer changes.
+Update downloads a verified release and updates active installations. For an
+offline update use `safe-yolo update --source /path/to/extracted-release`.
+Each harness is updated independently; if one fails, completed installations
+remain usable. Run doctor to inspect the state before retrying.
+
+Local customizations live outside versioned releases at
+`~/.safe-yolo/customizations.json`. Install, update, rollback, and uninstall
+preserve this file. For example:
+
+```json
+{
+  "deny_tools": ["dangerous_tool"],
+  "private_paths": ["/absolute/path/to/private-material"]
+}
+```
+
+`deny_tools` names exact normalized tool IDs; `private_paths` adds paths that
+agents cannot access. These options add restrictions to the default policy.
+Use absolute paths. Unknown fields, invalid JSON, and oversized settings fail
+closed. Edit through a human/operator session because Safe YOLO protects its
+own configuration. Run doctor after editing.
+
+The Python source is included for inspection and local modification. Arbitrary
+source forks are separate from supported customization: changing a release
+invalidates its integrity checks. Maintain such changes in your own checkout,
+give your build a unique version, and build/install it as a separate release.
+Automatic merging of arbitrary source changes is not provided.
+
+## Roll back or uninstall
+
+```sh
+safe-yolo rollback
+safe-yolo uninstall
+```
+
+Rollback restores the previous installed runtime and hook pin. Uninstall removes
+the integrations installed by this lifecycle, retaining unrelated settings.
+Use `--harness cursor` (or another supported ID) to act on just one integration.
+Both refuse to overwrite configuration changed since the last installation.
+Legacy installations whose baseline already contains an enforcement hook require
+operator review for complete removal. Restart the affected harness afterward.
+
+Inactive releases, management commands, customizations, and recovery evidence
+are retained on disk. Uninstall stops enforcement; it does not erase your files.
+The older `deactivate --harness <id>` command still restores the exact previous
+configuration snapshot, which can reactivate an older Safe YOLO installation.
 
 ## Maintainer build
 
@@ -78,8 +127,23 @@ From a clean, committed source checkout:
 python3 scripts/package.py --output /path/to/downloads
 ```
 
-This produces a reproducible versioned ZIP and adjacent checksum. It includes
-the runtime, management scripts, and user documentation; it excludes Git
-history, local state, tests, and host snapshots. Host these two files wherever
-recipients can download them. Publishing to the private source repository's
-Releases alone would still require repository access.
+This produces a reproducible versioned ZIP and adjacent checksum. The package
+includes the runtime, portable management scripts, permission notice, and user
+documentation. Git history, local state, tests, host snapshots, and remote
+operator maintenance scripts are excluded.
+
+Publish both files to `Slaytek-Systems/safe-yolo-releases` under the tag
+`v<VERSION>`. Copy `scripts/download.py` to its `install.py` and this guide to its
+README. The development repository remains private. Verify anonymous download
+and a clean-home install after publishing; private-repository Releases alone
+do not provide public distribution.
+
+## Limits
+
+The beta provides installation lifecycles for Codex, Claude Code, and Cursor.
+Other included adapters are experimental and have no supported installer yet.
+Linux is verified; macOS and Windows acceptance is pending. No mobile app is
+required because enforcement runs on the machine running the coding harness.
+Direct doctor canaries prove adapter behavior, not that a running harness has
+trusted and loaded its hook. Safe YOLO is backpressure for direct actions, not
+a sandbox or security boundary against arbitrary same-user code.

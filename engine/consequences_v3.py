@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import shlex
 from typing import Any, Literal
@@ -27,10 +28,35 @@ class DenyOnlyKernel(ConsequenceKernel):
     """
 
     def __init__(self, *, observation_dir: str | Path | None = None,
-                 observation_harness: str = "unknown", **options: Any) -> None:
+                 observation_harness: str = "unknown", customizations_path: Path | None = None,
+                 **options: Any) -> None:
         super().__init__(**options)
         self.observation_dir = observation_dir
         self.observation_harness = observation_harness
+        self.customization_error = False
+        self.denied_tools: set[str] = set()
+        if customizations_path is not None:
+            try:
+                with customizations_path.open('rb') as handle:
+                    content = handle.read(65537)
+                if len(content) > 65536:
+                    raise ValueError('customizations too large')
+                settings = json.loads(content)
+                if not isinstance(settings, dict) or set(settings) - {'deny_tools', 'private_paths'}:
+                    raise ValueError('unknown customization fields')
+                for values in settings.values():
+                    if not isinstance(values, list) or not all(isinstance(value, str) and value for value in values):
+                        raise ValueError('customizations must be lists of nonempty strings')
+                paths = settings.get('private_paths', [])
+                if any(not Path(path).is_absolute() for path in paths):
+                    raise ValueError('private paths must be absolute')
+                self.credential_paths += tuple(self._path(path) for path in paths)
+                self.denied_tools = {name.lower() for name in settings.get('deny_tools', [])}
+            except FileNotFoundError:
+                if customizations_path.is_symlink():
+                    self.customization_error = True
+            except (OSError, ValueError, TypeError):
+                self.customization_error = True
 
     def evaluate(self, payload: dict[str, Any]) -> Decision:
         decision = self._evaluate(payload)
@@ -48,6 +74,10 @@ class DenyOnlyKernel(ConsequenceKernel):
 
     def _evaluate(self, payload: dict[str, Any]) -> Decision:
         tool_name = str(payload.get("tool_name") or "").lower()
+        if self.customization_error:
+            return Decision('deny', 'customization.invalid', 'repair customizations.json through operator maintenance')
+        if tool_name in self.denied_tools:
+            return Decision('deny', 'customization.tool', 'tool denied by your local customizations')
         if tool_name in {"stateful_shell", "write_to_process"}:
             return Decision(
                 "deny",

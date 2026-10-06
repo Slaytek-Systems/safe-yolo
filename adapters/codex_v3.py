@@ -49,6 +49,7 @@ def build_kernel(
     codex = Path(codex_home).expanduser()
     home = Path(user_home).expanduser()
     return DenyOnlyKernel(
+        customizations_path=safe_yolo / 'customizations.json',
         observation_dir=observation_dir,
         observation_harness="codex",
         enforcement_paths=(

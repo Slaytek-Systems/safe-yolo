@@ -24,18 +24,21 @@ merge is ready.
 
 ## Status
 
-`3.0.0-beta.4` is the source candidate adding local deletion observations to the
-private, harness-agnostic distribution beta. Installed releases remain separate. One
+`3.0.0-beta.5` adds a public download, global management commands, and persistent
+local customizations. Installed releases remain separate. One
 immutable consequence-policy kernel is exposed through native harness adapters.
 Codex is supported; Claude Code and Cursor have beta lifecycle support. Other
 included adapters remain adapter-only until their install, doctor, and rollback
 journeys receive equivalent proof. See the [support matrix](docs/harness-support.md).
 
-## Install the private beta
+## Install
 
-For installation without Git or GitHub access, use the versioned ZIP and
-[download installation guide](docs/download-install.md). Source checkout
-installation remains available below.
+For installation without Git or GitHub access, use the
+[public downloads](https://github.com/Slaytek-Systems/safe-yolo-releases) and
+[installation guide](docs/download-install.md). The download installs
+`safe-yolo install`, `doctor`, `update`, `rollback`, and `uninstall` commands.
+Free use and local modification are covered by [distribution permission](DISTRIBUTION-LICENSE.txt).
+Maintainer source checkout installation remains available below.
 
 The proven platform is Linux with Python 3.12+. Clone this private repository
 with your own GitHub account, inspect the available harnesses, then explicitly
@@ -84,7 +87,7 @@ python3 safe-yolo deactivate --harness codex
 
 Deactivation retains the immutable release and rollback evidence. It refuses to
 overwrite a harness configuration if another tool or person changed it after
-installation. See [Private beta operations](docs/private-beta.md) for
+installation. See [Download operations](docs/download-install.md) for
 distribution, upgrades, rollback, and limitations.
 
 ## Candidate implementation

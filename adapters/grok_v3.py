@@ -68,6 +68,7 @@ def build_kernel(
         enforcement.extend(str(project / ".claude" / name) for name in PROJECT_CLAUDE)
         enforcement.append(str(project / ".cursor" / "hooks.json"))
     return DenyOnlyKernel(
+        customizations_path=safe_yolo / 'customizations.json',
         observation_dir=observation_dir,
         observation_harness="grok",
         enforcement_paths=tuple(enforcement),

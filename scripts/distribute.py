@@ -264,6 +264,11 @@ def install_harness(
     home = Path(safe_yolo_home).expanduser().resolve(strict=False)
     user = Path(user_home).expanduser().resolve(strict=False)
     target = _config_path(spec, user, config_home)
+    previous_receipt = None
+    if _has_harness_receipt(home, spec):
+        existing, _ = _read_harness_receipt(home, spec)
+        if existing.get('status') == 'active':
+            previous_receipt = existing
     source_commit = (
         verify_bundle(source_path)
         if (source_path / DISTRIBUTION_MANIFEST).is_file()
@@ -272,6 +277,18 @@ def install_harness(
     if source_commit != expected_commit:
         raise RuntimeError('Download source revision does not match the requested revision.')
     release, digest, version = _ensure_release(source_path, home)
+    if previous_receipt and previous_receipt['version'] == version:
+        report = doctor_harness(harness=harness, safe_yolo_home=home, user_home=user)
+        if not report['healthy']:
+            raise RuntimeError('Existing installation needs attention: ' + '; '.join(report['problems']))
+        return previous_receipt
+    if previous_receipt:
+        current_wiring = _inspect_wiring(spec, target, home, Path(previous_receipt['release']),
+                                        previous_receipt['manifest_sha256'], user_home=user,
+                                        harness_home=target.parent, bootstrap=Path(previous_receipt['bootstrap']))
+        if not current_wiring['healthy']:
+            raise RuntimeError('Existing Safe YOLO hook changed; refusing to overwrite it.')
+        previous_receipt = {**previous_receipt, 'installed_config_sha256': _sha256(target)}
     command = _pinned_command(
         home,
         release,
@@ -351,6 +368,12 @@ def install_harness(
             "cursor": "Cursor watches the user hooks file and reloads it automatically; verify Safe YOLO in Hooks.",
         }[spec.id],
     }
+    if previous_receipt:
+        receipt['original_install'] = previous_receipt.get('original_install', {
+            key: previous_receipt[key] for key in ('previous_config_existed', 'previous_config_backup',
+                                                 'previous_config_mode')})
+        receipt['previous_install'] = {key: value for key, value in previous_receipt.items()
+                                       if key != 'previous_install'}
     _atomic_write(
         _harness_receipt_path(home, spec.id),
         (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode(),
@@ -522,15 +545,20 @@ def main(argv: list[str] | None = None) -> int:
     observations = subparsers.add_parser("observations", help="Read grouped local deletion observations as JSON.")
     observations.add_argument("--state-dir", type=Path)
     install = subparsers.add_parser("install", help="Install and activate one supported harness integration.")
-    install.add_argument("--harness", choices=tuple(HARNESS_BY_ID), required=True)
+    install.add_argument("--harness", choices=tuple(HARNESS_BY_ID))
     install.add_argument("--source", type=Path, default=ROOT)
     install.add_argument("--config-home", type=Path)
     doctor = subparsers.add_parser("doctor", help="Verify release, wiring, and allow/deny canaries.")
-    doctor_group = doctor.add_mutually_exclusive_group(required=True)
+    doctor_group = doctor.add_mutually_exclusive_group()
     doctor_group.add_argument("--harness", choices=tuple(HARNESS_BY_ID))
     doctor_group.add_argument("--all", action="store_true", help="Check every installed supported harness.")
     deactivate = subparsers.add_parser("deactivate", help="Restore one harness's exact pre-install state.")
     deactivate.add_argument("--harness", choices=tuple(HARNESS_BY_ID), required=True)
+    update = subparsers.add_parser('update', help='Download the latest release or install a verified local bundle.')
+    update.add_argument('--source', type=Path)
+    for name in ('rollback', 'uninstall'):
+        command = subparsers.add_parser(name)
+        command.add_argument('--harness', choices=tuple(HARNESS_BY_ID))
     args = parser.parse_args(argv)
     try:
         if args.command == "harnesses":
@@ -540,16 +568,54 @@ def main(argv: list[str] | None = None) -> int:
             result = report(args.state_dir if args.state_dir is not None else args.home / "state")
         elif args.command == "install":
             source = args.source.resolve()
-            result = install_harness(
-                harness=args.harness,
-                source=source,
-                safe_yolo_home=args.home,
-                user_home=args.user_home,
-                config_home=args.config_home,
-                expected_commit=_current_commit(source),
-            )
+            if args.config_home and not args.harness:
+                raise RuntimeError('--config-home requires --harness.')
+            selected = [args.harness] if args.harness else [item['id'] for item in harness_catalog(args.user_home)
+                        if item['detected'] and item['lifecycle_supported']]
+            if not selected:
+                raise RuntimeError('No supported harness detected. Run harnesses, then install --harness <id>.')
+            revision = _current_commit(source)
+            from scripts.global_cli import install_command
+            launcher = install_command(source, args.home.resolve(), args.user_home.resolve())
+            reports = [install_harness(harness=harness, source=source, safe_yolo_home=args.home,
+                       user_home=args.user_home, config_home=args.config_home, expected_commit=revision)
+                       for harness in selected]
+            result = reports[0] if args.harness else {'healthy': True, 'reports': reports}
+            result['command'] = str(launcher) if launcher else None
+            result['path_note'] = 'Add ~/.local/bin to PATH if safe-yolo is not found.'
+        elif args.command == 'update':
+            from scripts.global_cli import active_receipts, install_command
+            receipts = active_receipts(args.home.resolve())
+            if not receipts:
+                raise RuntimeError('No active installations to update.')
+            with tempfile.TemporaryDirectory(prefix='safe-yolo-update-') as temporary:
+                if args.source:
+                    source = args.source.resolve()
+                else:
+                    from scripts.download import download_latest
+                    source = download_latest(Path(temporary))
+                revision = _current_commit(source)
+                if source != ROOT:
+                    # Run the new management code, so future installer fixes take effect on update.
+                    return subprocess.run([sys.executable, str(source / 'safe-yolo'), '--home',
+                        str(args.home.resolve()), '--user-home', str(args.user_home.resolve()),
+                        'update', '--source', str(source)], check=False).returncode
+                launcher = install_command(source, args.home.resolve(), args.user_home.resolve())
+                reports = [install_harness(harness=receipt['harness'], source=source,
+                           safe_yolo_home=args.home, user_home=receipt.get('user_home', args.user_home),
+                           config_home=Path(receipt['config_path']).parent, expected_commit=revision)
+                           for receipt in receipts]
+                result = {'healthy': True, 'reports': reports, 'command': str(launcher)}
+        elif args.command in {'rollback', 'uninstall'}:
+            from scripts.global_cli import active_receipts, restore
+            selected = [args.harness] if args.harness else [receipt['harness'] for receipt in active_receipts(args.home.resolve())]
+            if not selected:
+                raise RuntimeError('No active installations found.')
+            result = {'reports': [restore(args.home.resolve(), args.user_home.resolve(), harness,
+                      uninstall=args.command == 'uninstall') for harness in selected],
+                      'note': 'Inactive releases and the management command are retained for recovery.'}
         elif args.command == "doctor":
-            if args.all:
+            if not args.harness:
                 installed = [
                     spec.id
                     for spec in HARNESSES
@@ -577,7 +643,7 @@ def main(argv: list[str] | None = None) -> int:
                 safe_yolo_home=args.home,
                 user_home=args.user_home,
             )
-    except RuntimeError as error:
+    except (RuntimeError, OSError, ValueError) as error:
         print(f"safe-yolo: {error}", file=sys.stderr)
         return 2
     print(json.dumps(result, indent=2, sort_keys=True))
