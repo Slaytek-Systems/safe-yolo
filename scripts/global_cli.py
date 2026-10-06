@@ -14,6 +14,33 @@ from typing import Any
 from scripts.package import MANIFEST, verify_bundle
 
 
+def _launcher_payload(target: Path, home: Path, user: Path) -> bytes:
+    command = shlex.join([sys.executable, str(target / 'safe-yolo'), '--home', str(home), '--user-home', str(user)])
+    return ('#!/bin/sh\n# Safe YOLO managed command\nexec ' + command + ' "$@"\n').encode()
+
+
+def _owns_launcher(launcher: Path, home: Path, user: Path) -> bool:
+    if launcher.is_symlink() or not launcher.is_file():
+        return False
+    try:
+        payload = launcher.read_bytes()
+        lines = payload.decode().splitlines()
+        if len(lines) != 3:
+            return False
+        command = shlex.split(lines[2])
+        if len(command) != 8 or command[0] != 'exec':
+            return False
+        target = Path(command[2]).parent
+        if target.parent != home / 'management' or target.is_symlink():
+            return False
+        if payload != _launcher_payload(target, home, user):
+            return False
+        verify_bundle(target)
+        return True
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
 def install_command(source: Path, home: Path, user: Path) -> Path | None:
     # Legacy minimal source fixtures and operator installations are still supported.
     if not (source / 'safe-yolo').is_file():
@@ -23,9 +50,8 @@ def install_command(source: Path, home: Path, user: Path) -> Path | None:
     version = (source / 'VERSION').read_text().strip()
     target = home / 'management' / version
     launcher = user / '.local/bin/safe-yolo'
-    marker = '# Safe YOLO managed command\n'
     if launcher.exists() or launcher.is_symlink():
-        if launcher.is_symlink() or marker not in launcher.read_text():
+        if not _owns_launcher(launcher, home, user):
             raise RuntimeError(f'Refusing to overwrite an unrelated command: {launcher}')
     if target.exists():
         verify_bundle(target)
@@ -49,8 +75,7 @@ def install_command(source: Path, home: Path, user: Path) -> Path | None:
                 staging = next((Path(temporary) / 'unpacked').iterdir())
             verify_bundle(staging)
             os.replace(staging, target)
-    command = shlex.join([sys.executable, str(target / 'safe-yolo'), '--home', str(home), '--user-home', str(user)])
-    _atomic_write(launcher, ('#!/bin/sh\n' + marker + 'exec ' + command + ' "$@"\n').encode(), 0o755)
+    _atomic_write(launcher, _launcher_payload(target, home, user), 0o755)
     return launcher
 
 

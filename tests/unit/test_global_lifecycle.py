@@ -9,11 +9,26 @@ import zipfile
 
 from scripts.package import build_bundle
 from scripts.package import digest, MANIFEST
+from scripts.global_cli import install_command
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class GlobalLifecycleTests(unittest.TestCase):
+    def test_modified_launcher_is_preserved_before_installation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            user = root / 'user'
+            home = root / 'runtime'
+            launcher = user / '.local/bin/safe-yolo'
+            launcher.parent.mkdir(parents=True)
+            original = b'#!/bin/sh\n# Safe YOLO managed command\necho my own wrapper\n'
+            launcher.write_bytes(original)
+            with self.assertRaisesRegex(RuntimeError, 'Refusing to overwrite'):
+                install_command(ROOT, home, user)
+            self.assertEqual(original, launcher.read_bytes())
+            self.assertFalse(home.exists())
+
     @patch('scripts.package.verify_source', return_value='a' * 40)
     def test_real_version_update_preserves_customizations_and_rolls_back(self, _verify):
         with tempfile.TemporaryDirectory() as temporary:
