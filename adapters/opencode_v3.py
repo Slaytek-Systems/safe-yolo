@@ -58,6 +58,7 @@ def build_kernel(
             )
         )
     return DenyOnlyKernel(
+        customizations_path=safe_yolo / 'customizations.json',
         observation_dir=observation_dir,
         observation_harness="opencode",
         enforcement_paths=tuple(enforcement),

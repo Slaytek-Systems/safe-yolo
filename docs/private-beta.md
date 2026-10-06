@@ -1,6 +1,7 @@
 # Private beta operations
 
-Safe YOLO 3.0.0-beta.2 is a private, source-installed, harness-agnostic beta.
+Safe YOLO 3.0.0-beta.3 is a harness-agnostic beta available from a source
+checkout or a verified distribution ZIP.
 The distribution contains one immutable policy kernel and multiple native
 adapters. Lifecycle support is promoted per harness according to the
 [support matrix](harness-support.md).
@@ -9,7 +10,7 @@ adapters. Lifecycle support is promoted per harness according to the
 
 `python3 safe-yolo install --harness <id>`:
 
-1. requires a clean Git checkout and records its exact commit;
+1. verifies a distribution manifest or a clean Git checkout and records its source commit;
 2. installs or reuses a versioned immutable runtime under
    `~/.safe-yolo/releases/`;
 3. preserves the selected harness's previous configuration in a timestamped

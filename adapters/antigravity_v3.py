@@ -105,6 +105,7 @@ def build_kernel(
         project = Path(cwd).expanduser()
         enforcement.extend(str(project / relative) for relative in PROJECT_HOOKS)
     return DenyOnlyKernel(
+        customizations_path=safe_yolo / 'customizations.json',
         observation_dir=observation_dir,
         observation_harness="antigravity",
         enforcement_paths=tuple(enforcement),

@@ -51,6 +51,7 @@ def build_kernel(
         project = Path(cwd).expanduser() / ".claude"
         enforcement.extend(str(project / name) for name in PROJECT_SETTINGS)
     return DenyOnlyKernel(
+        customizations_path=safe_yolo / 'customizations.json',
         observation_dir=observation_dir,
         observation_harness="claude-code",
         enforcement_paths=tuple(enforcement),

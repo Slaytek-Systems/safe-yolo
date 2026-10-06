@@ -26,6 +26,7 @@ def build_kernel(
     home = Path(user_home).expanduser()
     config = Path(devin_config).expanduser()
     return DenyOnlyKernel(
+        customizations_path=Path(safe_yolo_home).expanduser() / 'customizations.json',
         observation_dir=observation_dir,
         observation_harness="devin",
         enforcement_paths=(
