@@ -53,8 +53,20 @@ python3 safe-yolo doctor --all
 
 Run only the relevant install commands. The installer applies to the selected
 user's global harness configuration across projects. It refuses conflicting
-enforcement hooks. Codex additionally requires the settings documented in the
-README. Follow each installer's native activation instructions; doctor checks
+enforcement hooks. Codex currently requires these existing settings in its
+`config.toml`; the installer checks them and does not change native permissions:
+
+```toml
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+
+[features]
+hooks = true
+```
+
+These settings run Codex without native approval prompts or its sandbox. Safe
+YOLO is not a replacement sandbox. Follow each installer's native activation
+instructions; doctor checks
 the adapter directly and cannot prove that an already-running harness loaded it.
 
 The release runs locally from `~/.safe-yolo/releases/`. Management files are
