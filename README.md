@@ -24,6 +24,9 @@ merge is ready.
 
 ## Status
 
+`3.0.0-beta.7` brings source, downloads, and release publishing into this
+repository. Existing installations migrate through a bridge release.
+
 `3.0.0-beta.6` installs with versioned interpreter names such as Homebrew's
 `python3.14`. `3.0.0-beta.5` added a public download, global management commands,
 and persistent local customizations. Installed releases remain separate. One
@@ -35,14 +38,14 @@ journeys receive equivalent proof. See the [support matrix](docs/harness-support
 ## Install
 
 For installation without Git or GitHub access, use the
-[public downloads](https://github.com/Slaytek-Systems/safe-yolo-releases) and
+[public downloads](https://github.com/Slaytek-Systems/safe-yolo/releases) and
 [installation guide](docs/download-install.md). The download installs
 `safe-yolo install`, `doctor`, `update`, `rollback`, and `uninstall` commands.
 Free use and local modification are covered by [distribution permission](DISTRIBUTION-LICENSE.txt).
 Maintainer source checkout installation remains available below.
 
-The proven platform is Linux with Python 3.12+. Clone this private repository
-with your own GitHub account, inspect the available harnesses, then explicitly
+The proven platform is Linux with Python 3.12+. Clone this repository,
+inspect the available harnesses, then explicitly
 select one:
 
 ```bash
@@ -92,6 +95,16 @@ installation. See [Download operations](docs/download-install.md) for
 distribution, upgrades, rollback, and limitations.
 
 ## Candidate implementation
+
+For development, use this repository for code, installer, tests, docs, and
+releases. Make changes on a branch, run `python3 -m unittest discover -s tests/unit`,
+and open a PR. After committing, `python3 scripts/publish.py --check` builds the
+package and exercises an isolated three-harness installation. See
+[PUBLISHING.md](PUBLISHING.md) for the single-repository release workflow.
+
+The previous `safe-yolo-releases` repo remains a compatibility archive. Its final
+bridge release moves updates here automatically. No ongoing development or
+manual artifact copying belongs there.
 
 - `engine/consequences_v3.py` — current deny-only direct consequence policy. Output redirects and mutating executables bind `enforcement.modify` to the actual write target; v3 adapters declare trusted scratch roots (`/tmp` and `~/tmp` by default, replaceable with `--scratch`) so `rm`/`unlink`/`rmdir` and structured `delete_file`/`remove_file` inside those roots is allowed.
 - `engine/ssh_command.py` — shared SSH argv parser. Explicit no-session transport and visible ordinary remote commands are allowed; interactive shells, opaque config files, subsystems, command-bearing options with restricted effects, and redirected maintenance commands are denied.

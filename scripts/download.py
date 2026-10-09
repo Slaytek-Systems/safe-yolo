@@ -9,7 +9,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-REPOSITORY = 'Slaytek-Systems/safe-yolo-releases'
+REPOSITORY = 'Slaytek-Systems/safe-yolo'
 MAX_DOWNLOAD = 16 * 1024 * 1024
 
 

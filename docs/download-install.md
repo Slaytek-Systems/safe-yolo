@@ -2,7 +2,7 @@
 
 Give your coding agent this instruction:
 
-> Install Safe YOLO from https://github.com/Slaytek-Systems/safe-yolo-releases.
+> Install Safe YOLO from https://github.com/Slaytek-Systems/safe-yolo.
 > Read its installation guide, verify the release checksum, install my supported
 > coding tools globally, and run doctor. Preserve my existing settings. Report
 > the installed version and any native hook trust or restart step I need to do.
@@ -20,7 +20,7 @@ downloads the newest complete 3.x release (including beta releases), verifies
 its SHA-256, and installs detected supported integrations:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Slaytek-Systems/safe-yolo-releases/main/install.py -o /tmp/safe-yolo-install.py
+curl -fsSL https://raw.githubusercontent.com/Slaytek-Systems/safe-yolo/main/scripts/download.py -o /tmp/safe-yolo-install.py
 python3 /tmp/safe-yolo-install.py
 ```
 
@@ -32,9 +32,9 @@ For a manual or offline installation, download the ZIP and its `.zip.sha256`
 from Releases, verify before extraction, then run:
 
 ```sh
-sha256sum -c safe-yolo-3.0.0-beta.6.zip.sha256
-unzip safe-yolo-3.0.0-beta.6.zip
-cd safe-yolo-3.0.0-beta.6
+sha256sum -c safe-yolo-3.0.0-beta.7.zip.sha256
+unzip safe-yolo-3.0.0-beta.7.zip
+cd safe-yolo-3.0.0-beta.7
 python3 safe-yolo harnesses
 python3 safe-yolo install
 ```
@@ -144,11 +144,14 @@ includes the runtime, portable management scripts, permission notice, and user
 documentation. Git history, local state, tests, host snapshots, and remote
 operator maintenance scripts are excluded.
 
-Publish both files to `Slaytek-Systems/safe-yolo-releases` under the tag
-`v<VERSION>`. Copy `scripts/download.py` to its `install.py` and this guide to its
-README. The development repository remains private. Verify anonymous download
-and a clean-home install after publishing; private-repository Releases alone
-do not provide public distribution.
+Publish from this same repository using its **Publish Safe YOLO** Actions
+workflow after merging a reviewed version change. It builds and verifies the
+ZIP from the exact source commit; see `PUBLISHING.md`. No second checkout or
+copied installer is required.
+
+Older installations still checking `safe-yolo-releases` receive the identical
+beta.7 bridge package there. After that update, their global management command
+checks `Slaytek-Systems/safe-yolo` for future versions. Old downloads remain available.
 
 ## Limits
 
