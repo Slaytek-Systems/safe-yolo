@@ -24,8 +24,9 @@ merge is ready.
 
 ## Status
 
-`3.0.0-beta.5` adds a public download, global management commands, and persistent
-local customizations. Installed releases remain separate. One
+`3.0.0-beta.6` installs with versioned interpreter names such as Homebrew's
+`python3.14`. `3.0.0-beta.5` added a public download, global management commands,
+and persistent local customizations. Installed releases remain separate. One
 immutable consequence-policy kernel is exposed through native harness adapters.
 Codex is supported; Claude Code and Cursor have beta lifecycle support. Other
 included adapters remain adapter-only until their install, doctor, and rollback

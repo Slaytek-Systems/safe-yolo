@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 import shlex
 import tomllib
@@ -187,7 +188,7 @@ def _command_is_pinned(
     except ValueError:
         return False
 
-    if len(tokens) < 2 or Path(tokens[0]).name != "python3":
+    if len(tokens) < 2 or not re.fullmatch(r"python3(\.\d+)?", Path(tokens[0]).name):
         return False
     if tokens[1] != str(bootstrap_path):
         return False
