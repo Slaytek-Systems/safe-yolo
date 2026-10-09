@@ -112,7 +112,14 @@ class GlobalLifecycleTests(unittest.TestCase):
             archive = build_bundle(ROOT, root / 'downloads', 'a' * 40)
             with zipfile.ZipFile(archive) as bundle:
                 bundle.extractall(root / 'extracted')
+                bundle.extractall(root / 'next')
             source = next((root / 'extracted').iterdir())
+            upgrade = next((root / 'next').iterdir())
+            (upgrade / 'VERSION').write_text('3.0.0-beta.999\n')
+            manifest = json.loads((upgrade / MANIFEST).read_text())
+            manifest['version'] = '3.0.0-beta.999'
+            manifest['files']['VERSION'] = digest((upgrade / 'VERSION').read_bytes())
+            (upgrade / MANIFEST).write_text(json.dumps(manifest))
             interpreter = root / 'bin' / f'python{sys.version_info.major}.{sys.version_info.minor}'
             interpreter.parent.mkdir()
             interpreter.symlink_to(sys.executable)
@@ -127,10 +134,12 @@ class GlobalLifecycleTests(unittest.TestCase):
             hook = json.loads((user / '.codex/hooks.json').read_text())
             self.assertIn(str(interpreter), json.dumps(hook))
             launcher = str(user / '.local/bin/safe-yolo')
-            for args in (['doctor'], ['update', '--source', str(source)], ['doctor']):
+            for args in (['doctor'], ['update', '--source', str(upgrade)], ['doctor']):
                 result = subprocess.run([launcher, *args], capture_output=True, text=True)
                 self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-            self.assertTrue(json.loads(result.stdout)['healthy'])
+            report = json.loads(result.stdout)
+            self.assertTrue(report['healthy'])
+            self.assertEqual('3.0.0-beta.999', report['reports'][0]['version'])
 
 
 if __name__ == '__main__':
