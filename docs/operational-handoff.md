@@ -6,7 +6,7 @@ Do not infer activation from source changes alone: each host's active hook pin a
 
 | Host | Active release | Evidence |
 | --- | --- | --- |
-| macOS (`/Users/slayga`) | `3.0.0-beta.6` (Codex, Cursor) | Upgraded 2026-10-09 from `3.0.0-alpha.1` with Homebrew `python3.14`; ZIP SHA-256 `5d00ffad9dd02f66ba4448b4091ac7e0ae151ed0a3f331680dde82290a80f382`, source `cbe505aad652a4696653024637c84210abcc9ce7`; `doctor --all` healthy with allow/deny canaries. Codex needs the new hook hash trusted in `/hooks` after each install or update. Claude Code keeps its own `PreToolUse` validators and Grok its own hooks; neither runs Safe YOLO. |
+| macOS (`/Users/slayga`) | `3.0.0-beta.6` (Codex, Cursor) | Upgraded 2026-10-09 from `3.0.0-alpha.1` with Homebrew `python3.14`; ZIP SHA-256 `5d00ffad9dd02f66ba4448b4091ac7e0ae151ed0a3f331680dde82290a80f382`, source `cbe505aad652a4696653024637c84210abcc9ce7`; `doctor --all` healthy with allow/deny canaries (laptop agent report). Codex needs the new hook hash trusted in `/hooks` after each install or update. Claude Code keeps its own `PreToolUse` validators and Grok its own hooks; neither runs Safe YOLO. |
 | devbox (`/home/dev`) | `3.0.0-beta.4` (Codex `codex_v3`) | Read from the active Codex hook pin, 2026-10-09. |
 
 Both hosts use `approval_policy = "never"` and `sandbox_mode = "danger-full-access"`. The active policy provides deterministic backpressure for direct tool calls. It is not containment for scripts or interpreters running as the same operating-system identity; durable safety depends on scoped authority and recoverability below the hook.
@@ -17,7 +17,7 @@ Both hosts use `approval_policy = "never"` and `sandbox_mode = "danger-full-acce
 - Codex task/thread read, create, archive, message, and collaboration tools are classified rather than fail-closed as unknown.
 - macOS protects credential/system surfaces (`~/.ssh`, shell profiles, LaunchAgents, Keychain access).
 - Direct destructive filesystem actions, force pushes, secret exposure, control-plane mutation, and unproven production deploys receive deterministic backpressure.
-- Visible noninteractive remote commands such as `ssh -n devbox uptime` are allowed from `3.0.0-alpha.9` on; the remote command is still checked for credential, deletion, production, and enforcement consequences. Interactive shells, subsystems, alternate SSH config, and route overrides stay blocked. Releases before alpha.9 deny every `ssh`.
+- Visible noninteractive remote commands such as `ssh -n devbox uptime` are allowed from `3.0.0-alpha.9` on; the remote command is still checked for credential, deletion, production, and enforcement consequences. Interactive shells, subsystems, and alternate SSH config (`-F`) stay blocked. Before alpha.9, the v3 Codex adapter denied ordinary remote commands such as `ssh -n devbox uptime`.
 
 ## Reopen protocol
 
