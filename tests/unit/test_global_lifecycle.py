@@ -104,6 +104,34 @@ class GlobalLifecycleTests(unittest.TestCase):
             run('uninstall')
             self.assertEqual(original, config.read_bytes())
 
+    @patch('scripts.package.verify_source', return_value='a' * 40)
+    def test_versioned_interpreter_name_installs_and_updates_codex(self, _verify):
+        # Homebrew and python.org report sys.executable as e.g. .../python3.14.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = build_bundle(ROOT, root / 'downloads', 'a' * 40)
+            with zipfile.ZipFile(archive) as bundle:
+                bundle.extractall(root / 'extracted')
+            source = next((root / 'extracted').iterdir())
+            interpreter = root / 'bin' / f'python{sys.version_info.major}.{sys.version_info.minor}'
+            interpreter.parent.mkdir()
+            interpreter.symlink_to(sys.executable)
+            user = root / 'user'
+            (user / '.codex').mkdir(parents=True)
+            (user / '.codex/config.toml').write_text(
+                'approval_policy = "never"\nsandbox_mode = "danger-full-access"\n')
+            command = [str(interpreter), str(source / 'safe-yolo'), '--home', str(root / 'runtime'),
+                       '--user-home', str(user)]
+            result = subprocess.run(command + ['install', '--harness', 'codex'], capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            hook = json.loads((user / '.codex/hooks.json').read_text())
+            self.assertIn(str(interpreter), json.dumps(hook))
+            launcher = str(user / '.local/bin/safe-yolo')
+            for args in (['doctor'], ['update', '--source', str(source)], ['doctor']):
+                result = subprocess.run([launcher, *args], capture_output=True, text=True)
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertTrue(json.loads(result.stdout)['healthy'])
+
 
 if __name__ == '__main__':
     unittest.main()

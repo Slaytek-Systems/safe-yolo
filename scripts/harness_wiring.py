@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 import shlex
 import sys
@@ -26,7 +27,7 @@ def is_safe_yolo_command(command: Any, home: Path, entry: str = "codex_v3") -> b
         tokens = shlex.split(command)
     except ValueError:
         return False
-    if len(tokens) < 2 or Path(tokens[0]).name != "python3":
+    if len(tokens) < 2 or not re.fullmatch(r"python3(\.\d+)?", Path(tokens[0]).name):
         return False
     bootstrap = Path(tokens[1])
     release_bootstrap = (
