@@ -230,6 +230,79 @@ class V3DenyOnlyTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertIsNone(handle_pre_tool(self.payload(command), self.kernel))
 
+    def test_forced_push_branch_overwrite_and_graphite_force_submit_are_denied(self):
+        denied = {
+            "git push -fu origin x": "git.history_mutation",
+            "git push -uf origin x": "git.history_mutation",
+            "git push --forc origin x": "git.history_mutation",
+            "git push --force-with-lease=x:abc origin x": "git.history_mutation",
+            "git push --force-if-includes --force-with-lease origin x": "git.history_mutation",
+            "git push --mirr origin": "git.history_mutation",
+            "git push -o ci.skip origin +x": "git.history_mutation",
+            "git push origin -- +x": "git.history_mutation",
+            "git push -ud origin x": "git.delete_ref",
+            "git push --del origin x": "git.delete_ref",
+            "git push -o ci.skip origin :x": "git.delete_ref",
+            "git -cfoo.bar=baz rm -f a": "git.history_mutation",
+            "git -C/x rm -f a": "git.history_mutation",
+            "git -P rm -f a": "git.history_mutation",
+            "git --namespace x rm -f a": "git.history_mutation",
+            "git --config-env foo.bar=HOME rm -f a": "git.history_mutation",
+            "git --attr-source HEAD rm -f a": "git.history_mutation",
+            "git --no-replace-objects --exec-path=/x rm -f a": "git.history_mutation",
+            "git branch -M feat main": "git.delete_ref",
+            "git branch -C feat main": "git.delete_ref",
+            "git branch -m -f old new": "git.delete_ref",
+            "git branch -mf old new": "git.delete_ref",
+            "git branch --move --force old new": "git.delete_ref",
+            "git branch -c -f a b": "git.delete_ref",
+            "git branch --copy --force a b": "git.delete_ref",
+            "gt submit --force": "git.history_mutation",
+            "gt submit -f": "git.history_mutation",
+            "gt submit -nf": "git.history_mutation",
+            "gt submit --comment -f": "git.history_mutation",
+            "gt --cwd /x submit --force": "git.history_mutation",
+            "gt s --force": "git.history_mutation",
+            "gt ss --force": "git.history_mutation",
+            "gt stack submit --force": "git.history_mutation",
+            "gt stack s -f": "git.history_mutation",
+            "gt downstack submit --force": "git.history_mutation",
+            "gt upstack submit -f": "git.history_mutation",
+        }
+        for command, consequence in denied.items():
+            with self.subTest(command=command):
+                decision = self.kernel.evaluate(self.payload(command))
+                self.assertEqual(("deny", consequence), (decision.outcome, decision.consequence))
+        allowed = (
+            "git push -u origin feat/x",
+            "git push origin HEAD:feat/x",
+            "git -C /w push origin feat/x",
+            "git push --force-if-includes origin x",
+            "git push -o -f origin x",
+            "git push --push-option -d origin x",
+            "git push --repo -f origin x",
+            "git push --receive-pack -d origin x",
+            "git push --recurse-submodules check origin x",
+            "git push --dry-run origin x",
+            "git push --follow-tags origin x",
+            "git push --no-force origin x",
+            "git -P status",
+            "git --namespace x push origin feat/x",
+            "git branch -m old new",
+            "git branch -c a b",
+            "git branch --move old new",
+            "gt submit",
+            "gt submit --stack",
+            "gt ss",
+            "gt sync",
+            "gt restack",
+            "gt modify",
+            "gt submit --comment fix",
+        )
+        for command in allowed:
+            with self.subTest(command=command):
+                self.assertIsNone(handle_pre_tool(self.payload(command), self.kernel))
+
     def test_file_deletion_denial_names_git_rm_for_tracked_files(self):
         denial = handle_pre_tool(
             {
