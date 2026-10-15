@@ -441,6 +441,28 @@ class V3DenyOnlyTests(unittest.TestCase):
                 self.assertEqual(("allow", None), self.decide(command))
                 self.assertLess(time.perf_counter() - started, 0.5)
 
+    def test_oversized_glob_components_are_matched_in_bounded_time(self):
+        installed = self.root / ".installed"
+        self.kernel = build_kernel(
+            safe_yolo_home=installed / "safe-yolo",
+            codex_home=installed / "codex",
+            user_home=installed / "home",
+        )
+        ssh = installed / "home" / ".ssh"
+        for command in (
+            f"cat {installed}/{'[' * 16000}/.ssh/id_rsa",
+            f"cat {installed}/home/{'[' * 16000}*/id_rsa",
+            f"cat {installed}/home/{'?' * 16000}/id_rsa",
+        ):
+            with self.subTest(command=command[:60]):
+                started = time.perf_counter()
+                self.assertEqual(("allow", None), self.decide(command))
+                self.assertLess(time.perf_counter() - started, 0.5)
+        self.assertEqual(
+            ("deny", "credentials.access"),
+            self.decide(f"cat {ssh.parent}/.{'*' * 4000}/id_rsa"),
+        )
+
     def test_globs_reaching_non_dot_private_paths_are_denied(self):
         home = self.root / "home"
         settings = self.root / "safe-yolo" / "customizations.json"

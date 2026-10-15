@@ -203,6 +203,42 @@ _APPEND_REDIRECTS = ("1>>", ">>")
 _DESCRIPTOR = re.compile(r"[0-9]*-?")
 # A word with these is not one literal path once bash expands it.
 _LITERAL_BREAKERS = _SHELL_GLOB | _REDIRECT_SYNTAX | frozenset("$`")
+
+
+def _literal_unclosed_brackets(pattern: str) -> str:
+    """Spell each `[` that has no closing `]` as the literal class `[[]`.
+
+    fnmatch already treats such a bracket as a literal, but finds that out by
+    rescanning the rest of the pattern for every one, which is quadratic. One
+    backward pass records where the next `]` is, so this rewrite is linear and
+    matches the same names.
+    """
+    if "[" not in pattern:
+        return pattern
+    size = len(pattern)
+    next_close = [size] * (size + 2)
+    for index in range(size - 1, -1, -1):
+        next_close[index] = index if pattern[index] == "]" else next_close[index + 1]
+    parts: list[str] = []
+    index = 0
+    while index < size:
+        if pattern[index] != "[":
+            parts.append(pattern[index])
+            index += 1
+            continue
+        start = index + 1
+        if start < size and pattern[start] == "!":
+            start += 1
+        if start < size and pattern[start] == "]":
+            start += 1
+        close = next_close[start]
+        if close >= size:
+            parts.append("[[]")
+            index += 1
+            continue
+        parts.append(pattern[index : close + 1])
+        index = close + 1
+    return "".join(parts)
 # $HOME or ${HOME} leading a word, an option value or a redirection target.
 _HOME_VARIABLE = re.compile(r"(?:^|(?<=[\s\"'=<>]))\$(?:HOME|\{HOME\})(?=[/\"'\s]|$)")
 
@@ -961,7 +997,7 @@ class ConsequenceKernel:
                 continue
             for root in roots:
                 if len(path.parts) >= len(root.parts) and all(
-                    fnmatchcase(name, pattern.replace("[^", "[!"))
+                    fnmatchcase(name, _literal_unclosed_brackets(pattern.replace("[^", "[!")))
                     and (pattern.startswith(".") or not name.startswith("."))
                     for pattern, name in zip(path.parts, root.parts)
                 ):

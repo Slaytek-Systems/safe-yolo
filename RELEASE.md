@@ -38,7 +38,10 @@ After shell tokenization, quoted redirection and glob characters are ambiguous,
 so both literal and operator or pattern readings are checked. A glob is
 matched by name only. It does not follow symlinks such as `/proc/*/root`. A
 pattern long enough to reach inside a protected path that is not under a dot
-directory is denied even when nothing matches on disk. Scripts, wrappers,
+directory is denied even when nothing matches on disk. POSIX character
+classes such as `[[:lower:]]` and brace expansion are not read as patterns,
+and an attached option value is checked from its first `/` or `~`, so
+`grep -f$HOME/...` is not expanded. Scripts, wrappers,
 substitutions, and other command compositions can still route around direct
 recognition.
 Public ssh file checks still inspect names and links, not content. A public
