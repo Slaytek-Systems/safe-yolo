@@ -113,6 +113,92 @@ class V3DenyOnlyTests(unittest.TestCase):
         self.assertIn("guarded merged-branch retirement workflow", reason)
         self.assertNotIn("additive commit", reason)
 
+    def test_git_forms_that_discard_work_or_force_ref_deletion_are_denied(self):
+        denied = {
+            "git rm -f a": "git.history_mutation",
+            "git rm --force a": "git.history_mutation",
+            "git rm -rf src": "git.history_mutation",
+            "git rm -fr src": "git.history_mutation",
+            "git rm -q -f a": "git.history_mutation",
+            "git -C /x rm -f a": "git.history_mutation",
+            "git checkout -f main": "git.history_mutation",
+            "git checkout --force main": "git.history_mutation",
+            "git checkout .": "git.history_mutation",
+            "git checkout HEAD -- a.py": "git.history_mutation",
+            "git switch --discard-changes main": "git.history_mutation",
+            "git switch -f main": "git.history_mutation",
+            "git switch --force main": "git.history_mutation",
+            "git stash drop": "git.history_mutation",
+            "git stash clear": "git.history_mutation",
+            "git worktree remove --force ../wt": "git.history_mutation",
+            "git worktree remove -f ../wt": "git.history_mutation",
+            "git reflog expire --expire=now --all": "git.history_mutation",
+            "git reflog delete HEAD@{1}": "git.history_mutation",
+            "git gc --prune=now": "git.history_mutation",
+            "git gc --prune=all": "git.history_mutation",
+            "git filter-branch --tree-filter true HEAD": "git.history_mutation",
+            "git filter-repo --path secret.txt --invert-paths": "git.history_mutation",
+            "git restore a.py": "git.history_mutation",
+            "git restore --source=HEAD a": "git.history_mutation",
+            "git restore --staged --worktree a.py": "git.history_mutation",
+            "git restore -SW a.py": "git.history_mutation",
+            "git branch -D feat": "git.delete_ref",
+            "git branch --delete --force feat": "git.delete_ref",
+            "git branch -d -f feat": "git.delete_ref",
+            "git branch -df feat": "git.delete_ref",
+            "git update-ref -d refs/heads/x": "git.delete_ref",
+            "git update-ref --delete refs/heads/x": "git.delete_ref",
+        }
+        for command, consequence in denied.items():
+            with self.subTest(command=command):
+                decision = self.kernel.evaluate(self.payload(command))
+                self.assertEqual(("deny", consequence), (decision.outcome, decision.consequence))
+
+    def test_git_forms_that_keep_work_recoverable_are_allowed(self):
+        commands = (
+            "git restore --staged a.py",
+            "git restore -S a.py",
+            "git rm a",
+            "git rm -r src",
+            "git rm --cached x",
+            "git rm -- -f",
+            "git mv a b",
+            "git stash",
+            "git stash pop",
+            "git stash apply",
+            "git worktree remove ../wt",
+            "git branch -d feat",
+            "git reset --soft HEAD~1",
+            "git reset HEAD~1",
+            "git reset --keep HEAD~1",
+            "git gc",
+            "git reflog",
+            "git clean -n",
+            "git checkout main",
+            "git checkout -b feat",
+            "git switch -c feat",
+            "git switch main",
+            "git commit --amend --no-edit",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertIsNone(handle_pre_tool(self.payload(command), self.kernel))
+
+    def test_file_deletion_denial_names_git_rm_for_tracked_files(self):
+        denial = handle_pre_tool(
+            {
+                "hook_event_name": "PreToolUse",
+                "cwd": "/workspace",
+                "tool_name": "apply_patch",
+                "tool_input": {"patch": "*** Begin Patch\n*** Delete File: /workspace/obsolete.py\n*** End Patch"},
+            },
+            self.kernel,
+        )
+
+        reason = denial["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("[filesystem.delete]", reason)
+        self.assertIn("`git rm <path>` (without -f) for git-tracked files", reason)
+
     def test_ssh_transport_and_visible_commands_share_the_consequence_kernel(self):
         allowed = (
             "ssh -N -L 8080:localhost:80 devbox",
