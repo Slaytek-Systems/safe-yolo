@@ -608,6 +608,143 @@ class V3DenyOnlyTests(unittest.TestCase):
                 )
                 self.assertEqual(expected, (decision.outcome, decision.consequence))
 
+    def test_identity_option_exempts_only_its_own_value(self):
+        ssh = self.root / "home" / ".ssh"
+        key = ssh / "id_rsa"
+        credentials = ("deny", "credentials.access")
+        self.assertDecisions(
+            {
+                f"scp -i {key} build.tgz host:": ("allow", None),
+                f"scp -i {key} {key} host:": credentials,
+                f"scp -i {key} build.tgz host: > {key}": credentials,
+                f"sftp -i {key} host < {key}": credentials,
+                f"sftp -i {key} -b {key} host": credentials,
+            }
+        )
+
+    def test_known_hosts_append_authorizes_no_other_write(self):
+        known_hosts = self.root / "home" / ".ssh" / "known_hosts"
+        credentials = ("deny", "credentials.access")
+        self.assertDecisions(
+            {
+                f"ssh-keyscan github.com >> {known_hosts} > {known_hosts}": credentials,
+                f"ssh-keyscan github.com > {known_hosts} >> {known_hosts}": credentials,
+                f"ssh-keyscan github.com >> {known_hosts} >> {known_hosts}.old": credentials,
+                f"ssh-keyscan github.com 2>> {known_hosts}": credentials,
+                f"ssh-keyscan -f{known_hosts.parent}/id_rsa >> {known_hosts}": credentials,
+                f"ssh-keyscan -f {known_hosts.parent}/id_rsa >> {known_hosts}": credentials,
+            }
+        )
+
+    def test_reader_option_values_cannot_name_protected_files(self):
+        ssh = self.root / "home" / ".ssh"
+        credentials = ("deny", "credentials.access")
+        self.assertDecisions(
+            {
+                f"file -f{ssh}/id_rsa {ssh}/config": credentials,
+                f"file -f {ssh}/id_rsa {ssh}/config": credentials,
+                f"grep -f{ssh}/id_rsa {ssh}/config": credentials,
+                f"grep -e x -f {ssh}/id_rsa {ssh}/config": credentials,
+                f"head -c 10 {ssh}/config": credentials,
+                f"head --bytes=10 {ssh}/config": credentials,
+                f"ls -R {ssh}": credentials,
+                f"cat -- {ssh}/config": credentials,
+                f"cat {ssh}/*.pub": credentials,
+                f"cat {ssh}/id_rsa.p?b": credentials,
+                f"cat {ssh}/config/../id_rsa.pub": credentials,
+                f"head -n 5 {ssh}/config": ("allow", None),
+                f"grep -in github {ssh}/known_hosts": ("allow", None),
+            }
+        )
+
+    def test_public_names_linked_to_private_keys_are_denied(self):
+        ssh = self.root / "home" / ".ssh"
+        ssh.mkdir(parents=True)
+        private = ssh / "id_rsa"
+        private.write_text("FAKE PRIVATE KEY\n")
+        (ssh / "id_rsa.pub").write_text("ssh-ed25519 AAAA public\n")
+        (ssh / "alias.pub").symlink_to(private)
+        try:
+            (ssh / "linked.pub").hardlink_to(private)
+        except OSError:
+            linked = False
+        else:
+            linked = True
+        credentials = ("deny", "credentials.access")
+        self.assertDecisions(
+            {
+                f"cat {ssh}/id_rsa.pub": ("allow", None),
+                f"cat {ssh}/*.pub": credentials,
+                f"cat {ssh}/alias.pub": credentials,
+            }
+        )
+        if not linked:
+            self.skipTest("filesystem refused a hardlink")
+        self.assertEqual(credentials, self.decide(f"cat {ssh}/linked.pub"))
+        self.assertEqual(credentials, self.decide(f"ssh-keygen -lf {ssh}/linked.pub"))
+        decision = self.kernel.evaluate(
+            {
+                "hook_event_name": "PreToolUse",
+                "cwd": "/workspace/repo",
+                "tool_name": "read",
+                "tool_input": {"file_path": str(ssh / "linked.pub")},
+            }
+        )
+        self.assertEqual(credentials, (decision.outcome, decision.consequence))
+
+    def test_user_private_paths_override_public_ssh_files(self):
+        ssh = self.root / "home" / ".ssh"
+        settings = self.root / "safe-yolo" / "customizations.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(json.dumps({"private_paths": [str(ssh)]}))
+        kernel = build_kernel(
+            safe_yolo_home=self.root / "safe-yolo",
+            codex_home=self.root / "codex",
+            user_home=self.root / "home",
+        )
+        payloads = {
+            "cat": self.payload(f"cat {ssh}/config"),
+            "ls": self.payload(f"ls {ssh}"),
+            "keyscan": self.payload(f"ssh-keyscan github.com >> {ssh}/known_hosts"),
+            "read": {
+                "hook_event_name": "PreToolUse",
+                "cwd": "/workspace/repo",
+                "tool_name": "read",
+                "tool_input": {"file_path": str(ssh / "config")},
+            },
+        }
+        for name, payload in payloads.items():
+            with self.subTest(name=name):
+                decision = kernel.evaluate(payload)
+                self.assertEqual(
+                    ("deny", "credentials.access"), (decision.outcome, decision.consequence)
+                )
+        self.assertEqual(("allow", None), self.decide(f"cat {ssh}/config"))
+
+    def test_railway_group_options_before_the_verb_are_skipped(self):
+        mutate = ("deny", "production.mutate")
+        allow = ("allow", None)
+        self.assertDecisions(
+            {
+                "railway volume --project review-fixture delete --volume data --yes": mutate,
+                "railway volume -p review-fixture rm --volume data": mutate,
+                "railway volume --project=review-fixture delete": mutate,
+                "railway bucket --bucket review-fixture delete --yes": mutate,
+                "railway bucket -b assets remove": mutate,
+                "railway variable --project review-fixture delete FOO": mutate,
+                "railway variable -s api -e production delete FOO": mutate,
+                "railway variable -k delete FOO": mutate,
+                "railway functions -e staging delete": mutate,
+                "railway environment --json delete staging": mutate,
+                "railway volume --project review-fixture list": allow,
+                "railway variable -s api list": allow,
+                "railway variable -s delete list": allow,
+                "railway bucket --bucket delete info": allow,
+            }
+        )
+        denial = self.kernel.evaluate(self.payload("railway volume -p x delete --yes"))
+        self.assertEqual("run railway volume delete production mutation", denial.display)
+
     def test_production_destroy_verbs_are_denied(self):
         mutate = ("deny", "production.mutate")
         allow = ("allow", None)
