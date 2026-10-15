@@ -184,6 +184,52 @@ class V3DenyOnlyTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertIsNone(handle_pre_tool(self.payload(command), self.kernel))
 
+    def test_git_option_values_and_long_abbreviations_are_read_as_git_reads_them(self):
+        denied = {
+            "git restore -sSAFE a.py": "git.history_mutation",
+            "git restore -s SAFE a.py": "git.history_mutation",
+            "git restore --source SAFE a.py": "git.history_mutation",
+            "git restore -sSAFE README.md": "git.history_mutation",
+            "git restore --staged --work a.py": "git.history_mutation",
+            "git restore --staged --work README.md": "git.history_mutation",
+            "git restore -S --w a.py": "git.history_mutation",
+            "git restore --s a.py": "git.history_mutation",
+            "git checkout --forc feat": "git.history_mutation",
+            "git checkout -bfeat --forc": "git.history_mutation",
+            "git rm --forc a": "git.history_mutation",
+            "git switch --discard main": "git.history_mutation",
+            "git worktree remove --forc ../wt": "git.history_mutation",
+            "git gc --prun=now": "git.history_mutation",
+            "git branch --del --forc feat": "git.delete_ref",
+            "git update-ref --del refs/heads/x": "git.delete_ref",
+        }
+        for command, consequence in denied.items():
+            with self.subTest(command=command):
+                decision = self.kernel.evaluate(self.payload(command))
+                self.assertEqual(("deny", consequence), (decision.outcome, decision.consequence))
+        allowed = (
+            "git checkout -b feat",
+            "git checkout -bfeat",
+            "git checkout -Bfeat",
+            "git checkout -q -bfeature",
+            "git checkout --orphan f",
+            "git switch -c fix",
+            "git switch -cfix2",
+            "git switch -qcfix",
+            "git switch --create f main",
+            "git restore --staged a.py",
+            "git restore -S a.py",
+            "git restore --stag a.py",
+            "git restore --staged --source=HEAD a.py",
+            "git restore --source HEAD -S a.py",
+            "git restore -S --source W a.py",
+            "git branch -uorigin/f feat",
+            "git update-ref -m d refs/heads/x HEAD",
+        )
+        for command in allowed:
+            with self.subTest(command=command):
+                self.assertIsNone(handle_pre_tool(self.payload(command), self.kernel))
+
     def test_file_deletion_denial_names_git_rm_for_tracked_files(self):
         denial = handle_pre_tool(
             {
