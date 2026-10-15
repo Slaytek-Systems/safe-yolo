@@ -7,7 +7,7 @@ import shlex
 import stat
 from typing import Any, Literal
 
-from engine.ssh_command import CLIENT_VALUE_LETTERS, parse_ssh_invocation
+from engine.ssh_command import CLIENT_VALUE_LETTERS, SshInvocation, parse_ssh_invocation
 
 
 Outcome = Literal["allow", "approval_required", "operator_only"]
@@ -183,6 +183,9 @@ _PRODUCTION_COMMANDS: dict[str, dict[tuple[str, ...], bool]] = {
 _PUBLIC_SSH_NAMES = frozenset({"config", "known_hosts", "known_hosts.old"})
 _SHELL_GLOB = frozenset("*?[]{}")
 _REDIRECTION = re.compile(r"(\d*)(>>|>|<)(&[0-9-]*|[^<>&]*)")
+_REDIRECT_SYNTAX = frozenset("<>")
+# A word with these is not one literal path once bash expands it.
+_LITERAL_BREAKERS = _SHELL_GLOB | _REDIRECT_SYNTAX | frozenset("$`")
 
 
 @dataclass(frozen=True)
@@ -392,57 +395,94 @@ class ConsequenceKernel:
             return not self._inside(path, self.private_paths)
         return self._public_ssh_file(path)
 
-    def _public_credential_shape(self, executable: str, args: list[str], cwd: Path) -> bool:
-        """Does the whole command match one shape that only reads public ssh files?"""
+    def _public_credential_shape(
+        self, executable: str, args: list[str], cwd: Path
+    ) -> frozenset[int] | None:
+        """Indexes of the public ssh file words when the whole command fits one shape.
+
+        Redirections pair with their target as in _shell_paths, so these indexes
+        name the same words that scan sees. A word with redirection syntax is
+        never an option value, and the only redirection excused is the one
+        known_hosts append of ssh-keyscan.
+        """
         shape = _PUBLIC_SHAPES.get(executable)
         if shape is None:
-            return False
-        words: list[str] = []
+            return None
+        words: list[int] = []
         letters: set[str] = set()
-        appends = 0
-        tokens = iter(args)
-        for token in tokens:
+        append: int | None = None
+        index = 0
+        while index < len(args):
+            token = args[index]
+            start = index
+            index += 1
             if "<" in token or ">" in token:
                 match = _REDIRECTION.fullmatch(token)
                 if match is None:
-                    return False
+                    return None
                 fd, operator, target = match.groups()
-                target = target or next(tokens, "")
                 if not target:
-                    return False
-                if target.startswith("&"):
-                    continue
+                    if index >= len(args) or _REDIRECT_SYNTAX & set(args[index]):
+                        return None
+                    target = args[index]
+                    index += 1
                 path = self._resolve_from(target, cwd)
-                if not self._inside(path, self.credential_paths):
-                    continue
-                if not (
-                    shape.appends_known_hosts
+                if (
+                    append is None
+                    and shape.appends_known_hosts
                     and operator == ">>"
                     and fd in {"", "1"}
                     and path.name == "known_hosts"
+                    and self._inside(path, self.credential_paths)
                     and self._public_word(target, cwd, shape)
                 ):
-                    return False
-                appends += 1
+                    append = start
             elif token.startswith("-") and len(token) > 1:
                 for position, letter in enumerate(token[1:], start=2):
                     letters.add(letter)
                     if letter in shape.values + shape.numbers:
-                        value = next(tokens, None)
-                        if position != len(token) or value is None:
-                            return False
+                        if position != len(token) or index >= len(args):
+                            return None
+                        value = args[index]
+                        if _REDIRECT_SYNTAX & set(value):
+                            return None
                         if letter in shape.numbers and not value.isdigit():
-                            return False
-                        words.append(value)
+                            return None
+                        words.append(index)
+                        index += 1
                     elif letter not in shape.flags:
-                        return False
+                        return None
             else:
-                words.append(token)
+                words.append(start)
         if shape.requires and not letters & set(shape.requires):
-            return False
-        if appends != int(shape.appends_known_hosts):
-            return False
-        return all(self._public_word(word, cwd, shape) for word in words)
+            return None
+        if (append is not None) != shape.appends_known_hosts:
+            return None
+        if not all(self._public_word(args[word], cwd, shape) for word in words):
+            return None
+        return frozenset(words) | ({append} if append is not None else set())
+
+    def _identity_words(
+        self, args: list[str], client: SshInvocation | None, cwd: Path
+    ) -> frozenset[int]:
+        """Indexes of -i values that are plain key paths outside user private paths.
+
+        Bash drops redirection words before building argv, so the client parse
+        matches argv only before the first word with redirection syntax.
+        """
+        if client is None:
+            return frozenset()
+        aligned = next(
+            (index for index, token in enumerate(args) if _REDIRECT_SYNTAX & set(token)),
+            len(args),
+        )
+        return frozenset(
+            index
+            for index in client.identity_positions
+            if index < aligned
+            and not _LITERAL_BREAKERS & set(args[index])
+            and not self._inside(self._resolve_from(args[index], cwd), self.private_paths)
+        )
 
     @staticmethod
     def _patch_directives(patch: Any) -> str:
@@ -538,21 +578,18 @@ class ConsequenceKernel:
             else None
         )
         ssh_invocation = client if executable == "ssh" else None
-        _, positionals, redirect_targets = self._shell_paths(tokens[1:], cwd)
-        if not (simple and self._public_credential_shape(executable, tokens[1:], cwd)):
-            # Only the word that is an -i value is exempt; that key is used,
-            # not read. Every other word and redirection is checked.
-            identities = set(client.identity_positions if client is not None else ())
-            scanned = [token for index, token in enumerate(tokens[1:]) if index not in identities]
-            if any(
-                self._inside(path, self.credential_paths)
-                for path in self._shell_paths(scanned, cwd)[0]
-            ):
-                return Decision(
-                    "operator_only",
-                    "credentials.access",
-                    "credential material is not available to the agent",
-                )
+        # Exemptions only remove named words from the full scan. A public file
+        # shape exempts its operands; otherwise an -i key is used, not read.
+        exempt = self._public_credential_shape(executable, tokens[1:], cwd) if simple else None
+        if exempt is None:
+            exempt = self._identity_words(tokens[1:], client, cwd)
+        token_paths, positionals, redirect_targets = self._shell_paths(tokens[1:], cwd, exempt)
+        if any(self._inside(path, self.credential_paths) for path in token_paths):
+            return Decision(
+                "operator_only",
+                "credentials.access",
+                "credential material is not available to the agent",
+            )
         mutation_targets = self._mutation_targets(
             executable,
             tokens[1:],
@@ -766,7 +803,12 @@ class ConsequenceKernel:
         cls,
         tokens: list[str],
         cwd: Path,
+        exempt: frozenset[int] = frozenset(),
     ) -> tuple[tuple[Path, ...], tuple[Path, ...], tuple[Path, ...]]:
+        """Paths named by words, redirections and long option values.
+
+        Paths from the words at exempt indexes are left out of the first tuple.
+        """
         found: list[Path] = []
         positionals: list[Path] = []
         redirect_targets: list[Path] = []
@@ -775,13 +817,15 @@ class ConsequenceKernel:
             token = tokens[index]
             redirect = cls._output_redirection(token)
             if redirect is not None:
+                start = index
                 target = redirect
                 if not target and index + 1 < len(tokens):
                     index += 1
                     target = tokens[index]
                 if target and not target.startswith("&"):
                     path = cls._resolve_from(target, cwd)
-                    found.append(path)
+                    if start not in exempt:
+                        found.append(path)
                     redirect_targets.append(path)
                 index += 1
                 continue
@@ -803,7 +847,8 @@ class ConsequenceKernel:
                 continue
             if not token.startswith("-"):
                 path = cls._resolve_from(token, cwd)
-                found.append(path)
+                if index not in exempt:
+                    found.append(path)
                 positionals.append(path)
             index += 1
         return tuple(found), tuple(positionals), tuple(redirect_targets)
