@@ -4,25 +4,35 @@ Ordinary ssh setup no longer needs a workaround, and more spellings of
 already-restricted production, public-bind, and environment-dump commands are
 recognized.
 
-- Allowed: reading the ssh client `config`, `known_hosts`, `known_hosts.old`,
-  and `*.pub` files directly in the home ssh directory with `cat`, `head`,
-  `tail`, `grep`, `wc`, `diff`, `cmp`, `file`, `stat`, `ls`, or
-  `ssh-keygen -l`, `-B`, or `-F`, and through structured read tools.
-- Allowed: `ls` of the ssh directory itself, and
-  `ssh-keyscan <host> >> <ssh dir>/known_hosts`.
+- Allowed: a single command of one of these exact shapes on the home ssh
+  directory's public files, `config`, `known_hosts`, `known_hosts.old`, and
+  `*.pub`, each named literally:
+  - `cat`, `head -n N`, `tail -n N`, `wc`, `grep PATTERN`, `diff`, `cmp`,
+    `stat`, `file`, or `ls` with only that command's listed display options;
+  - `ls` of the directory itself (names only; `-R` is denied);
+  - `ssh-keygen -l`, `-B`, or `-F <host>` with `-f <public file>` and `-E`;
+  - `ssh-keyscan [options] <hosts> >> <ssh dir>/known_hosts`, with that
+    append as the only redirection into the directory;
+  - a structured read tool on one public file.
 - Allowed: `scp -i` and `sftp -i` with a key in the ssh directory, like
-  `ssh -i`.
-- Still denied: private keys and every other file in the ssh directory, any
-  write other than the `ssh-keyscan` append (including to `config`,
-  `known_hosts` with `>`, and `authorized_keys`), recursive reads and archives
-  of the directory, and any command that chains, pipes, or substitutes another
-  command.
+  `ssh -i`. Only that option value is exempt.
+- Still denied: private keys and every other file in the ssh directory; globs,
+  `..`, option values, long options, and redirections that name the directory
+  in a reader; every write except the one `ssh-keyscan` append; a public name
+  that is a symlink to another file or a hardlink with more than one link; any
+  public file under a `private_paths` customization; and any command that
+  chains, pipes, or substitutes another command.
+- Residual: the hook checks names and links, not content. A public name made
+  outside the hook that holds private key content, such as a copy or a
+  hardlink whose other name was removed, reads as public. Creating one through
+  the hook is a denied write into the directory.
 - Denied as production mutation: `fly apps destroy` (also `app`, and `delete`,
   `remove`, `rm`), `fly destroy`, `fly machine destroy` (also `machines`, `m`,
   and `remove`, `rm`), `vercel remove`, `rm`, `rollback`, and `promote`, and
   `railway <group> delete` (also `remove`, `rm`) for service, volume,
   environment, bucket, functions, template, variable, and project, with the
-  group aliases from `railway --help`. `flyctl` and `vc` are read as `fly` and
+  group aliases from `railway --help`, also when group options such as
+  `--project <id>` come before the verb. `flyctl` and `vc` are read as `fly` and
   `vercel`. `vercel rollback status` and `vercel promote status` stay allowed.
 - Denied as public exposure: `gunicorn -b` or `--bind`, `rails s -b` or
   `--binding`, `jupyter --ip`, and `php -S` with `0.0.0.0`, `::`, or `[::]`,

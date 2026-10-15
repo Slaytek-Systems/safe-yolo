@@ -33,7 +33,8 @@ class SshInvocation:
     remote_tokens: tuple[str, ...]
     remote_commands: tuple[str, ...]
     local_commands: tuple[str, ...]
-    identity_files: tuple[str, ...]
+    # Indexes of -i values given as their own word, so only that word is exempt.
+    identity_positions: tuple[int, ...]
     transport_only: bool
     opaque_config: bool
     route_overridden: bool
@@ -57,7 +58,7 @@ def parse_ssh_invocation(
     remote_tokens: tuple[str, ...] = ()
     remote_commands: list[str] = []
     local_commands: list[str] = []
-    identity_files: list[str] = []
+    identity_positions: list[int] = []
     transport_only = False
     opaque_config = False
     route_overridden = False
@@ -93,21 +94,19 @@ def parse_ssh_invocation(
                 value = token[position:].removeprefix("=")
             elif index < len(args):
                 value = args[index]
+                if flag == "-i":
+                    identity_positions.append(index)
                 index += 1
             else:
                 value = None
                 malformed = True
                 break
-            if flag == "-i":
-                identity_files.append(value)
-            elif flag == "-F":
+            if flag == "-F":
                 opaque_config = True
             elif flag in {"-W", "-O", "-Q"}:
                 transport_only = True
             elif flag == "-o":
                 name, option_value = _config_option(value)
-                if name == "identityfile" and option_value:
-                    identity_files.append(option_value)
                 command_value = option_value if option_value.lower() != "none" else ""
                 if name in _LOCAL_COMMAND_OPTIONS and command_value:
                     local_commands.append(command_value)
@@ -135,7 +134,7 @@ def parse_ssh_invocation(
         remote_tokens=remote_tokens,
         remote_commands=tuple(remote_commands),
         local_commands=tuple(local_commands),
-        identity_files=tuple(identity_files),
+        identity_positions=tuple(identity_positions),
         transport_only=transport_only,
         opaque_config=opaque_config,
         route_overridden=route_overridden,

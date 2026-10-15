@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from fnmatch import fnmatchcase
 from pathlib import Path
 import re
 import shlex
+import stat
 from typing import Any, Literal
 
 from engine.ssh_command import CLIENT_VALUE_LETTERS, parse_ssh_invocation
@@ -141,6 +141,11 @@ _RAILWAY_DELETE_GROUPS = (
     "project",
     "projects",
 )
+# Value options railway groups take before their verb (`railway <group> --help`).
+_RAILWAY_GROUP_VALUE_OPTIONS = (
+    "bsep",
+    ("--bucket", "--service", "--environment", "--project", "--set", "--set-from-stdin"),
+)
 _PRODUCTION_COMMANDS: dict[str, dict[tuple[str, ...], bool]] = {
     "railway": dict.fromkeys(
         {("up",), ("deploy",), ("redeploy",), ("restart",), ("down",)}
@@ -174,26 +179,48 @@ _PRODUCTION_COMMANDS: dict[str, dict[tuple[str, ...], bool]] = {
         ("promote", "status"): False,
     },
 }
-# OpenSSH directory files an agent may use, by credential root name. Each
-# child name pattern maps to the access it permits, and the directory itself
-# may be listed. Every other file and access in the root stays protected.
-_PUBLIC_CREDENTIAL_FILES: dict[str, dict[str, frozenset[str]]] = {
-    ".ssh": {
-        "config": frozenset({"read"}),
-        "known_hosts": frozenset({"read", "append"}),
-        "known_hosts.old": frozenset({"read"}),
-        "*.pub": frozenset({"read"}),
-    },
+# Files in an OpenSSH directory an agent may read: these names and *.pub.
+_PUBLIC_SSH_NAMES = frozenset({"config", "known_hosts", "known_hosts.old"})
+_SHELL_GLOB = frozenset("*?[]{}")
+_REDIRECTION = re.compile(r"(\d*)(>>|>|<)(&[0-9-]*|[^<>&]*)")
+
+
+@dataclass(frozen=True)
+class _PublicShape:
+    """Options one command may carry and still only read public ssh files.
+
+    Option letters cluster getopt-style; a value letter ends its cluster and
+    takes the next word. Every other word naming the credential directory must
+    be a public file, and no redirection may touch it unless the shape appends
+    to known_hosts.
+    """
+
+    flags: str
+    values: str = ""
+    numbers: str = ""
+    requires: str = ""
+    lists_directory: bool = False
+    appends_known_hosts: bool = False
+
+
+# The only command shapes that may touch the ssh directory. Anything else
+# naming it, including -c byte reads, -R, -f, -e, -y, -H and long options,
+# falls back to protecting the whole directory.
+_PUBLIC_SHAPES = {
+    "cat": _PublicShape("AbeEnstTuv"),
+    "head": _PublicShape("qv", numbers="n"),
+    "tail": _PublicShape("qv", numbers="n"),
+    "wc": _PublicShape("lcwm"),
+    "grep": _PublicShape("inEFqvcwxHh"),
+    "diff": _PublicShape("uqsiwbB"),
+    "cmp": _PublicShape("sl"),
+    "stat": _PublicShape("Lt"),
+    "file": _PublicShape("bLh"),
+    "ls": _PublicShape("laAh1", lists_directory=True),
+    "ssh-keygen": _PublicShape("lB", values="fEF", requires="lBF"),
+    "ssh-keyscan": _PublicShape("46cDHv", values="fOpTt", appends_known_hosts=True),
 }
-_CREDENTIAL_LISTERS = frozenset({"ls"})
-_CREDENTIAL_APPENDERS = frozenset({"ssh-keyscan"})
 _CREDENTIAL_READ_TOOLS = frozenset({"read"})
-# Commands that only read their path operands. A policy names value letters,
-# the read modes of which one is required, and every letter allowed.
-_CREDENTIAL_READERS: dict[str, tuple[str, str, str] | None] = {
-    **dict.fromkeys(("cat", "head", "tail", "grep", "wc", "diff", "cmp", "file", "stat", "ls")),
-    "ssh-keygen": ("EFf", "lBF", "lBFEfv"),
-}
 _PUBLIC_HOSTS = frozenset({"0.0.0.0", "::", "[::]"})
 # Options that name a listen address, for every command (None) and per command.
 _BIND_OPTIONS: dict[str | None, tuple[str, ...]] = {
@@ -252,6 +279,11 @@ class ConsequenceKernel:
     ) -> None:
         self.enforcement_paths = tuple(self._path(path) for path in enforcement_paths)
         self.credential_paths = tuple(self._path(path) for path in credential_paths)
+        self.public_ssh_roots = tuple(
+            self._path(path) for path in credential_paths if Path(path).name == ".ssh"
+        )
+        # User private paths are credential roots that no public shape opens.
+        self.private_paths: tuple[Path, ...] = ()
         self.scratch_paths = tuple(self._path(path) for path in scratch_paths)
 
     @staticmethod
@@ -273,8 +305,12 @@ class ConsequenceKernel:
                 )
                 return self._shell(command, effective_cwd)
         paths = self._structured_paths(tool_input, cwd)
-        access = "read" if tool_name in _CREDENTIAL_READ_TOOLS else "write"
-        if not all(self._credential_access_allowed(path, access) for path in paths):
+        readable = tool_name in _CREDENTIAL_READ_TOOLS
+        if any(
+            self._inside(path, self.credential_paths)
+            and not (readable and self._public_ssh_file(path))
+            for path in paths
+        ):
             return Decision(
                 "operator_only",
                 "credentials.access",
@@ -326,37 +362,87 @@ class ConsequenceKernel:
                 )
         return Decision("allow")
 
-    def _credential_access_allowed(self, path: Path, access: str) -> bool:
-        for root in self.credential_paths:
-            if not self._inside(path, (root,)):
-                continue
-            public = _PUBLIC_CREDENTIAL_FILES.get(root.name, {})
-            if path == root:
-                permitted = {"list"} if public else set()
-            elif path.parent == root:
-                permitted = {
-                    allowed
-                    for pattern, accesses in public.items()
-                    if fnmatchcase(path.name, pattern)
-                    for allowed in accesses
-                }
-            else:
-                permitted = set()
-            if access not in permitted:
-                return False
-        return True
+    def _public_ssh_file(self, path: Path) -> bool:
+        """Is this resolved path a readable public file of an ssh directory?
 
-    @classmethod
-    def _reads_only(cls, executable: str, args: list[str]) -> bool:
-        if executable not in _CREDENTIAL_READERS:
+        A hardlink can give a private key a public name, so a regular file
+        with more than one link is never public.
+        """
+        name = path.name
+        if (
+            path.parent not in self.public_ssh_roots
+            or self._inside(path, self.private_paths)
+            or _SHELL_GLOB & set(name)
+            or not (name in _PUBLIC_SSH_NAMES or (name.endswith(".pub") and name != ".pub"))
+        ):
             return False
-        policy = _CREDENTIAL_READERS[executable]
-        if policy is None:
+        try:
+            info = path.stat()
+        except OSError:
             return True
-        value_letters, modes, allowed = policy
-        options, _, _ = cls._parse_options(args, value_letters, ())
-        letters = {option[1:] for option in options}
-        return bool(letters & set(modes)) and letters <= set(allowed)
+        return not (stat.S_ISREG(info.st_mode) and info.st_nlink > 1)
+
+    def _public_word(self, word: str, cwd: Path, shape: _PublicShape) -> bool:
+        path = self._resolve_from(word, cwd)
+        if not self._inside(path, self.credential_paths):
+            return True
+        if _SHELL_GLOB & set(word) or ".." in Path(word).parts:
+            return False
+        if shape.lists_directory and path in self.public_ssh_roots:
+            return not self._inside(path, self.private_paths)
+        return self._public_ssh_file(path)
+
+    def _public_credential_shape(self, executable: str, args: list[str], cwd: Path) -> bool:
+        """Does the whole command match one shape that only reads public ssh files?"""
+        shape = _PUBLIC_SHAPES.get(executable)
+        if shape is None:
+            return False
+        words: list[str] = []
+        letters: set[str] = set()
+        appends = 0
+        tokens = iter(args)
+        for token in tokens:
+            if "<" in token or ">" in token:
+                match = _REDIRECTION.fullmatch(token)
+                if match is None:
+                    return False
+                fd, operator, target = match.groups()
+                target = target or next(tokens, "")
+                if not target:
+                    return False
+                if target.startswith("&"):
+                    continue
+                path = self._resolve_from(target, cwd)
+                if not self._inside(path, self.credential_paths):
+                    continue
+                if not (
+                    shape.appends_known_hosts
+                    and operator == ">>"
+                    and fd in {"", "1"}
+                    and path.name == "known_hosts"
+                    and self._public_word(target, cwd, shape)
+                ):
+                    return False
+                appends += 1
+            elif token.startswith("-") and len(token) > 1:
+                for position, letter in enumerate(token[1:], start=2):
+                    letters.add(letter)
+                    if letter in shape.values + shape.numbers:
+                        value = next(tokens, None)
+                        if position != len(token) or value is None:
+                            return False
+                        if letter in shape.numbers and not value.isdigit():
+                            return False
+                        words.append(value)
+                    elif letter not in shape.flags:
+                        return False
+            else:
+                words.append(token)
+        if shape.requires and not letters & set(shape.requires):
+            return False
+        if appends != int(shape.appends_known_hosts):
+            return False
+        return all(self._public_word(word, cwd, shape) for word in words)
 
     @staticmethod
     def _patch_directives(patch: Any) -> str:
@@ -452,13 +538,21 @@ class ConsequenceKernel:
             else None
         )
         ssh_invocation = client if executable == "ssh" else None
-        token_paths, positionals, redirect_targets, appended = self._shell_paths(
-            tokens[1:], cwd
-        )
-        identity_files = {
-            self._resolve_from(value, cwd)
-            for value in (client.identity_files if client is not None else ())
-        }
+        _, positionals, redirect_targets = self._shell_paths(tokens[1:], cwd)
+        if not (simple and self._public_credential_shape(executable, tokens[1:], cwd)):
+            # Only the word that is an -i value is exempt; that key is used,
+            # not read. Every other word and redirection is checked.
+            identities = set(client.identity_positions if client is not None else ())
+            scanned = [token for index, token in enumerate(tokens[1:]) if index not in identities]
+            if any(
+                self._inside(path, self.credential_paths)
+                for path in self._shell_paths(scanned, cwd)[0]
+            ):
+                return Decision(
+                    "operator_only",
+                    "credentials.access",
+                    "credential material is not available to the agent",
+                )
         mutation_targets = self._mutation_targets(
             executable,
             tokens[1:],
@@ -466,24 +560,6 @@ class ConsequenceKernel:
             positionals,
             redirect_targets,
         )
-        for path in token_paths:
-            if path in identity_files:
-                continue
-            if not simple:
-                access = "use"
-            elif path in mutation_targets:
-                appends = path in appended and executable in _CREDENTIAL_APPENDERS
-                access = "append" if appends else "write"
-            elif executable in _CREDENTIAL_LISTERS and path in self.credential_paths:
-                access = "list"
-            else:
-                access = "read" if self._reads_only(executable, tokens[1:]) else "use"
-            if not self._credential_access_allowed(path, access):
-                return Decision(
-                    "operator_only",
-                    "credentials.access",
-                    "credential material is not available to the agent",
-                )
         if any(self._inside(path, self.enforcement_paths) for path in mutation_targets):
             return Decision(
                 "operator_only",
@@ -690,11 +766,10 @@ class ConsequenceKernel:
         cls,
         tokens: list[str],
         cwd: Path,
-    ) -> tuple[tuple[Path, ...], tuple[Path, ...], tuple[Path, ...], tuple[Path, ...]]:
+    ) -> tuple[tuple[Path, ...], tuple[Path, ...], tuple[Path, ...]]:
         found: list[Path] = []
         positionals: list[Path] = []
         redirect_targets: list[Path] = []
-        appended: list[Path] = []
         index = 0
         while index < len(tokens):
             token = tokens[index]
@@ -708,8 +783,6 @@ class ConsequenceKernel:
                     path = cls._resolve_from(target, cwd)
                     found.append(path)
                     redirect_targets.append(path)
-                    if ">>" in token:
-                        appended.append(path)
                 index += 1
                 continue
             redirect = cls._input_redirection(token)
@@ -733,7 +806,7 @@ class ConsequenceKernel:
                 found.append(path)
                 positionals.append(path)
             index += 1
-        return tuple(found), tuple(positionals), tuple(redirect_targets), tuple(appended)
+        return tuple(found), tuple(positionals), tuple(redirect_targets)
 
     @staticmethod
     def _output_redirection(token: str) -> str | None:
@@ -1036,6 +1109,8 @@ class ConsequenceKernel:
     @staticmethod
     def _production_command(executable: str, args: list[str]) -> tuple[str, ...] | None:
         commands = _PRODUCTION_COMMANDS.get(executable, {})
+        if executable == "railway":
+            _, args, _ = ConsequenceKernel._parse_options(args, *_RAILWAY_GROUP_VALUE_OPTIONS)
         for length in (2, 1):
             words = tuple(args[:length])
             if words in commands:

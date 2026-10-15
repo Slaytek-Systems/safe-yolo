@@ -50,7 +50,8 @@ class DenyOnlyKernel(ConsequenceKernel):
                 paths = settings.get('private_paths', [])
                 if any(not Path(path).is_absolute() for path in paths):
                     raise ValueError('private paths must be absolute')
-                self.credential_paths += tuple(self._path(path) for path in paths)
+                self.private_paths = tuple(self._path(path) for path in paths)
+                self.credential_paths += self.private_paths
                 self.denied_tools = {name.lower() for name in settings.get('deny_tools', [])}
             except FileNotFoundError:
                 if customizations_path.is_symlink():
