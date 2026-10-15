@@ -860,11 +860,17 @@ class ConsequenceKernel:
                     target = tokens[index]
                 if target.startswith("&") and not _DESCRIPTOR.fullmatch(target[1:]):
                     target = target[1:]
-                if target and not target.startswith("&"):
-                    path = cls._resolve_from(target, cwd)
-                    if start not in exempt:
-                        found.append(path)
-                    redirect_targets.append(path)
+                # An attached `>|` leaves a leading pipe; a quoted filename may
+                # also start with one, so check both spellings.
+                candidates = [target]
+                if target.startswith("|") and target[1:]:
+                    candidates.append(target[1:])
+                for candidate in candidates:
+                    if candidate and not candidate.startswith("&"):
+                        path = cls._resolve_from(candidate, cwd)
+                        if start not in exempt:
+                            found.append(path)
+                        redirect_targets.append(path)
                 index += 1
                 continue
             redirect = cls._input_redirection(token)
@@ -904,7 +910,7 @@ class ConsequenceKernel:
         index = token.find(marker)
         if index >= 0:
             target = token[index + 1 :]
-            if target.startswith((marker, "|")):
+            if target.startswith(marker):
                 target = target[1:]
             return target
         return None

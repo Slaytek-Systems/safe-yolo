@@ -837,6 +837,34 @@ class V3DenyOnlyTests(unittest.TestCase):
             }
         )
 
+    def test_quoted_filenames_starting_with_a_pipe_keep_their_literal_target(self):
+        ssh = self.root / "home" / ".ssh"
+        ssh.mkdir(parents=True)
+        (ssh / "id_rsa").write_text("fake private\n")
+        work = self.root / "work"
+        work.mkdir()
+        (work / "|secret").symlink_to(ssh / "id_rsa")
+        (work / "|keys").symlink_to(ssh, target_is_directory=True)
+        for command in (
+            "cat <'|secret'",
+            "echo x >'|secret'",
+            "cat <'|keys/id_rsa'",
+            "echo x >'|keys/config'",
+        ):
+            with self.subTest(command=command):
+                decision = self.kernel.evaluate(
+                    {
+                        "hook_event_name": "PreToolUse",
+                        "cwd": str(work),
+                        "tool_name": "exec_command",
+                        "tool_input": {"cmd": command},
+                    }
+                )
+                self.assertEqual(
+                    ("deny", "credentials.access"),
+                    (decision.outcome, decision.consequence),
+                )
+
     def test_user_private_paths_override_identity_exemptions(self):
         ssh = self.root / "home" / ".ssh"
         settings = self.root / "safe-yolo" / "customizations.json"
