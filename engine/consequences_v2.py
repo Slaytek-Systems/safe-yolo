@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import glob
+from itertools import islice
 from pathlib import Path
 import re
 import shlex
@@ -146,6 +148,14 @@ _RAILWAY_GROUP_VALUE_OPTIONS = (
     "bsep",
     ("--bucket", "--service", "--environment", "--project", "--set", "--set-from-stdin"),
 )
+_PRODUCTION_GLOBAL_VALUE_OPTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "fly": ("t", ("--access-token",)),
+    "vercel": (
+        "AQStT",
+        ("--cwd", "--local-config", "--global-config", "--scope", "--token", "--team", "--api"),
+    ),
+}
+_GLOB_MATCH_LIMIT = 256
 _PRODUCTION_COMMANDS: dict[str, dict[tuple[str, ...], bool]] = {
     "railway": dict.fromkeys(
         {("up",), ("deploy",), ("redeploy",), ("restart",), ("down",)}
@@ -588,23 +598,29 @@ class ConsequenceKernel:
             return True
         return False
 
-    def _shell(self, command: str, cwd: Path) -> Decision:
+    def _shell(self, command: str, cwd: Path, *, residuals: bool = True) -> Decision:
+        if residuals:
+            original = self._shell(command, cwd, residuals=False)
+            if original.outcome != "allow":
+                return original
         command = self._mask_direct_git_push_heredoc_body(command)
         try:
             tokens = shlex.split(command, posix=True)
         except ValueError:
             return Decision("allow")
         simple = not _COMPOSITION.search(command.replace(">&", ""))
-        decision = self._shell_tokens(tokens, cwd, simple)
+        decision = self._shell_tokens(tokens, cwd, simple, residuals=residuals)
         # Bash runs the word after leading NAME=value assignments. That view
         # only adds denials; it never replaces the decision on the full words.
         if decision.outcome == "allow" and _ASSIGNMENT.match(command):
             while tokens and _ASSIGNMENT.match(tokens[0]):
                 tokens = tokens[1:]
-            return self._shell_tokens(tokens, cwd, simple)
+            return self._shell_tokens(tokens, cwd, simple, residuals=residuals)
         return decision
 
-    def _shell_tokens(self, tokens: list[str], cwd: Path, simple: bool) -> Decision:
+    def _shell_tokens(
+        self, tokens: list[str], cwd: Path, simple: bool, residuals: bool = True
+    ) -> Decision:
         if not tokens:
             return Decision("allow")
         executable = Path(tokens[0]).name
@@ -619,7 +635,9 @@ class ConsequenceKernel:
         exempt = self._public_credential_shape(executable, tokens[1:], cwd) if simple else None
         if exempt is None:
             exempt = self._identity_words(tokens[1:], client, cwd)
-        token_paths, positionals, redirect_targets = self._shell_paths(tokens[1:], cwd, exempt)
+        token_paths, positionals, redirect_targets = self._shell_paths(
+            tokens[1:], cwd, exempt, residuals=residuals
+        )
         if any(self._inside(path, self.credential_paths) for path in token_paths):
             return Decision(
                 "operator_only",
@@ -682,11 +700,18 @@ class ConsequenceKernel:
                 "git.history_mutation",
                 "gt submit --force",
             )
-        if self._production_mutation(tokens):
+        production_tokens = tokens
+        canonical = _PRODUCTION_ALIASES.get(executable, executable)
+        if residuals and canonical in _PRODUCTION_GLOBAL_VALUE_OPTIONS:
+            _, operands, _ = self._parse_options(
+                tokens[1:], *_PRODUCTION_GLOBAL_VALUE_OPTIONS[canonical]
+            )
+            production_tokens = [tokens[0], *operands]
+        if self._production_mutation(production_tokens):
             return Decision(
                 "approval_required",
                 "production.mutate",
-                f"run {self._production_display(tokens)} production mutation",
+                f"run {self._production_display(production_tokens)} production mutation",
             )
         if executable == "ssh":
             assert ssh_invocation is not None
@@ -697,11 +722,11 @@ class ConsequenceKernel:
             ):
                 return self._remote_execution(ssh_invocation.host)
             for local_command in ssh_invocation.local_commands:
-                decision = self._remote_shell(local_command, cwd)
+                decision = self._remote_shell(local_command, cwd, residuals=residuals)
                 if decision.outcome != "allow":
                     return decision
             for remote_command in ssh_invocation.remote_commands:
-                decision = self._remote_shell(remote_command, cwd)
+                decision = self._remote_shell(remote_command, cwd, residuals=residuals)
                 if decision.outcome != "allow":
                     return decision
             if ssh_invocation.remote_commands or ssh_invocation.transport_only:
@@ -721,7 +746,7 @@ class ConsequenceKernel:
             )
         return Decision("allow")
 
-    def _remote_shell(self, command: str, cwd: Path) -> Decision:
+    def _remote_shell(self, command: str, cwd: Path, *, residuals: bool = True) -> Decision:
         try:
             tokens = self._line_tokens(command)
         except ValueError:
@@ -737,25 +762,25 @@ class ConsequenceKernel:
                 current.append(token)
                 continue
             if current:
-                decision = self._remote_segment(current, cwd)
+                decision = self._remote_segment(current, cwd, residuals=residuals)
                 if decision.outcome != "allow":
                     return decision
                 current = []
         return Decision("allow")
 
-    def _remote_segment(self, tokens: list[str], cwd: Path) -> Decision:
+    def _remote_segment(self, tokens: list[str], cwd: Path, *, residuals: bool = True) -> Decision:
         if not tokens:
             return Decision("allow")
         executable = Path(tokens[0]).name
         if executable in {"command", "builtin", "exec"} and len(tokens) > 1:
-            return self._remote_segment(tokens[1:], cwd)
+            return self._remote_segment(tokens[1:], cwd, residuals=residuals)
         if executable in {"bash", "dash", "fish", "ksh", "sh", "zsh"}:
             for index, token in enumerate(tokens[1:], start=1):
                 if token == "-c" or (token.startswith("-") and "c" in token[1:]):
                     if index + 1 >= len(tokens):
                         return self._remote_execution("remote host")
-                    return self._remote_shell(" ".join(tokens[index + 1 :]), cwd)
-        return self._shell(shlex.join(tokens), cwd)
+                    return self._remote_shell(" ".join(tokens[index + 1 :]), cwd, residuals=residuals)
+        return self._shell(shlex.join(tokens), cwd, residuals=residuals)
 
     @staticmethod
     def _remote_execution(host: str | None) -> Decision:
@@ -834,12 +859,13 @@ class ConsequenceKernel:
             index += 1
         return found
 
-    @classmethod
     def _shell_paths(
-        cls,
+        self,
         tokens: list[str],
         cwd: Path,
         exempt: frozenset[int] = frozenset(),
+        *,
+        residuals: bool = True,
     ) -> tuple[tuple[Path, ...], tuple[Path, ...], tuple[Path, ...]]:
         """Paths named by words, redirections and long option values.
 
@@ -851,7 +877,17 @@ class ConsequenceKernel:
         index = 0
         while index < len(tokens):
             token = tokens[index]
-            redirect = cls._output_redirection(token)
+            if residuals and index in exempt and glob.has_magic(token):
+                found.extend(self._glob_paths([self._resolve_from(token, cwd)]))
+            if residuals and index not in exempt:
+                prefix = re.split(r"[<>]", token, maxsplit=1)[0]
+                if prefix and prefix != token and not prefix.isdigit():
+                    found.append(self._resolve_from(prefix, cwd))
+                if token.startswith("-") and not token.startswith("--"):
+                    attached = re.search(r"[/~]", token)
+                    if attached:
+                        found.append(self._resolve_from(token[attached.start():], cwd))
+            redirect = self._output_redirection(token)
             if redirect is not None:
                 start = index
                 target = redirect
@@ -865,37 +901,59 @@ class ConsequenceKernel:
                 candidates = [target]
                 if target.startswith("|") and target[1:]:
                     candidates.append(target[1:])
+                if residuals and target == "|" and index + 1 < len(tokens):
+                    index += 1
+                    candidates.append(tokens[index])
                 for candidate in candidates:
                     if candidate and not candidate.startswith("&"):
-                        path = cls._resolve_from(candidate, cwd)
+                        path = self._resolve_from(candidate, cwd)
                         if start not in exempt:
                             found.append(path)
                         redirect_targets.append(path)
                 index += 1
                 continue
-            redirect = cls._input_redirection(token)
+            redirect = self._input_redirection(token)
             if redirect is not None:
                 target = redirect
                 if not target and index + 1 < len(tokens):
                     index += 1
                     target = tokens[index]
                 if target:
-                    found.append(cls._resolve_from(target, cwd))
+                    found.append(self._resolve_from(target, cwd))
                 index += 1
                 continue
             if token.startswith("--") and "=" in token:
                 value = token.split("=", 1)[1]
                 if value:
-                    found.append(cls._resolve_from(value, cwd))
+                    found.append(self._resolve_from(value, cwd))
                 index += 1
                 continue
             if not token.startswith("-"):
-                path = cls._resolve_from(token, cwd)
+                path = self._resolve_from(token, cwd)
                 if index not in exempt:
                     found.append(path)
                 positionals.append(path)
             index += 1
+        if residuals:
+            found.extend(self._glob_paths(found))
         return tuple(found), tuple(positionals), tuple(redirect_targets)
+
+    def _glob_paths(self, paths: list[Path]) -> tuple[Path, ...]:
+        found: list[Path] = []
+        for path in paths:
+            pattern = str(path)
+            if not glob.has_magic(pattern):
+                continue
+            matches = list(islice(glob.iglob(pattern), _GLOB_MATCH_LIMIT + 1))
+            found.extend(Path(match).resolve(strict=False) for match in matches[:_GLOB_MATCH_LIMIT])
+            if len(matches) > _GLOB_MATCH_LIMIT:
+                prefix = re.split(r"[*?\[]", pattern, maxsplit=1)[0]
+                parent = Path(prefix.rpartition("/")[0] or "/").resolve(strict=False)
+                found.extend(
+                    root for root in self.credential_paths
+                    if self._inside(root, (parent,)) or self._inside(parent, (root,))
+                )
+        return tuple(found)
 
     @staticmethod
     def _output_redirection(token: str) -> str | None:

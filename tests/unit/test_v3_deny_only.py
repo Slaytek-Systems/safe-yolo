@@ -1,9 +1,11 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from adapters.codex_v3 import build_kernel, handle_pre_tool
 
@@ -380,6 +382,37 @@ class V3DenyOnlyTests(unittest.TestCase):
             f"{command}{key}{tail}": ("deny", "credentials.access")
             for command, tail in (("ssh-keyscan -f", ""), ("grep -f", " x"), ("cat -x", ""))
         })
+        with patch.dict(os.environ, HOME=str(self.root / "home")):
+            self.assertDecisions({
+                "grep -f~/" + ("." + "ssh") + "/id_rsa x": ("deny", "credentials.access"),
+            })
+
+    def test_glob_overflow_checks_only_reachable_protected_roots(self):
+        home = self.root / "home"
+        work = self.root / "work"
+        home.mkdir()
+        work.mkdir()
+        for index in range(256):
+            (home / f"file-{index}").touch()
+            (work / f"file-{index}").touch()
+        self.assertDecisions({f"cat {home}/*": ("allow", None)})
+        (home / "overflow").touch()
+        (work / "overflow").touch()
+        self.assertDecisions({
+            f"cat {home}/*": ("deny", "credentials.access"),
+            f"cat {work}/*": ("allow", None),
+        })
+
+    def test_literal_redirection_and_glob_readings_remain_protected(self):
+        ssh = self.root / "home" / ("." + "ssh")
+        ssh.mkdir(parents=True)
+        (ssh / "id_rsa").write_text("FAKE\n")
+        (self.root / "|keys").symlink_to(ssh)
+        self.assertDecisions({
+            f"cat '{self.root}/h*/{ssh.name}/id_rsa'": ("deny", "credentials.access"),
+            f"cat '{ssh}/id_rsa>/tmp/x'": ("deny", "credentials.access"),
+            f"cat <'{self.root}/|keys/id_rsa'": ("deny", "credentials.access"),
+        })
 
     def test_spaced_clobber_enforcement_target_is_denied(self):
         config = self.root / "codex" / "config.toml"
@@ -411,6 +444,8 @@ class V3DenyOnlyTests(unittest.TestCase):
         self.assertDecisions({
             f"rm -f{key}": ("deny", "filesystem.delete"),
             f"sudo cat {key}>/tmp/x": ("deny", "privilege.modify"),
+            f"A=1 rm -f{key}": ("deny", "filesystem.delete"),
+            f"A=1 sudo cat {key}>/tmp/x": ("deny", "privilege.modify"),
         })
 
     def test_ssh_short_option_clusters_consume_their_values(self):
