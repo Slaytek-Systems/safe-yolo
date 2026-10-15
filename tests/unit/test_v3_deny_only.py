@@ -721,6 +721,72 @@ class V3DenyOnlyTests(unittest.TestCase):
                 )
         self.assertEqual(("allow", None), self.decide(f"cat {ssh}/config"))
 
+    def test_shape_option_values_cannot_hide_redirections(self):
+        ssh = self.root / "home" / ".ssh"
+        key, pub, known_hosts = ssh / "id_rsa", ssh / "id.pub", ssh / "known_hosts"
+        outside = self.root / "hosts"
+        credentials = ("deny", "credentials.access")
+        self.assertDecisions(
+            {
+                f"ssh-keygen -lf >{key} {pub}": credentials,
+                f"ssh-keygen -lf > {key} {pub}": credentials,
+                f"ssh-keygen -l -f >>{key} {pub}": credentials,
+                f"ssh-keygen -l -f 1>{key} {pub}": credentials,
+                f"ssh-keygen -l -f <{key} {pub}": credentials,
+                f"ssh-keygen -l -E >{key} -f {pub}": credentials,
+                f"ssh-keyscan -f >{key} {outside} host >> {known_hosts}": credentials,
+                f"ssh-keyscan -f > {key} {outside} host >> {known_hosts}": credentials,
+                f"ssh-keyscan -f 2>{key} {outside} host >> {known_hosts}": credentials,
+                f"ssh-keyscan -p >>{key} 22 host >> {known_hosts}": credentials,
+                f"ssh-keygen -lf {pub} > {self.root}/fingerprint": ("allow", None),
+                f"ssh-keyscan -f {outside} >> {known_hosts}": ("allow", None),
+            }
+        )
+
+    def test_identity_values_cannot_hide_redirections(self):
+        ssh = self.root / "home" / ".ssh"
+        key = ssh / "id_rsa"
+        outside = self.root / "outside-key"
+        credentials = ("deny", "credentials.access")
+        self.assertDecisions(
+            {
+                f"scp -i >{key} {outside} build.tgz host:": credentials,
+                f"scp -i > {key} {outside} build.tgz host:": credentials,
+                f"scp -i >>{key} {outside} build.tgz host:": credentials,
+                f"scp -i <{key} {outside} build.tgz host:": credentials,
+                f"scp -Ci 2>{key} {outside} build.tgz host:": credentials,
+                f"ssh -i >{key} {outside} host": credentials,
+                f"ssh -i > {key} {outside} host": credentials,
+                f"sftp -i >{key} {outside} host": credentials,
+                f"sftp -i > {key} {outside} host": credentials,
+                f"scp -o >{self.root}/log -i {key} build.tgz host:": credentials,
+                f"scp -i {ssh}/* build.tgz host:": credentials,
+                f"ssh -i {key} host > {self.root}/log": ("allow", None),
+            }
+        )
+
+    def test_user_private_paths_override_identity_exemptions(self):
+        ssh = self.root / "home" / ".ssh"
+        settings = self.root / "safe-yolo" / "customizations.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(json.dumps({"private_paths": [str(ssh)]}))
+        kernel = build_kernel(
+            safe_yolo_home=self.root / "safe-yolo",
+            codex_home=self.root / "codex",
+            user_home=self.root / "home",
+        )
+        for command in (
+            f"scp -i {ssh}/id_rsa build.tgz host:",
+            f"sftp -i {ssh}/id_rsa host",
+            f"ssh -i {ssh}/id_rsa host uptime",
+        ):
+            with self.subTest(command=command):
+                decision = kernel.evaluate(self.payload(command))
+                self.assertEqual(
+                    ("deny", "credentials.access"), (decision.outcome, decision.consequence)
+                )
+        self.assertEqual(("allow", None), self.decide(f"scp -i {ssh}/id_rsa build.tgz host:"))
+
     def test_railway_group_options_before_the_verb_are_skipped(self):
         mutate = ("deny", "production.mutate")
         allow = ("allow", None)
