@@ -420,11 +420,17 @@ class V3DenyOnlyTests(unittest.TestCase):
         with patch.dict(os.environ, HOME=str(home)):
             self.assertDecisions(dict.fromkeys((
                 "ls ~/*", "du -sh ~/*", "cp ~/* /tmp/backup/", "cat ~/*/id_rsa",
-                "ls /*/*", "du -sh /*/*", f"ls {self.root}/*/*", f"ls {self.root}/*",
+                "ls /*/*", "du -sh /*/*", f"ls {self.root}/home/*/*", f"ls {self.root}/*",
                 f"cat {self.root}/codex/*.toml", "cat ~/.c*/id_rsa",
             ), ("allow", None)))
 
     def test_glob_decisions_do_not_walk_the_filesystem(self):
+        installed = self.root / ".installed"
+        self.kernel = build_kernel(
+            safe_yolo_home=installed / "safe-yolo",
+            codex_home=installed / "codex",
+            user_home=installed / "home",
+        )
         for command in (
             "ls /*/*/*/*/zzz",
             "ls /*/*/*/*/*/zzz",
@@ -434,6 +440,24 @@ class V3DenyOnlyTests(unittest.TestCase):
                 started = time.perf_counter()
                 self.assertEqual(("allow", None), self.decide(command))
                 self.assertLess(time.perf_counter() - started, 0.5)
+
+    def test_globs_reaching_non_dot_private_paths_are_denied(self):
+        home = self.root / "home"
+        settings = self.root / "safe-yolo" / "customizations.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(json.dumps({"private_paths": [str(home / "secrets")]}))
+        self.kernel = build_kernel(
+            safe_yolo_home=self.root / "safe-yolo",
+            codex_home=self.root / "codex",
+            user_home=home,
+        )
+        with patch.dict(os.environ, HOME=str(home)):
+            self.assertDecisions({
+                "cat ~/*/key": ("deny", "credentials.access"),
+                "ls ~/*": ("deny", "credentials.access"),
+                "cp ~/s*/key /tmp/x": ("deny", "credentials.access"),
+                "ls ~/w*": ("allow", None),
+            })
 
     def test_attached_identity_values_are_key_use(self):
         ssh = self.root / "home" / ("." + "ssh")

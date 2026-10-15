@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 import glob
-from itertools import islice
 from pathlib import Path
 import re
 import shlex
 import stat
-from typing import Any, Literal
+from typing import Any, Iterable, Literal
 
 from engine.ssh_command import CLIENT_VALUE_LETTERS, SshInvocation, parse_ssh_invocation
 
@@ -149,13 +149,12 @@ _RAILWAY_GROUP_VALUE_OPTIONS = (
     ("--bucket", "--service", "--environment", "--project", "--set", "--set-from-stdin"),
 )
 _PRODUCTION_GLOBAL_VALUE_OPTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
-    "fly": ("t", ("--access-token",)),
+    "fly": ("act", ("--access-token", "--app", "--config")),
     "vercel": (
         "AQStT",
         ("--cwd", "--local-config", "--global-config", "--scope", "--token", "--team", "--api"),
     ),
 }
-_GLOB_MATCH_LIMIT = 256
 _PRODUCTION_COMMANDS: dict[str, dict[tuple[str, ...], bool]] = {
     "railway": dict.fromkeys(
         {("up",), ("deploy",), ("redeploy",), ("restart",), ("down",)}
@@ -204,6 +203,8 @@ _APPEND_REDIRECTS = ("1>>", ">>")
 _DESCRIPTOR = re.compile(r"[0-9]*-?")
 # A word with these is not one literal path once bash expands it.
 _LITERAL_BREAKERS = _SHELL_GLOB | _REDIRECT_SYNTAX | frozenset("$`")
+# $HOME or ${HOME} leading a word, an option value or a redirection target.
+_HOME_VARIABLE = re.compile(r"(?:^|(?<=[\s\"'=<>]))\$(?:HOME|\{HOME\})(?=[/\"'\s]|$)")
 
 
 @dataclass(frozen=True)
@@ -524,10 +525,10 @@ class ConsequenceKernel:
         )
         return frozenset(
             index
-            for index in client.identity_positions
+            for index, value in client.identities
             if index < aligned
             and not _LITERAL_BREAKERS & set(args[index])
-            and not self._inside(self._resolve_from(args[index], cwd), self.private_paths)
+            and not self._inside(self._resolve_from(value, cwd), self.private_paths)
         )
 
     @staticmethod
@@ -604,6 +605,8 @@ class ConsequenceKernel:
             if original.outcome != "allow":
                 return original
         command = self._mask_direct_git_push_heredoc_body(command)
+        if residuals:
+            command = _HOME_VARIABLE.sub("~", command)
         try:
             tokens = shlex.split(command, posix=True)
         except ValueError:
@@ -651,6 +654,8 @@ class ConsequenceKernel:
             positionals,
             redirect_targets,
         )
+        if residuals:
+            mutation_targets += self._glob_roots(mutation_targets, self.enforcement_paths)
         if any(self._inside(path, self.enforcement_paths) for path in mutation_targets):
             return Decision(
                 "operator_only",
@@ -878,7 +883,9 @@ class ConsequenceKernel:
         while index < len(tokens):
             token = tokens[index]
             if residuals and index in exempt and glob.has_magic(token):
-                found.extend(self._glob_paths([self._resolve_from(token, cwd)]))
+                found.extend(
+                    self._glob_roots((self._resolve_from(token, cwd),), self.credential_paths)
+                )
             if residuals and index not in exempt:
                 prefix = re.split(r"[<>]", token, maxsplit=1)[0]
                 if prefix and prefix != token and not prefix.isdigit():
@@ -935,24 +942,30 @@ class ConsequenceKernel:
                 positionals.append(path)
             index += 1
         if residuals:
-            found.extend(self._glob_paths(found))
+            found.extend(self._glob_roots(found, self.credential_paths))
         return tuple(found), tuple(positionals), tuple(redirect_targets)
 
-    def _glob_paths(self, paths: list[Path]) -> tuple[Path, ...]:
+    @staticmethod
+    def _glob_roots(paths: Iterable[Path], roots: tuple[Path, ...]) -> tuple[Path, ...]:
+        """Protected roots that a glob path names or reaches inside.
+
+        Matching is pure, component by component, and never reads the
+        filesystem. As in bash without dotglob, a component that does not
+        start with a dot never matches a dot-named one, and without globstar
+        ** matches within one component like *. A glob naming only an
+        ancestor of a root, such as a parent listing, reaches no root.
+        """
         found: list[Path] = []
         for path in paths:
-            pattern = str(path)
-            if not glob.has_magic(pattern):
+            if not glob.has_magic(str(path)):
                 continue
-            matches = list(islice(glob.iglob(pattern), _GLOB_MATCH_LIMIT + 1))
-            found.extend(Path(match).resolve(strict=False) for match in matches[:_GLOB_MATCH_LIMIT])
-            if len(matches) > _GLOB_MATCH_LIMIT:
-                prefix = re.split(r"[*?\[]", pattern, maxsplit=1)[0]
-                parent = Path(prefix.rpartition("/")[0] or "/").resolve(strict=False)
-                found.extend(
-                    root for root in self.credential_paths
-                    if self._inside(root, (parent,)) or self._inside(parent, (root,))
-                )
+            for root in roots:
+                if len(path.parts) >= len(root.parts) and all(
+                    fnmatchcase(name, pattern.replace("[^", "[!"))
+                    and (pattern.startswith(".") or not name.startswith("."))
+                    for pattern, name in zip(path.parts, root.parts)
+                ):
+                    found.append(root)
         return tuple(found)
 
     @staticmethod
