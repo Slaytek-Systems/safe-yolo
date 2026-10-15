@@ -33,6 +33,47 @@ _GIT_REF_DELETING_FORMS: dict[tuple[str, ...], tuple[tuple[frozenset[str], ...],
     ("branch",): ((frozenset({"-D"}),), (frozenset({"-d", "--delete"}), _FORCE)),
     ("update-ref",): ((frozenset({"-d", "--delete"}),),),
 }
+# Value-taking short letters and long options per subcommand, from
+# `git <subcommand> -h`. Their values are never read as flags.
+_GIT_VALUE_OPTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "restore": ("s", ("--source", "--conflict", "--pathspec-from-file")),
+    "checkout": ("bB", ("--orphan", "--conflict", "--pathspec-from-file")),
+    "switch": ("cC", ("--create", "--force-create", "--orphan", "--conflict")),
+    "rm": ("", ("--pathspec-from-file",)),
+    "branch": (
+        "u",
+        (
+            "--set-upstream-to",
+            "--contains",
+            "--no-contains",
+            "--merged",
+            "--no-merged",
+            "--sort",
+            "--points-at",
+            "--format",
+        ),
+    ),
+    "update-ref": ("m", ()),
+    "gc": ("", ("--max-cruft-size",)),
+}
+_GIT_RESTORE_LONG_OPTIONS = (
+    "--source",
+    "--staged",
+    "--worktree",
+    "--ignore-unmerged",
+    "--overlay",
+    "--quiet",
+    "--recurse-submodules",
+    "--progress",
+    "--merge",
+    "--conflict",
+    "--ours",
+    "--theirs",
+    "--patch",
+    "--ignore-skip-worktree-bits",
+    "--pathspec-from-file",
+    "--pathspec-file-nul",
+)
 
 
 @dataclass(frozen=True)
@@ -527,8 +568,14 @@ class ConsequenceKernel:
         if args[0] == "clean":
             return not any(token in {"-n", "--dry-run"} for token in args[1:])
         if args[0] == "restore":
-            options = ConsequenceKernel._git_options(args[1:])
-            return not options & {"--staged", "-S"} or bool(options & {"--worktree", "-W"})
+            options = ConsequenceKernel._git_options(args[1:], "restore")
+            others = tuple(flag for flag in _GIT_RESTORE_LONG_OPTIONS if flag != "--staged")
+            staged = "-S" in options or any(
+                ConsequenceKernel._git_given(("--staged",), {option})
+                and not ConsequenceKernel._git_given(others, {option})
+                for option in options
+            )
+            return not staged or ConsequenceKernel._git_given(("-W", "--worktree"), options)
         if args[0] == "checkout" and "--" in args[1:]:
             return True
         return ConsequenceKernel._git_form_matches(args, _GIT_DISCARDING_FORMS)
@@ -553,22 +600,54 @@ class ConsequenceKernel:
         for length in (2, 1):
             alternatives = forms.get(tuple(args[:length]))
             if alternatives is not None:
-                options = ConsequenceKernel._git_options(args[length:])
+                options = ConsequenceKernel._git_options(args[length:], args[0])
                 return any(
-                    all(group & options for group in alternative)
+                    all(ConsequenceKernel._git_given(group, options) for group in alternative)
                     for alternative in alternatives
                 )
         return False
 
     @staticmethod
-    def _git_options(args: list[str]) -> set[str]:
+    def _git_given(flags: tuple[str, ...] | frozenset[str], options: set[str]) -> bool:
+        """Match short flags exactly and long flags by git's prefix abbreviation."""
+        for flag in flags:
+            if not flag.startswith("--"):
+                if flag in options:
+                    return True
+                continue
+            name, _, value = flag.partition("=")
+            for option in options:
+                given, _, given_value = option.partition("=")
+                if (
+                    option.startswith("--")
+                    and len(given) > 2
+                    and name.startswith(given)
+                    and given_value == value
+                ):
+                    return True
+        return False
+
+    @staticmethod
+    def _git_options(args: list[str], subcommand: str) -> set[str]:
+        short_values, long_values = _GIT_VALUE_OPTIONS.get(subcommand, ("", ()))
         options: set[str] = set()
-        for token in args:
+        tokens = iter(args)
+        for token in tokens:
             if token == "--":
                 break
-            options.add(token)
-            if token.startswith("-") and not token.startswith("--"):
-                options.update("-" + flag for flag in token[1:])
+            if token.startswith("--"):
+                options.add(token)
+                if "=" not in token and ConsequenceKernel._git_given(long_values, {token}):
+                    next(tokens, None)
+            elif token.startswith("-") and len(token) > 1:
+                for position, letter in enumerate(token[1:], start=2):
+                    options.add("-" + letter)
+                    if letter in short_values:
+                        if position == len(token):
+                            next(tokens, None)
+                        break
+            else:
+                options.add(token)
         return options
 
     @staticmethod

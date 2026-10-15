@@ -1,6 +1,7 @@
 # Safe YOLO 3.0.0-beta.8
 
-Git commands are now denied or allowed by whether they can lose work.
+More direct git commands that discard uncommitted work or force ref deletion
+are now denied, and `git restore --staged` is allowed.
 
 - Denied: forced `git rm`, `git checkout -f` or `git checkout .`,
   `git switch -f` or `--discard-changes`, `git stash drop` and `clear`,
