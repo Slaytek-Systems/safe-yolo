@@ -358,6 +358,61 @@ class V3DenyOnlyTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(decision, self.decide(command))
 
+    def test_credential_path_before_attached_redirection_is_denied(self):
+        key = self.root / "home" / ("." + "ssh") / "id_rsa"
+        self.assertDecisions({
+            f"cat {key}{redirect}": ("deny", "credentials.access")
+            for redirect in (">/tmp/x", "</dev/null", ">>/tmp/x", "2>/tmp/x")
+        })
+
+    def test_credential_directory_globs_are_denied(self):
+        ssh = self.root / "home" / ("." + "ssh")
+        ssh.mkdir(parents=True)
+        (ssh / "id_rsa").write_text("FAKE\n")
+        self.assertDecisions({
+            f"cat {self.root}/{directory}/{ssh.name}/id_rsa": ("deny", "credentials.access")
+            for directory in ("h*", "h?me", "[h]ome")
+        })
+
+    def test_attached_short_option_credential_values_are_denied(self):
+        key = self.root / "home" / ("." + "ssh") / "id_rsa"
+        self.assertDecisions({
+            f"{command}{key}{tail}": ("deny", "credentials.access")
+            for command, tail in (("ssh-keyscan -f", ""), ("grep -f", " x"), ("cat -x", ""))
+        })
+
+    def test_spaced_clobber_enforcement_target_is_denied(self):
+        config = self.root / "codex" / "config.toml"
+        self.assertDecisions({
+            f"echo x {operator} {config}": ("deny", "enforcement.modify")
+            for operator in (">|", "1>|", "2>|")
+        })
+
+    def test_production_global_options_before_destroy_are_denied(self):
+        self.assertDecisions(dict.fromkeys((
+            "fly --access-token x apps destroy app",
+            "flyctl -t x apps destroy app",
+            "fly --access-token=x machine destroy abc",
+            "flyctl -tx destroy app",
+            "vercel --token x remove proj --yes",
+            "vc --scope team rm proj",
+            "vercel -t x rollback",
+            "vc --cwd /tmp/project --scope=team promote dpl_123",
+        ), ("deny", "production.mutate")))
+
+    def test_residual_hardening_preserves_ordinary_work_and_denial_reasons(self):
+        self.assertDecisions(dict.fromkeys((
+            "ls -la", "grep -n foo src/*.py", "cat a>b", "cp -r src/* out/",
+            "git log --since=2.weeks", "npm run build -- --flag=x/y",
+            "fly --access-token destroy status", "vercel --token remove ls",
+            "vc --scope team rollback status", "vercel --token x promote status",
+        ), ("allow", None)))
+        key = self.root / "home" / ("." + "ssh") / "id_rsa"
+        self.assertDecisions({
+            f"rm -f{key}": ("deny", "filesystem.delete"),
+            f"sudo cat {key}>/tmp/x": ("deny", "privilege.modify"),
+        })
+
     def test_ssh_short_option_clusters_consume_their_values(self):
         allow = ("allow", None)
         self.assertDecisions(
