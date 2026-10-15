@@ -399,9 +399,32 @@ class V3DenyOnlyTests(unittest.TestCase):
                 "F'OO'=/bin/rm -rf build": ("deny", "filesystem.delete"),
                 "FOO='a b' rm -rf build": ("deny", "filesystem.delete"),
                 'FOO="x" sudo ls': ("deny", "privilege.modify"),
-                "FOO=/bin/rm -rf build": ("allow", None),
                 "NODE_ENV=test npm test": ("allow", None),
                 "FOO=1 make": ("allow", None),
+            }
+        )
+
+    def test_assignment_prefixes_never_remove_a_denial(self):
+        config = self.root / "codex" / "config.toml"
+        key = self.root / "home" / ".ssh" / "id_ed25519"
+        modify = ("deny", "enforcement.modify")
+        credentials = ("deny", "credentials.access")
+        delete = ("deny", "filesystem.delete")
+        self.assertDecisions(
+            {
+                f"FOO=1 >{config}": modify,
+                f"FOO=1 > {config}": modify,
+                f"FOO='a b' 2>{config}": modify,
+                f"FOO=1 >>{config}": modify,
+                f"FOO=1 BAR=2 >{config}": modify,
+                f"FOO=1 <{key}": credentials,
+                f"FOO=1 < {key}": credentials,
+                "FOO=/bin/rm -rf build": delete,
+                " BAR=/bin/rm -rf build": delete,
+                "\vBAR=/bin/rm -rf build": delete,
+                "\fBAR=/bin/rm -rf build": delete,
+                " BAR=/bin/rm -rf build": delete,
+                "\rBAR=/bin/rm -rf build": delete,
             }
         )
 
