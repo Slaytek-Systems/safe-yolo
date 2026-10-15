@@ -182,8 +182,16 @@ _PRODUCTION_COMMANDS: dict[str, dict[tuple[str, ...], bool]] = {
 # Files in an OpenSSH directory an agent may read: these names and *.pub.
 _PUBLIC_SSH_NAMES = frozenset({"config", "known_hosts", "known_hosts.old"})
 _SHELL_GLOB = frozenset("*?[]{}")
-_REDIRECTION = re.compile(r"(\d*)(>>|>|<)(&[0-9-]*|[^<>&]*)")
 _REDIRECT_SYNTAX = frozenset("<>")
+# The only words with < or > that leave an ssh exemption standing: descriptor
+# copies, writes to /dev/null and the one ssh-keyscan append to known_hosts.
+# Any other redirection voids the exemption, so no exemption trusts how the
+# path scan pairs an operator with its target.
+_DESCRIPTOR_REDIRECTS = frozenset({"2>&1", ">&2", "1>&2"})
+_NULL_REDIRECTS = ("&>", "2>", ">")
+_APPEND_REDIRECTS = ("1>>", ">>")
+# After >&, a descriptor number, a close or a move; any other word is a file.
+_DESCRIPTOR = re.compile(r"[0-9]*-?")
 # A word with these is not one literal path once bash expands it.
 _LITERAL_BREAKERS = _SHELL_GLOB | _REDIRECT_SYNTAX | frozenset("$`")
 
@@ -395,58 +403,88 @@ class ConsequenceKernel:
             return not self._inside(path, self.private_paths)
         return self._public_ssh_file(path)
 
-    def _public_credential_shape(
-        self, executable: str, args: list[str], cwd: Path
-    ) -> frozenset[int] | None:
-        """Indexes of the public ssh file words when the whole command fits one shape.
+    def _harmless_redirects(
+        self, args: list[str], cwd: Path, shape: _PublicShape | None
+    ) -> tuple[frozenset[int], int | None] | None:
+        """Indexes of the redirection words and the known_hosts append, if every one is harmless.
 
-        Redirections pair with their target as in _shell_paths, so these indexes
-        name the same words that scan sees. A word with redirection syntax is
-        never an option value, and the only redirection excused is the one
-        known_hosts append of ssh-keyscan.
+        Every word with < or > must be in the small table above; None
+        otherwise. Only a shape that appends to known_hosts may append.
         """
-        shape = _PUBLIC_SHAPES.get(executable)
-        if shape is None:
-            return None
-        words: list[int] = []
-        letters: set[str] = set()
+        words: set[int] = set()
         append: int | None = None
         index = 0
         while index < len(args):
             token = args[index]
             start = index
             index += 1
-            if "<" in token or ">" in token:
-                match = _REDIRECTION.fullmatch(token)
-                if match is None:
+            if not _REDIRECT_SYNTAX & set(token):
+                continue
+            words.add(start)
+            if token in _DESCRIPTOR_REDIRECTS:
+                continue
+            operator = next(
+                (op for op in _APPEND_REDIRECTS + _NULL_REDIRECTS if token.startswith(op)), None
+            )
+            if operator is None:
+                return None
+            target = token[len(operator) :]
+            if not target:
+                if index >= len(args):
                     return None
-                fd, operator, target = match.groups()
-                if not target:
-                    if index >= len(args) or _REDIRECT_SYNTAX & set(args[index]):
-                        return None
-                    target = args[index]
-                    index += 1
-                path = self._resolve_from(target, cwd)
-                if (
-                    append is None
-                    and shape.appends_known_hosts
-                    and operator == ">>"
-                    and fd in {"", "1"}
-                    and path.name == "known_hosts"
-                    and self._inside(path, self.credential_paths)
-                    and self._public_word(target, cwd, shape)
-                ):
-                    append = start
-            elif token.startswith("-") and len(token) > 1:
+                target = args[index]
+                words.add(index)
+                index += 1
+            if operator in _NULL_REDIRECTS:
+                if target != "/dev/null":
+                    return None
+                continue
+            path = self._resolve_from(target, cwd)
+            if (
+                append is not None
+                or shape is None
+                or not shape.appends_known_hosts
+                or _LITERAL_BREAKERS & set(target)
+                or path.name != "known_hosts"
+                or not self._inside(path, self.credential_paths)
+                or not self._public_word(target, cwd, shape)
+            ):
+                return None
+            append = start
+        return frozenset(words), append
+
+    def _public_credential_shape(
+        self, executable: str, args: list[str], cwd: Path
+    ) -> frozenset[int] | None:
+        """Indexes of the public ssh file words when the whole command fits one shape.
+
+        A redirection word or its target is never an operand or option value.
+        """
+        shape = _PUBLIC_SHAPES.get(executable)
+        if shape is None:
+            return None
+        redirects = self._harmless_redirects(args, cwd, shape)
+        if redirects is None:
+            return None
+        skipped, append = redirects
+        if (append is not None) != shape.appends_known_hosts:
+            return None
+        words: list[int] = []
+        letters: set[str] = set()
+        index = 0
+        while index < len(args):
+            token = args[index]
+            start = index
+            index += 1
+            if start in skipped:
+                continue
+            if token.startswith("-") and len(token) > 1:
                 for position, letter in enumerate(token[1:], start=2):
                     letters.add(letter)
                     if letter in shape.values + shape.numbers:
-                        if position != len(token) or index >= len(args):
+                        if position != len(token) or index >= len(args) or index in skipped:
                             return None
-                        value = args[index]
-                        if _REDIRECT_SYNTAX & set(value):
-                            return None
-                        if letter in shape.numbers and not value.isdigit():
+                        if letter in shape.numbers and not args[index].isdigit():
                             return None
                         words.append(index)
                         index += 1
@@ -455,8 +493,6 @@ class ConsequenceKernel:
             else:
                 words.append(start)
         if shape.requires and not letters & set(shape.requires):
-            return None
-        if (append is not None) != shape.appends_known_hosts:
             return None
         if not all(self._public_word(args[word], cwd, shape) for word in words):
             return None
@@ -470,7 +506,7 @@ class ConsequenceKernel:
         Bash drops redirection words before building argv, so the client parse
         matches argv only before the first word with redirection syntax.
         """
-        if client is None:
+        if client is None or self._harmless_redirects(args, cwd, None) is None:
             return frozenset()
         aligned = next(
             (index for index, token in enumerate(args) if _REDIRECT_SYNTAX & set(token)),
@@ -822,6 +858,8 @@ class ConsequenceKernel:
                 if not target and index + 1 < len(tokens):
                     index += 1
                     target = tokens[index]
+                if target.startswith("&") and not _DESCRIPTOR.fullmatch(target[1:]):
+                    target = target[1:]
                 if target and not target.startswith("&"):
                     path = cls._resolve_from(target, cwd)
                     if start not in exempt:
@@ -866,7 +904,7 @@ class ConsequenceKernel:
         index = token.find(marker)
         if index >= 0:
             target = token[index + 1 :]
-            if target.startswith(marker):
+            if target.startswith((marker, "|")):
                 target = target[1:]
             return target
         return None

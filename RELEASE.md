@@ -15,12 +15,18 @@ recognized.
     append as the only redirection into the directory;
   - a structured read tool on one public file.
 - A matching shape exempts only those literal public-file words, plus the one
-  `ssh-keyscan` append. Every redirection is still checked as in beta.9, and a
-  word containing `<` or `>` is never accepted as an option value.
+  `ssh-keyscan` append. A word containing `<` or `>` is never accepted as an
+  option value.
+- Besides that append, a shape or an `-i` exemption tolerates only `2>&1`,
+  `>&2`, `1>&2`, and `>`, `2>`, or `&>` to `/dev/null`. Any other redirection
+  anywhere in the command, such as `>|`, `>&<file>`, `&>file`, `<>`, `<`, a
+  here-document, a here-string, or process substitution, voids the exemption,
+  and the command is checked as in beta.9.
 - Allowed: `scp -i` and `sftp -i` with a key in the ssh directory, like
   `ssh -i`. Only that option's separate value word is exempt, and only when it
   is a literal path (no glob, redirection, or substitution) placed before any
-  redirection in the command and outside every `private_paths` customization.
+  redirection in a command whose redirections all fit the list above, and
+  outside every `private_paths` customization.
   `ssh -i` with a key under `private_paths` is now denied too.
 - Still denied, for the direct forms the hook recognizes: private keys and
   every other non-public file in the ssh directory; globs, `..`, option values,
@@ -38,6 +44,10 @@ recognized.
   missed stay missed: a path attached to a redirection
   (`cat <key>>/tmp/x`), a glob in a directory component, and an attached short
   option value (`ssh-keyscan -f<key>`).
+- Denied: clobber and combined redirections now name their real target in
+  every command. `>|<path>`, `2>|<path>`, and `>&<path>` were read as a
+  different path or as a descriptor copy, so `echo x >|<ssh dir>/config` and
+  `echo x >&<enforcement file>` were allowed in beta.9.
 - Denied as production mutation: `fly apps destroy` (also `app`, and `delete`,
   `remove`, `rm`), `fly destroy`, `fly machine destroy` (also `machines`, `m`,
   and `remove`, `rm`), `vercel remove`, `rm`, `rollback`, and `promote`, and

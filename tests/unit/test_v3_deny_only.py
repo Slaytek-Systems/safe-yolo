@@ -738,7 +738,8 @@ class V3DenyOnlyTests(unittest.TestCase):
                 f"ssh-keyscan -f > {key} {outside} host >> {known_hosts}": credentials,
                 f"ssh-keyscan -f 2>{key} {outside} host >> {known_hosts}": credentials,
                 f"ssh-keyscan -p >>{key} 22 host >> {known_hosts}": credentials,
-                f"ssh-keygen -lf {pub} > {self.root}/fingerprint": ("allow", None),
+                f"ssh-keygen -lf {pub} > {self.root}/fingerprint": credentials,
+                f"ssh-keygen -lf {pub} > /dev/null": ("allow", None),
                 f"ssh-keyscan -f {outside} >> {known_hosts}": ("allow", None),
             }
         )
@@ -761,7 +762,8 @@ class V3DenyOnlyTests(unittest.TestCase):
                 f"sftp -i > {key} {outside} host": credentials,
                 f"scp -o >{self.root}/log -i {key} build.tgz host:": credentials,
                 f"scp -i {ssh}/* build.tgz host:": credentials,
-                f"ssh -i {key} host > {self.root}/log": ("allow", None),
+                f"ssh -i {key} host > {self.root}/log": credentials,
+                f"ssh -i {key} host 2>/dev/null": ("allow", None),
             }
         )
 
