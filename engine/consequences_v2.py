@@ -368,6 +368,12 @@ class ConsequenceKernel:
                     if isinstance(workdir, str) and workdir
                     else cwd
                 )
+                # The beta.10 reading decides first; the residual reading of
+                # the same command, nested remote commands included, can only
+                # add a denial.
+                original = self._shell(command, effective_cwd, residuals=False)
+                if original.outcome != "allow":
+                    return original
                 return self._shell(command, effective_cwd)
         paths = self._structured_paths(tool_input, cwd)
         readable = tool_name in _CREDENTIAL_READ_TOOLS
@@ -640,10 +646,6 @@ class ConsequenceKernel:
         return any(parts[: len(root.parts)] == root.parts for root in roots)
 
     def _shell(self, command: str, cwd: Path, *, residuals: bool = True) -> Decision:
-        if residuals:
-            original = self._shell(command, cwd, residuals=False)
-            if original.outcome != "allow":
-                return original
         command = self._mask_direct_git_push_heredoc_body(command)
         if residuals:
             command = _HOME_VARIABLE.sub("~", command)

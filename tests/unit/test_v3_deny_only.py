@@ -509,6 +509,16 @@ class V3DenyOnlyTests(unittest.TestCase):
             ),
         )
 
+    def test_nested_remote_commands_are_read_once_per_pass(self):
+        command = "ssh fixture.example " * 64 + "true"
+        started = time.perf_counter()
+        self.assertEqual(("allow", None), self.decide(command))
+        self.assertLess(time.perf_counter() - started, 1.0)
+        self.assertEqual(
+            ("deny", "credentials.access"),
+            self.decide("ssh fixture.example " * 8 + f"cat {self.root}/home/.ssh/id_rsa>/tmp/x"),
+        )
+
     def test_globs_reaching_non_dot_private_paths_are_denied(self):
         home = self.root / "home"
         settings = self.root / "safe-yolo" / "customizations.json"
