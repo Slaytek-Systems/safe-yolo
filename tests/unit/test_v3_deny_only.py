@@ -342,6 +342,146 @@ class V3DenyOnlyTests(unittest.TestCase):
                     result["hookSpecificOutput"]["permissionDecisionReason"],
                 )
 
+    def decide(self, command: str) -> tuple[str, str | None]:
+        decision = self.kernel.evaluate(
+            {
+                "hook_event_name": "PreToolUse",
+                "cwd": "/workspace/repo",
+                "tool_name": "exec_command",
+                "tool_input": {"cmd": command},
+            }
+        )
+        return decision.outcome, decision.consequence
+
+    def assertDecisions(self, expected: dict[str, tuple[str, str | None]]):
+        for command, decision in expected.items():
+            with self.subTest(command=command):
+                self.assertEqual(decision, self.decide(command))
+
+    def test_ssh_short_option_clusters_consume_their_values(self):
+        allow = ("allow", None)
+        self.assertDecisions(
+            {
+                "ssh -tp 2222 host rm -rf /srv/data": ("deny", "filesystem.delete"),
+                "ssh -tl admin host sudo reboot": ("deny", "privilege.modify"),
+                "ssh -vp 2222 host": ("deny", "remote.execute"),
+                "ssh -vp2222 host": ("deny", "remote.execute"),
+                "ssh -Ai deploy_key host": ("deny", "remote.execute"),
+                "ssh -tFalternate host uptime": ("deny", "remote.execute"),
+                "ssh -np 2222 host uptime": allow,
+                "ssh -NL 8080:localhost:80 host": allow,
+                "ssh -nl admin host hostname": allow,
+            }
+        )
+
+    def test_leading_assignments_do_not_hide_the_executable(self):
+        self.assertDecisions(
+            {
+                "FOO=1 rm -rf build": ("deny", "filesystem.delete"),
+                "FOO=1 sudo ls": ("deny", "privilege.modify"),
+                "KUBECONFIG=prod.yaml kubectl apply -f x.yaml": ("deny", "production.mutate"),
+                "GH_TOKEN=x gh release create v1": ("deny", "production.mutate"),
+                "A=1 B=2 git reset --hard": ("deny", "git.history_mutation"),
+                "FOO=1 ssh -p 2222 host rm -rf /srv/data": ("deny", "filesystem.delete"),
+                "ssh host FOO=1 rm -rf /srv/data": ("deny", "filesystem.delete"),
+                "FOO=1 npm test": ("allow", None),
+                "FOO=1 rm -rf /tmp/build": ("allow", None),
+                "env FOO=1 rm -rf build": ("allow", None),
+            }
+        )
+
+    def test_shred_and_truncate_destroy_content_like_rm(self):
+        config = self.root / "codex" / "config.toml"
+        key = self.root / "home" / ".ssh" / "id_ed25519"
+        delete = ("deny", "filesystem.delete")
+        allow = ("allow", None)
+        self.assertDecisions(
+            {
+                "shred f": delete,
+                "shred -u f": delete,
+                "/usr/bin/shred -zu f": delete,
+                "shred --remove f": delete,
+                "shred --remove=unlink -n 3 f": delete,
+                "truncate -s 0 data.db": delete,
+                "truncate -s0 data.db": delete,
+                "truncate --size=0 data.db": delete,
+                "truncate --size 0 data.db": delete,
+                "truncate -r ref.db data.db": delete,
+                "truncate -s +1M data.db": delete,
+                f"shred -u {config}": ("deny", "enforcement.modify"),
+                f"truncate -s 0 {config}": ("deny", "enforcement.modify"),
+                f"shred -u {key}": ("deny", "credentials.access"),
+                "shred -u /tmp/scratch.db": allow,
+                "shred -n 3 -u /tmp/scratch.db": allow,
+                "truncate -s 0 /tmp/scratch.log": allow,
+                "truncate --size 0 /tmp/scratch.log": allow,
+                "truncate -r ref.db /tmp/scratch.log": allow,
+                "truncate --reference=ref.db /tmp/scratch.log": allow,
+            }
+        )
+        denial = self.kernel.evaluate(self.payload("truncate -s 0 data.db"))
+        self.assertEqual("delete data.db", denial.display)
+
+    def test_production_cli_verbs_are_read_at_their_command_position(self):
+        mutate = ("deny", "production.mutate")
+        allow = ("allow", None)
+        self.assertDecisions(
+            {
+                "railway up": mutate,
+                "railway deploy": mutate,
+                "railway redeploy": mutate,
+                "railway restart": mutate,
+                "railway down": mutate,
+                "railway delete": mutate,
+                "railway rm": mutate,
+                "railway deployment redeploy": mutate,
+                "railway deployment up": mutate,
+                "railway deployments deploy": mutate,
+                "flyctl deploy": mutate,
+                "/usr/local/bin/flyctl release": mutate,
+                "vc --prod": mutate,
+                "vc deploy --prod": mutate,
+                "kubectl -v 6 apply -f x.yaml": mutate,
+                "kubectl --v 6 apply -f x.yaml": mutate,
+                "kubectl --vmodule pod=2 delete pod x": mutate,
+                "kubectl apply -f x.yaml": mutate,
+                "kubectl apply --dry-run=none -f x.yaml": mutate,
+                "kubectl apply --dry-run=client --dry-run=none -f x.yaml": mutate,
+                "kubectl apply --dry-run -f x.yaml": mutate,
+                "railway logs --service deploy": allow,
+                "railway run npm run deploy": allow,
+                "railway deployment list": allow,
+                "railway status": allow,
+                "flyctl logs": allow,
+                "vc ls": allow,
+                "kubectl -v 6 get pods": allow,
+                "kubectl apply --dry-run=client -f x.yaml": allow,
+                "kubectl apply --dry-run=server -f x.yaml": allow,
+                "kubectl delete pod x --dry-run=server": allow,
+            }
+        )
+
+    def test_sed_in_place_spellings_cannot_edit_enforcement(self):
+        config = self.root / "codex" / "config.toml"
+        modify = ("deny", "enforcement.modify")
+        allow = ("allow", None)
+        self.assertDecisions(
+            {
+                f"sed -i s/a/b/ {config}": modify,
+                f"sed -i.bak s/a/b/ {config}": modify,
+                f"sed -Ei s/a/b/ {config}": modify,
+                f"sed -ie s/a/b/ {config}": modify,
+                f"sed -n -i s/a/b/ {config}": modify,
+                f"sed --in-place s/a/b/ {config}": modify,
+                f"sed --in-place=.bak s/a/b/ {config}": modify,
+                f"sed --in-pl=.bak s/a/b/ {config}": modify,
+                f"sed -e s/a/b/ -i {config}": modify,
+                f"sed -n 1,5p {config}": allow,
+                f"sed -e i {config}": allow,
+                "sed -i s/a/b/ src/file.py": allow,
+            }
+        )
+
     def test_help_flags_cannot_bypass_protected_path_denials(self):
         commands = (
             f"env --help >{self.root / 'codex' / 'hooks.json'}",
