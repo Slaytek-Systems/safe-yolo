@@ -11,6 +11,30 @@ from engine.ssh_command import parse_ssh_invocation
 Outcome = Literal["allow", "approval_required", "operator_only"]
 
 
+# Each git form maps to alternative flag requirements. A form matches when one
+# alternative has every flag group present among its options; () always matches.
+_FORCE = frozenset({"-f", "--force"})
+_GIT_DISCARDING_FORMS: dict[tuple[str, ...], tuple[tuple[frozenset[str], ...], ...]] = {
+    ("rebase",): ((),),
+    ("reset",): ((frozenset({"--hard"}),),),
+    ("rm",): ((_FORCE,),),
+    ("checkout",): ((_FORCE,), (frozenset({"."}),)),
+    ("switch",): ((_FORCE | {"--discard-changes"},),),
+    ("worktree", "remove"): ((_FORCE,),),
+    ("stash", "drop"): ((),),
+    ("stash", "clear"): ((),),
+    ("reflog", "expire"): ((),),
+    ("reflog", "delete"): ((),),
+    ("gc",): ((frozenset({"--prune=now", "--prune=all"}),),),
+    ("filter-branch",): ((),),
+    ("filter-repo",): ((),),
+}
+_GIT_REF_DELETING_FORMS: dict[tuple[str, ...], tuple[tuple[frozenset[str], ...], ...]] = {
+    ("branch",): ((frozenset({"-D"}),), (frozenset({"-d", "--delete"}), _FORCE)),
+    ("update-ref",): ((frozenset({"-d", "--delete"}),),),
+}
+
+
 @dataclass(frozen=True)
 class Decision:
     outcome: Outcome
@@ -500,27 +524,52 @@ class ConsequenceKernel:
                 or token.startswith("+")
                 for token in args[1:]
             )
-        if args[0] == "rebase":
-            return True
         if args[0] == "clean":
             return not any(token in {"-n", "--dry-run"} for token in args[1:])
-        if args[0] == "reset" and "--hard" in args[1:]:
-            return True
         if args[0] == "restore":
-            return True
+            options = ConsequenceKernel._git_options(args[1:])
+            return not options & {"--staged", "-S"} or bool(options & {"--worktree", "-W"})
         if args[0] == "checkout" and "--" in args[1:]:
             return True
-        return False
+        return ConsequenceKernel._git_form_matches(args, _GIT_DISCARDING_FORMS)
 
     @staticmethod
     def _git_ref_deletion(args: list[str]) -> bool:
-        if not args or args[0] != "push":
+        if not args:
             return False
+        if args[0] != "push":
+            return ConsequenceKernel._git_form_matches(args, _GIT_REF_DELETING_FORMS)
         return any(
             token in {"--delete", "-d"}
             or (token.startswith(":") and len(token) > 1)
             for token in args[1:]
         )
+
+    @staticmethod
+    def _git_form_matches(
+        args: list[str],
+        forms: dict[tuple[str, ...], tuple[tuple[frozenset[str], ...], ...]],
+    ) -> bool:
+        for length in (2, 1):
+            alternatives = forms.get(tuple(args[:length]))
+            if alternatives is not None:
+                options = ConsequenceKernel._git_options(args[length:])
+                return any(
+                    all(group & options for group in alternative)
+                    for alternative in alternatives
+                )
+        return False
+
+    @staticmethod
+    def _git_options(args: list[str]) -> set[str]:
+        options: set[str] = set()
+        for token in args:
+            if token == "--":
+                break
+            options.add(token)
+            if token.startswith("-") and not token.startswith("--"):
+                options.update("-" + flag for flag in token[1:])
+        return options
 
     @staticmethod
     def _git_command_args(args: list[str]) -> list[str]:

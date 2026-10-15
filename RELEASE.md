@@ -1,12 +1,18 @@
-# Safe YOLO 3.0.0-beta.7
+# Safe YOLO 3.0.0-beta.8
 
-Source code, installation docs, and release publishing now live together at
-https://github.com/Slaytek-Systems/safe-yolo.
+Git commands are now denied or allowed by whether they can lose work.
 
-- New installations and subsequent updates use this repository's releases.
-- Existing installations receive the same bridge package through the old
-  release repository, then use this repository for future updates.
-- Includes beta.6's fix for versioned Python interpreter paths in Codex hooks.
+- Denied: forced `git rm`, `git checkout -f` or `git checkout .`,
+  `git switch -f` or `--discard-changes`, `git stash drop` and `clear`,
+  forced `git worktree remove`, `git reflog expire` and `delete`,
+  `git gc --prune=now`, and `git filter-branch` or `filter-repo`.
+- Denied as unverified ref deletion: `git branch -D`, `git branch -d --force`,
+  and `git update-ref -d`. Plain `git branch -d` stays allowed because Git
+  refuses to delete unmerged branches.
+- Allowed: `git restore --staged`, which only changes the index. Restoring the
+  working tree stays denied.
+- A denied file deletion now suggests `git rm <path>` without `-f` for tracked
+  files. Git keeps the file recoverable and refuses when it has local changes.
 
 Linux/Python 3.12+ is the proven platform. Codex, Claude Code, and Cursor have
 installation lifecycles. Native hook trust or restart remains harness-specific.
