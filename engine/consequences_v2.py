@@ -316,22 +316,20 @@ class ConsequenceKernel:
 
     def _shell(self, command: str, cwd: Path) -> Decision:
         command = self._mask_direct_git_push_heredoc_body(command)
-        lexer = shlex.shlex(command, posix=True)
-        lexer.whitespace_split = True
-        lexer.commenters = ""
-        tokens: list[str] = []
-        assigning = True
-        start = 0
         try:
-            while (token := lexer.get_token()) is not None:
-                end = lexer.instream.tell()
-                # Bash assigns only when NAME= is unquoted and unescaped.
-                if not (assigning and _ASSIGNMENT.match(command[start:end].lstrip())):
-                    assigning = False
-                    tokens.append(token)
-                start = end
+            tokens = shlex.split(command, posix=True)
         except ValueError:
             return Decision("allow")
+        decision = self._shell_tokens(tokens, cwd)
+        # Bash runs the word after leading NAME=value assignments. That view
+        # only adds denials; it never replaces the decision on the full words.
+        if decision.outcome == "allow" and _ASSIGNMENT.match(command):
+            while tokens and _ASSIGNMENT.match(tokens[0]):
+                tokens = tokens[1:]
+            return self._shell_tokens(tokens, cwd)
+        return decision
+
+    def _shell_tokens(self, tokens: list[str], cwd: Path) -> Decision:
         if not tokens:
             return Decision("allow")
         executable = Path(tokens[0]).name
