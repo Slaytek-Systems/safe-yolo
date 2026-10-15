@@ -492,7 +492,9 @@ class V3DenyOnlyTests(unittest.TestCase):
                     }
                 )
                 self.assertEqual(("allow", None), (decision.outcome, decision.consequence))
-                self.assertLess(time.perf_counter() - started, 0.5)
+                # Linear cost is well under this on slow CI runners; the
+                # quadratic forms these guard against took tens of seconds.
+                self.assertLess(time.perf_counter() - started, 2.0)
         self.assertEqual(
             ("deny", "credentials.access"),
             (
