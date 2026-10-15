@@ -205,25 +205,31 @@ _DESCRIPTOR = re.compile(r"[0-9]*-?")
 _LITERAL_BREAKERS = _SHELL_GLOB | _REDIRECT_SYNTAX | frozenset("$`")
 
 
-def _literal_unclosed_brackets(pattern: str) -> str:
-    """Spell each `[` that has no closing `]` as the literal class `[[]`.
+def _glob_component(pattern: str) -> tuple[str, int]:
+    """Rewrite one glob component for fnmatch and count the names it needs.
 
+    Each `[` that has no closing `]` is spelled as the literal class `[[]`.
     fnmatch already treats such a bracket as a literal, but finds that out by
     rescanning the rest of the pattern for every one, which is quadratic. One
     backward pass records where the next `]` is, so this rewrite is linear and
-    matches the same names.
+    matches the same names. The second value is the shortest name the pattern
+    can match: every character or bracket class needs one, `*` needs none.
     """
-    if "[" not in pattern:
-        return pattern
+    pattern = pattern.replace("[^", "[!")
     size = len(pattern)
+    if "[" not in pattern:
+        return pattern, size - pattern.count("*")
     next_close = [size] * (size + 2)
     for index in range(size - 1, -1, -1):
         next_close[index] = index if pattern[index] == "]" else next_close[index + 1]
     parts: list[str] = []
+    shortest = 0
     index = 0
     while index < size:
-        if pattern[index] != "[":
-            parts.append(pattern[index])
+        character = pattern[index]
+        if character != "[":
+            parts.append(character)
+            shortest += character != "*"
             index += 1
             continue
         start = index + 1
@@ -232,13 +238,14 @@ def _literal_unclosed_brackets(pattern: str) -> str:
         if start < size and pattern[start] == "]":
             start += 1
         close = next_close[start]
+        shortest += 1
         if close >= size:
             parts.append("[[]")
             index += 1
             continue
         parts.append(pattern[index : close + 1])
         index = close + 1
-    return "".join(parts)
+    return "".join(parts), shortest
 # $HOME or ${HOME} leading a word, an option value or a redirection target.
 _HOME_VARIABLE = re.compile(r"(?:^|(?<=[\s\"'=<>]))\$(?:HOME|\{HOME\})(?=[/\"'\s]|$)")
 
@@ -627,13 +634,10 @@ class ConsequenceKernel:
 
     @staticmethod
     def _inside(path: Path, roots: tuple[Path, ...]) -> bool:
-        for root in roots:
-            try:
-                path.relative_to(root)
-            except ValueError:
-                continue
-            return True
-        return False
+        # Comparing leading parts is linear; relative_to walks every parent
+        # of a deep path, which is quadratic on Python 3.12.
+        parts = path.parts
+        return any(parts[: len(root.parts)] == root.parts for root in roots)
 
     def _shell(self, command: str, cwd: Path, *, residuals: bool = True) -> Decision:
         if residuals:
@@ -992,14 +996,17 @@ class ConsequenceKernel:
         ancestor of a root, such as a parent listing, reaches no root.
         """
         found: list[Path] = []
+        depth = max((len(root.parts) for root in roots), default=0)
         for path in paths:
             if not glob.has_magic(str(path)):
                 continue
+            components = [_glob_component(part) for part in path.parts[:depth]]
             for root in roots:
                 if len(path.parts) >= len(root.parts) and all(
-                    fnmatchcase(name, _literal_unclosed_brackets(pattern.replace("[^", "[!")))
+                    shortest <= len(name)
+                    and fnmatchcase(name, pattern)
                     and (pattern.startswith(".") or not name.startswith("."))
-                    for pattern, name in zip(path.parts, root.parts)
+                    for (pattern, shortest), name in zip(components, root.parts)
                 ):
                     found.append(root)
         return tuple(found)

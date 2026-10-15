@@ -463,6 +463,52 @@ class V3DenyOnlyTests(unittest.TestCase):
             self.decide(f"cat {ssh.parent}/.{'*' * 4000}/id_rsa"),
         )
 
+    def test_glob_cost_does_not_scale_with_root_count_or_path_depth(self):
+        settings = self.root / "safe-yolo" / "customizations.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {"private_paths": [str(self.root / f"home{i}" / "secret") for i in range(1000)]}
+            )
+        )
+        kernel = build_kernel(
+            safe_yolo_home=self.root / "safe-yolo",
+            codex_home=self.root / "codex",
+            user_home=self.root / "home",
+        )
+        for command in (
+            f"cat {self.root}/{'[' * 8000}/secret/file",
+            f"cat {self.root}/{'[' * 60000}/secret/file",
+            f"cat {self.root}/{'a/' * 16000}*/file",
+        ):
+            with self.subTest(command=command[:60]):
+                started = time.perf_counter()
+                decision = kernel.evaluate(
+                    {
+                        "hook_event_name": "PreToolUse",
+                        "cwd": str(self.root),
+                        "tool_name": "exec_command",
+                        "tool_input": {"cmd": command},
+                    }
+                )
+                self.assertEqual(("allow", None), (decision.outcome, decision.consequence))
+                self.assertLess(time.perf_counter() - started, 0.5)
+        self.assertEqual(
+            ("deny", "credentials.access"),
+            (
+                lambda d: (d.outcome, d.consequence)
+            )(
+                kernel.evaluate(
+                    {
+                        "hook_event_name": "PreToolUse",
+                        "cwd": str(self.root),
+                        "tool_name": "exec_command",
+                        "tool_input": {"cmd": f"cat {self.root}/home9*/secret/file"},
+                    }
+                )
+            ),
+        )
+
     def test_globs_reaching_non_dot_private_paths_are_denied(self):
         home = self.root / "home"
         settings = self.root / "safe-yolo" / "customizations.json"
