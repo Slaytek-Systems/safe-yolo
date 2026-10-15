@@ -765,6 +765,76 @@ class V3DenyOnlyTests(unittest.TestCase):
             }
         )
 
+    def test_any_redirection_but_dev_null_and_descriptors_voids_ssh_exemptions(self):
+        ssh = self.root / "home" / ".ssh"
+        commands = (
+            f"scp -i {ssh}/id_rsa build.tgz host:",
+            f"sftp -i {ssh}/id_rsa host",
+            f"ssh -i {ssh}/id_rsa host uptime",
+            f"cat {ssh}/config",
+            f"ssh-keygen -lf {ssh}/id.pub",
+            f"ssh-keyscan github.com >> {ssh}/known_hosts",
+        )
+        operators = (">|", "1>|", "2>|", ">&", "&>", "&>>", "<>", "<")
+        targets = (ssh / "id_rsa", ssh / "config", self.root / "outside")
+        for command in commands:
+            for operator in operators:
+                for target in targets:
+                    for space in ("", " "):
+                        line = f"{command} {operator}{space}{target}"
+                        with self.subTest(command=line):
+                            self.assertEqual(("deny", "credentials.access"), self.decide(line))
+        self.assertDecisions(
+            {
+                f"scp -i {ssh}/id_rsa build.tgz host: <<<{ssh}/id_rsa": ("deny", "credentials.access"),
+                f"cat {ssh}/config <<EOF": ("deny", "credentials.access"),
+                f"cat {ssh}/config <({ssh}/config)": ("deny", "credentials.access"),
+                f"cat {ssh}/config >/tmp/x": ("deny", "credentials.access"),
+                f"cat {ssh}/config 2>/tmp/x": ("deny", "credentials.access"),
+                f"cat {ssh}/config 3>/dev/null": ("deny", "credentials.access"),
+                f"ssh -i {ssh}/id_rsa host uptime >>/dev/null": ("deny", "credentials.access"),
+            }
+        )
+
+    def test_dev_null_and_descriptor_redirections_keep_ssh_exemptions(self):
+        ssh = self.root / "home" / ".ssh"
+        allow = ("allow", None)
+        self.assertDecisions(
+            {
+                f"cat {ssh}/config": allow,
+                f"ls {ssh}": allow,
+                f"ssh-keygen -lf {ssh}/id.pub": allow,
+                f"ssh-keyscan github.com >> {ssh}/known_hosts": allow,
+                f"ssh-keyscan github.com >> {ssh}/known_hosts 2>/dev/null": allow,
+                f"scp -i {ssh}/deploy_key build.tgz host:": allow,
+                f"ssh -i {ssh}/deploy_key host uptime 2>&1": allow,
+                f"ssh -i {ssh}/deploy_key host uptime >&2": allow,
+                f"ssh -i {ssh}/deploy_key host uptime 1>&2": allow,
+                f"cat {ssh}/config > /dev/null": allow,
+                f"cat {ssh}/config 2> /dev/null": allow,
+                f"sftp -i {ssh}/deploy_key host &>/dev/null": allow,
+            }
+        )
+
+    def test_clobber_and_combined_redirections_name_their_real_target(self):
+        ssh = self.root / "home" / ".ssh"
+        enforcement = self.root / "safe-yolo" / "customizations.json"
+        credentials = ("deny", "credentials.access")
+        self.assertDecisions(
+            {
+                f"echo x >|{ssh}/config": credentials,
+                f"echo x 1>|{ssh}/config": credentials,
+                f"echo x 2>|{ssh}/config": credentials,
+                f"echo x >&{ssh}/config": credentials,
+                f"echo x &>>{ssh}/config": credentials,
+                f"echo x >|{enforcement}": ("deny", "enforcement.modify"),
+                f"echo x >&{enforcement}": ("deny", "enforcement.modify"),
+                f"echo x >|{self.root}/out": ("allow", None),
+                f"echo x >&2": ("allow", None),
+                f"echo x 2>&-": ("allow", None),
+            }
+        )
+
     def test_user_private_paths_override_identity_exemptions(self):
         ssh = self.root / "home" / ".ssh"
         settings = self.root / "safe-yolo" / "customizations.json"
