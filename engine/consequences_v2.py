@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from pathlib import Path
 import re
 import shlex
 from typing import Any, Literal
 
-from engine.ssh_command import parse_ssh_invocation
+from engine.ssh_command import CLIENT_VALUE_LETTERS, parse_ssh_invocation
 
 
 Outcome = Literal["allow", "approval_required", "operator_only"]
@@ -108,27 +109,105 @@ _CONTENT_DESTROYING_COMMANDS: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 _SED_VALUE_OPTIONS = ("efl", ("--expression", "--file", "--line-length"))
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+# Shell syntax that runs more than one command. shlex reads these as words,
+# so only a command without them earns the public credential file exemption.
+_COMPOSITION = re.compile(r"[\n;|&$`()]")
 # Production CLIs by executable alias, and the command words that mutate.
 # Commands are read at the subcommand position, so arguments never match.
+# The longest listed prefix decides; False marks a read under a mutating verb.
 _PRODUCTION_ALIASES = {"flyctl": "fly", "vc": "vercel"}
-_RAILWAY_MUTATING_COMMANDS = frozenset(
-    {
-        ("up",),
-        ("deploy",),
-        ("redeploy",),
-        ("restart",),
-        ("down",),
-        ("delete",),
-        ("rm",),
-        ("remove",),
-    }
-    | {
-        (group, verb)
-        for group in ("deployment", "deployments")
-        for verb in ("up", "deploy", "redeploy")
-    }
-    | {("service", "redeploy"), ("service", "restart")}
+_DELETE_VERBS = ("delete", "remove", "rm")
+# Groups and their aliases from `railway <group> --help` (railway 4.66.0).
+_RAILWAY_DELETE_GROUPS = (
+    "service",
+    "volume",
+    "volumes",
+    "environment",
+    "env",
+    "bucket",
+    "buckets",
+    "functions",
+    "function",
+    "func",
+    "fn",
+    "funcs",
+    "fns",
+    "templates",
+    "template",
+    "variable",
+    "variables",
+    "vars",
+    "var",
+    "project",
+    "projects",
 )
+_PRODUCTION_COMMANDS: dict[str, dict[tuple[str, ...], bool]] = {
+    "railway": dict.fromkeys(
+        {("up",), ("deploy",), ("redeploy",), ("restart",), ("down",)}
+        | {(verb,) for verb in _DELETE_VERBS}
+        | {
+            (group, verb)
+            for group in ("deployment", "deployments")
+            for verb in ("up", "deploy", "redeploy")
+        }
+        | {("service", "redeploy"), ("service", "restart")}
+        | {(group, verb) for group in _RAILWAY_DELETE_GROUPS for verb in _DELETE_VERBS},
+        True,
+    ),
+    # Command aliases from flyctl's apps, machine and destroy sources.
+    "fly": dict.fromkeys(
+        {("deploy",), ("release",), ("destroy",)}
+        | {(group, verb) for group in ("apps", "app") for verb in ("destroy", *_DELETE_VERBS)}
+        | {
+            (group, verb)
+            for group in ("machine", "machines", "m")
+            for verb in ("destroy", "remove", "rm")
+        },
+        True,
+    ),
+    "vercel": {
+        ("remove",): True,
+        ("rm",): True,
+        ("rollback",): True,
+        ("promote",): True,
+        ("rollback", "status"): False,
+        ("promote", "status"): False,
+    },
+}
+# OpenSSH directory files an agent may use, by credential root name. Each
+# child name pattern maps to the access it permits, and the directory itself
+# may be listed. Every other file and access in the root stays protected.
+_PUBLIC_CREDENTIAL_FILES: dict[str, dict[str, frozenset[str]]] = {
+    ".ssh": {
+        "config": frozenset({"read"}),
+        "known_hosts": frozenset({"read", "append"}),
+        "known_hosts.old": frozenset({"read"}),
+        "*.pub": frozenset({"read"}),
+    },
+}
+_CREDENTIAL_LISTERS = frozenset({"ls"})
+_CREDENTIAL_APPENDERS = frozenset({"ssh-keyscan"})
+_CREDENTIAL_READ_TOOLS = frozenset({"read"})
+# Commands that only read their path operands. A policy names value letters,
+# the read modes of which one is required, and every letter allowed.
+_CREDENTIAL_READERS: dict[str, tuple[str, str, str] | None] = {
+    **dict.fromkeys(("cat", "head", "tail", "grep", "wc", "diff", "cmp", "file", "stat", "ls")),
+    "ssh-keygen": ("EFf", "lBF", "lBFEfv"),
+}
+_PUBLIC_HOSTS = frozenset({"0.0.0.0", "::", "[::]"})
+# Options that name a listen address, for every command (None) and per command.
+_BIND_OPTIONS: dict[str | None, tuple[str, ...]] = {
+    None: ("--host", "--bind", "-H"),
+    "gunicorn": ("-b",),
+    "rails": ("-b", "--binding"),
+    "jupyter": ("--ip",),
+    "jupyter-lab": ("--ip",),
+    "jupyter-notebook": ("--ip",),
+    "php": ("-S",),
+}
+# Shell builtins that list every exported variable when given no names, and
+# the option letters that keep that listing form.
+_VARIABLE_LISTINGS = {"export": "p", "declare": "px", "typeset": "px", "set": ""}
 _KUBECTL_DRY_RUNS = frozenset({"--dry-run=client", "--dry-run=server"})
 _GIT_RESTORE_LONG_OPTIONS = (
     "--source",
@@ -194,7 +273,8 @@ class ConsequenceKernel:
                 )
                 return self._shell(command, effective_cwd)
         paths = self._structured_paths(tool_input, cwd)
-        if any(self._inside(path, self.credential_paths) for path in paths):
+        access = "read" if tool_name in _CREDENTIAL_READ_TOOLS else "write"
+        if not all(self._credential_access_allowed(path, access) for path in paths):
             return Decision(
                 "operator_only",
                 "credentials.access",
@@ -245,6 +325,38 @@ class ConsequenceKernel:
                     "delete " + (", ".join(targets) if targets else "a file") + " through apply_patch",
                 )
         return Decision("allow")
+
+    def _credential_access_allowed(self, path: Path, access: str) -> bool:
+        for root in self.credential_paths:
+            if not self._inside(path, (root,)):
+                continue
+            public = _PUBLIC_CREDENTIAL_FILES.get(root.name, {})
+            if path == root:
+                permitted = {"list"} if public else set()
+            elif path.parent == root:
+                permitted = {
+                    allowed
+                    for pattern, accesses in public.items()
+                    if fnmatchcase(path.name, pattern)
+                    for allowed in accesses
+                }
+            else:
+                permitted = set()
+            if access not in permitted:
+                return False
+        return True
+
+    @classmethod
+    def _reads_only(cls, executable: str, args: list[str]) -> bool:
+        if executable not in _CREDENTIAL_READERS:
+            return False
+        policy = _CREDENTIAL_READERS[executable]
+        if policy is None:
+            return True
+        value_letters, modes, allowed = policy
+        options, _, _ = cls._parse_options(args, value_letters, ())
+        letters = {option[1:] for option in options}
+        return bool(letters & set(modes)) and letters <= set(allowed)
 
     @staticmethod
     def _patch_directives(patch: Any) -> str:
@@ -320,34 +432,33 @@ class ConsequenceKernel:
             tokens = shlex.split(command, posix=True)
         except ValueError:
             return Decision("allow")
-        decision = self._shell_tokens(tokens, cwd)
+        simple = not _COMPOSITION.search(command.replace(">&", ""))
+        decision = self._shell_tokens(tokens, cwd, simple)
         # Bash runs the word after leading NAME=value assignments. That view
         # only adds denials; it never replaces the decision on the full words.
         if decision.outcome == "allow" and _ASSIGNMENT.match(command):
             while tokens and _ASSIGNMENT.match(tokens[0]):
                 tokens = tokens[1:]
-            return self._shell_tokens(tokens, cwd)
+            return self._shell_tokens(tokens, cwd, simple)
         return decision
 
-    def _shell_tokens(self, tokens: list[str], cwd: Path) -> Decision:
+    def _shell_tokens(self, tokens: list[str], cwd: Path, simple: bool) -> Decision:
         if not tokens:
             return Decision("allow")
         executable = Path(tokens[0]).name
-        ssh_invocation = parse_ssh_invocation(tokens[1:]) if executable == "ssh" else None
-        token_paths, positionals, redirect_targets = self._shell_paths(tokens[1:], cwd)
-        credential_scan = token_paths
-        if ssh_invocation is not None:
-            identity_files = {
-                self._resolve_from(value, cwd)
-                for value in ssh_invocation.identity_files
-            }
-            credential_scan = tuple(path for path in token_paths if path not in identity_files)
-        if any(self._inside(path, self.credential_paths) for path in credential_scan):
-            return Decision(
-                "operator_only",
-                "credentials.access",
-                "credential material is not available to the agent",
-            )
+        client = (
+            parse_ssh_invocation(tokens[1:], CLIENT_VALUE_LETTERS[executable])
+            if executable in CLIENT_VALUE_LETTERS
+            else None
+        )
+        ssh_invocation = client if executable == "ssh" else None
+        token_paths, positionals, redirect_targets, appended = self._shell_paths(
+            tokens[1:], cwd
+        )
+        identity_files = {
+            self._resolve_from(value, cwd)
+            for value in (client.identity_files if client is not None else ())
+        }
         mutation_targets = self._mutation_targets(
             executable,
             tokens[1:],
@@ -355,6 +466,24 @@ class ConsequenceKernel:
             positionals,
             redirect_targets,
         )
+        for path in token_paths:
+            if path in identity_files:
+                continue
+            if not simple:
+                access = "use"
+            elif path in mutation_targets:
+                appends = path in appended and executable in _CREDENTIAL_APPENDERS
+                access = "append" if appends else "write"
+            elif executable in _CREDENTIAL_LISTERS and path in self.credential_paths:
+                access = "list"
+            else:
+                access = "read" if self._reads_only(executable, tokens[1:]) else "use"
+            if not self._credential_access_allowed(path, access):
+                return Decision(
+                    "operator_only",
+                    "credentials.access",
+                    "credential material is not available to the agent",
+                )
         if any(self._inside(path, self.enforcement_paths) for path in mutation_targets):
             return Decision(
                 "operator_only",
@@ -561,10 +690,11 @@ class ConsequenceKernel:
         cls,
         tokens: list[str],
         cwd: Path,
-    ) -> tuple[tuple[Path, ...], tuple[Path, ...], tuple[Path, ...]]:
+    ) -> tuple[tuple[Path, ...], tuple[Path, ...], tuple[Path, ...], tuple[Path, ...]]:
         found: list[Path] = []
         positionals: list[Path] = []
         redirect_targets: list[Path] = []
+        appended: list[Path] = []
         index = 0
         while index < len(tokens):
             token = tokens[index]
@@ -578,6 +708,8 @@ class ConsequenceKernel:
                     path = cls._resolve_from(target, cwd)
                     found.append(path)
                     redirect_targets.append(path)
+                    if ">>" in token:
+                        appended.append(path)
                 index += 1
                 continue
             redirect = cls._input_redirection(token)
@@ -601,7 +733,7 @@ class ConsequenceKernel:
                 found.append(path)
                 positionals.append(path)
             index += 1
-        return tuple(found), tuple(positionals), tuple(redirect_targets)
+        return tuple(found), tuple(positionals), tuple(redirect_targets), tuple(appended)
 
     @staticmethod
     def _output_redirection(token: str) -> str | None:
@@ -627,27 +759,22 @@ class ConsequenceKernel:
             if any(token in {"--help", "--version"} for token in args):
                 return False
             return not any(token not in {"-0", "--null"} for token in args)
+        if executable in _VARIABLE_LISTINGS:
+            letters = set(_VARIABLE_LISTINGS[executable])
+            return all(
+                token.startswith("-") and len(token) > 1 and set(token[1:]) <= letters
+                for token in args
+            )
         if executable != "env":
             return False
-        index = 0
-        options_with_values = {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"}
-        while index < len(args):
-            token = args[index]
-            if token in {"--help", "--version"}:
-                return False
-            if token == "--":
-                return index + 1 >= len(args)
-            if token in options_with_values:
-                index += 2
-                continue
-            if token.startswith(("--unset=", "--chdir=", "--split-string=")):
-                index += 1
-                continue
-            if token.startswith("-") or "=" in token:
-                index += 1
-                continue
+        options, operands, after_separator = ConsequenceKernel._parse_options(
+            args, "uCS", ("--unset", "--chdir", "--split-string")
+        )
+        if ConsequenceKernel._git_given(("--help", "--version"), options):
             return False
-        return True
+        return not after_separator and all(
+            operand == "-" or "=" in operand for operand in operands
+        )
 
     @staticmethod
     def _git_history_mutation(args: list[str]) -> bool:
@@ -863,10 +990,8 @@ class ConsequenceKernel:
         executable = Path(tokens[0]).name
         executable = _PRODUCTION_ALIASES.get(executable, executable)
         args = tokens[1:]
-        if executable == "railway":
-            return ConsequenceKernel._railway_command(args) is not None
-        if executable == "fly":
-            return bool(args and args[0] in {"deploy", "release"})
+        if ConsequenceKernel._production_command(executable, args) is not None:
+            return True
         if executable == "vercel":
             return "--prod" in args or "--production" in args
         if executable == "kubectl":
@@ -909,15 +1034,13 @@ class ConsequenceKernel:
         return False
 
     @staticmethod
-    def _railway_command(args: list[str]) -> tuple[str, ...] | None:
-        return next(
-            (
-                tuple(args[:length])
-                for length in (2, 1)
-                if tuple(args[:length]) in _RAILWAY_MUTATING_COMMANDS
-            ),
-            None,
-        )
+    def _production_command(executable: str, args: list[str]) -> tuple[str, ...] | None:
+        commands = _PRODUCTION_COMMANDS.get(executable, {})
+        for length in (2, 1):
+            words = tuple(args[:length])
+            if words in commands:
+                return words if commands[words] else None
+        return None
 
     @staticmethod
     def _kubectl_dry_run(command: list[str]) -> bool:
@@ -998,10 +1121,9 @@ class ConsequenceKernel:
         executable = Path(tokens[0]).name
         executable = _PRODUCTION_ALIASES.get(executable, executable)
         args = tokens[1:]
-        if executable == "railway":
-            return "railway " + " ".join(ConsequenceKernel._railway_command(args) or ("mutation",))
-        if executable == "fly":
-            return "fly " + (args[0] if args else "mutation")
+        command = ConsequenceKernel._production_command(executable, args)
+        if command is not None:
+            return " ".join((executable, *command))
         if executable == "vercel":
             return "vercel " + ("--prod" if "--prod" in args else "--production")
         if executable == "kubectl":
@@ -1012,7 +1134,6 @@ class ConsequenceKernel:
 
     @staticmethod
     def _public_bind(tokens: list[str]) -> bool:
-        public_values = {"0.0.0.0", "::", "[::]"}
         executable = Path(tokens[0]).name
         if executable == "vite":
             for index, token in enumerate(tokens):
@@ -1020,11 +1141,26 @@ class ConsequenceKernel:
                     index + 1 >= len(tokens) or tokens[index + 1].startswith("-")
                 ):
                     return True
-        for index, token in enumerate(tokens[:-1]):
-            if token in {"--host", "--bind", "-H"} and tokens[index + 1] in public_values:
-                return True
-        return any(
-            token.startswith(("--host=", "--bind="))
-            and token.split("=", 1)[1] in public_values
-            for token in tokens
-        )
+        options = _BIND_OPTIONS[None] + _BIND_OPTIONS.get(executable, ())
+        for index, token in enumerate(tokens):
+            for option in options:
+                if token == option:
+                    value = tokens[index + 1] if index + 1 < len(tokens) else ""
+                elif token.startswith(option + "=") or (
+                    len(option) == 2 and token.startswith(option)
+                ):
+                    value = token[len(option) :].removeprefix("=")
+                else:
+                    continue
+                if ConsequenceKernel._listen_host(value) in _PUBLIC_HOSTS:
+                    return True
+        return False
+
+    @staticmethod
+    def _listen_host(address: str) -> str:
+        """Drop a port from host:port or [v6]:port; a bare IPv6 address stays whole."""
+        if address.startswith("["):
+            return address[: address.find("]") + 1]
+        if address.count(":") == 1:
+            return address.partition(":")[0]
+        return address

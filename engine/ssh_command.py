@@ -6,6 +6,12 @@ from dataclasses import dataclass
 # Value-taking letters from `ssh` usage. ssh reads options with getopt, so a
 # cluster such as -tp2222 or -tp 2222 ends at the first value-taking letter.
 _VALUE_LETTERS = frozenset("BbcDEeFIiJLlmOoPpQRSWw")
+# scp and sftp pass -i and -o to ssh but take other values, from their usage.
+CLIENT_VALUE_LETTERS = {
+    "ssh": _VALUE_LETTERS,
+    "scp": frozenset("cDFiJloPSX"),
+    "sftp": frozenset("BbcDFiJloPRSsX"),
+}
 _ROUTE_FLAGS = {"-F", "-J", "-S", "-l", "-p"}
 _LOCAL_COMMAND_OPTIONS = {"localcommand", "proxycommand", "knownhostscommand"}
 _ROUTE_OPTIONS = {
@@ -44,7 +50,9 @@ class SshInvocation:
         )
 
 
-def parse_ssh_invocation(args: list[str]) -> SshInvocation:
+def parse_ssh_invocation(
+    args: list[str], value_letters: frozenset[str] = _VALUE_LETTERS
+) -> SshInvocation:
     host: str | None = None
     remote_tokens: tuple[str, ...] = ()
     remote_commands: list[str] = []
@@ -74,7 +82,7 @@ def parse_ssh_invocation(args: list[str]) -> SshInvocation:
 
         index += 1
         for position, letter in enumerate(token[1:], start=2):
-            if letter not in _VALUE_LETTERS:
+            if letter not in value_letters:
                 if letter in "NGV":
                     transport_only = True
                 elif letter == "s":
