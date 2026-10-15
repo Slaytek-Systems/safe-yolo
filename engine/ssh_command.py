@@ -33,8 +33,9 @@ class SshInvocation:
     remote_tokens: tuple[str, ...]
     remote_commands: tuple[str, ...]
     local_commands: tuple[str, ...]
-    # Indexes of -i values given as their own word, so only that word is exempt.
-    identity_positions: tuple[int, ...]
+    # Word index and key path of each -i value. Only that word is exempt; an
+    # attached value exempts its whole option word.
+    identities: tuple[tuple[int, str], ...]
     transport_only: bool
     opaque_config: bool
     route_overridden: bool
@@ -58,7 +59,7 @@ def parse_ssh_invocation(
     remote_tokens: tuple[str, ...] = ()
     remote_commands: list[str] = []
     local_commands: list[str] = []
-    identity_positions: list[int] = []
+    identities: list[tuple[int, str]] = []
     transport_only = False
     opaque_config = False
     route_overridden = False
@@ -92,10 +93,12 @@ def parse_ssh_invocation(
             flag = "-" + letter
             if position < len(token):
                 value = token[position:].removeprefix("=")
+                if flag == "-i":
+                    identities.append((index - 1, value))
             elif index < len(args):
                 value = args[index]
                 if flag == "-i":
-                    identity_positions.append(index)
+                    identities.append((index, value))
                 index += 1
             else:
                 value = None
@@ -134,7 +137,7 @@ def parse_ssh_invocation(
         remote_tokens=remote_tokens,
         remote_commands=tuple(remote_commands),
         local_commands=tuple(local_commands),
-        identity_positions=tuple(identity_positions),
+        identities=tuple(identities),
         transport_only=transport_only,
         opaque_config=opaque_config,
         route_overridden=route_overridden,

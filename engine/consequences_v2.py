@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
+import glob
 from pathlib import Path
 import re
 import shlex
 import stat
-from typing import Any, Literal
+from typing import Any, Iterable, Literal
 
 from engine.ssh_command import CLIENT_VALUE_LETTERS, SshInvocation, parse_ssh_invocation
 
@@ -146,6 +148,13 @@ _RAILWAY_GROUP_VALUE_OPTIONS = (
     "bsep",
     ("--bucket", "--service", "--environment", "--project", "--set", "--set-from-stdin"),
 )
+_PRODUCTION_GLOBAL_VALUE_OPTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "fly": ("act", ("--access-token", "--app", "--config")),
+    "vercel": (
+        "AQStT",
+        ("--cwd", "--local-config", "--global-config", "--scope", "--token", "--team", "--api"),
+    ),
+}
 _PRODUCTION_COMMANDS: dict[str, dict[tuple[str, ...], bool]] = {
     "railway": dict.fromkeys(
         {("up",), ("deploy",), ("redeploy",), ("restart",), ("down",)}
@@ -194,6 +203,51 @@ _APPEND_REDIRECTS = ("1>>", ">>")
 _DESCRIPTOR = re.compile(r"[0-9]*-?")
 # A word with these is not one literal path once bash expands it.
 _LITERAL_BREAKERS = _SHELL_GLOB | _REDIRECT_SYNTAX | frozenset("$`")
+
+
+def _glob_component(pattern: str) -> tuple[str, int]:
+    """Rewrite one glob component for fnmatch and count the names it needs.
+
+    Each `[` that has no closing `]` is spelled as the literal class `[[]`.
+    fnmatch already treats such a bracket as a literal, but finds that out by
+    rescanning the rest of the pattern for every one, which is quadratic. One
+    backward pass records where the next `]` is, so this rewrite is linear and
+    matches the same names. The second value is the shortest name the pattern
+    can match: every character or bracket class needs one, `*` needs none.
+    """
+    pattern = pattern.replace("[^", "[!")
+    size = len(pattern)
+    if "[" not in pattern:
+        return pattern, size - pattern.count("*")
+    next_close = [size] * (size + 2)
+    for index in range(size - 1, -1, -1):
+        next_close[index] = index if pattern[index] == "]" else next_close[index + 1]
+    parts: list[str] = []
+    shortest = 0
+    index = 0
+    while index < size:
+        character = pattern[index]
+        if character != "[":
+            parts.append(character)
+            shortest += character != "*"
+            index += 1
+            continue
+        start = index + 1
+        if start < size and pattern[start] == "!":
+            start += 1
+        if start < size and pattern[start] == "]":
+            start += 1
+        close = next_close[start]
+        shortest += 1
+        if close >= size:
+            parts.append("[[]")
+            index += 1
+            continue
+        parts.append(pattern[index : close + 1])
+        index = close + 1
+    return "".join(parts), shortest
+# $HOME or ${HOME} leading a word, an option value or a redirection target.
+_HOME_VARIABLE = re.compile(r"(?:^|(?<=[\s\"'=<>]))\$(?:HOME|\{HOME\})(?=[/\"'\s]|$)")
 
 
 @dataclass(frozen=True)
@@ -314,6 +368,12 @@ class ConsequenceKernel:
                     if isinstance(workdir, str) and workdir
                     else cwd
                 )
+                # The beta.10 reading decides first; the residual reading of
+                # the same command, nested remote commands included, can only
+                # add a denial.
+                original = self._shell(command, effective_cwd, residuals=False)
+                if original.outcome != "allow":
+                    return original
                 return self._shell(command, effective_cwd)
         paths = self._structured_paths(tool_input, cwd)
         readable = tool_name in _CREDENTIAL_READ_TOOLS
@@ -514,10 +574,10 @@ class ConsequenceKernel:
         )
         return frozenset(
             index
-            for index in client.identity_positions
+            for index, value in client.identities
             if index < aligned
             and not _LITERAL_BREAKERS & set(args[index])
-            and not self._inside(self._resolve_from(args[index], cwd), self.private_paths)
+            and not self._inside(self._resolve_from(value, cwd), self.private_paths)
         )
 
     @staticmethod
@@ -580,31 +640,32 @@ class ConsequenceKernel:
 
     @staticmethod
     def _inside(path: Path, roots: tuple[Path, ...]) -> bool:
-        for root in roots:
-            try:
-                path.relative_to(root)
-            except ValueError:
-                continue
-            return True
-        return False
+        # Comparing leading parts is linear; relative_to walks every parent
+        # of a deep path, which is quadratic on Python 3.12.
+        parts = path.parts
+        return any(parts[: len(root.parts)] == root.parts for root in roots)
 
-    def _shell(self, command: str, cwd: Path) -> Decision:
+    def _shell(self, command: str, cwd: Path, *, residuals: bool = True) -> Decision:
         command = self._mask_direct_git_push_heredoc_body(command)
+        if residuals:
+            command = _HOME_VARIABLE.sub("~", command)
         try:
             tokens = shlex.split(command, posix=True)
         except ValueError:
             return Decision("allow")
         simple = not _COMPOSITION.search(command.replace(">&", ""))
-        decision = self._shell_tokens(tokens, cwd, simple)
+        decision = self._shell_tokens(tokens, cwd, simple, residuals=residuals)
         # Bash runs the word after leading NAME=value assignments. That view
         # only adds denials; it never replaces the decision on the full words.
         if decision.outcome == "allow" and _ASSIGNMENT.match(command):
             while tokens and _ASSIGNMENT.match(tokens[0]):
                 tokens = tokens[1:]
-            return self._shell_tokens(tokens, cwd, simple)
+            return self._shell_tokens(tokens, cwd, simple, residuals=residuals)
         return decision
 
-    def _shell_tokens(self, tokens: list[str], cwd: Path, simple: bool) -> Decision:
+    def _shell_tokens(
+        self, tokens: list[str], cwd: Path, simple: bool, residuals: bool = True
+    ) -> Decision:
         if not tokens:
             return Decision("allow")
         executable = Path(tokens[0]).name
@@ -619,7 +680,9 @@ class ConsequenceKernel:
         exempt = self._public_credential_shape(executable, tokens[1:], cwd) if simple else None
         if exempt is None:
             exempt = self._identity_words(tokens[1:], client, cwd)
-        token_paths, positionals, redirect_targets = self._shell_paths(tokens[1:], cwd, exempt)
+        token_paths, positionals, redirect_targets = self._shell_paths(
+            tokens[1:], cwd, exempt, residuals=residuals
+        )
         if any(self._inside(path, self.credential_paths) for path in token_paths):
             return Decision(
                 "operator_only",
@@ -633,6 +696,8 @@ class ConsequenceKernel:
             positionals,
             redirect_targets,
         )
+        if residuals:
+            mutation_targets += self._glob_roots(mutation_targets, self.enforcement_paths)
         if any(self._inside(path, self.enforcement_paths) for path in mutation_targets):
             return Decision(
                 "operator_only",
@@ -682,11 +747,18 @@ class ConsequenceKernel:
                 "git.history_mutation",
                 "gt submit --force",
             )
-        if self._production_mutation(tokens):
+        production_tokens = tokens
+        canonical = _PRODUCTION_ALIASES.get(executable, executable)
+        if residuals and canonical in _PRODUCTION_GLOBAL_VALUE_OPTIONS:
+            _, operands, _ = self._parse_options(
+                tokens[1:], *_PRODUCTION_GLOBAL_VALUE_OPTIONS[canonical]
+            )
+            production_tokens = [tokens[0], *operands]
+        if self._production_mutation(production_tokens):
             return Decision(
                 "approval_required",
                 "production.mutate",
-                f"run {self._production_display(tokens)} production mutation",
+                f"run {self._production_display(production_tokens)} production mutation",
             )
         if executable == "ssh":
             assert ssh_invocation is not None
@@ -697,11 +769,11 @@ class ConsequenceKernel:
             ):
                 return self._remote_execution(ssh_invocation.host)
             for local_command in ssh_invocation.local_commands:
-                decision = self._remote_shell(local_command, cwd)
+                decision = self._remote_shell(local_command, cwd, residuals=residuals)
                 if decision.outcome != "allow":
                     return decision
             for remote_command in ssh_invocation.remote_commands:
-                decision = self._remote_shell(remote_command, cwd)
+                decision = self._remote_shell(remote_command, cwd, residuals=residuals)
                 if decision.outcome != "allow":
                     return decision
             if ssh_invocation.remote_commands or ssh_invocation.transport_only:
@@ -721,7 +793,7 @@ class ConsequenceKernel:
             )
         return Decision("allow")
 
-    def _remote_shell(self, command: str, cwd: Path) -> Decision:
+    def _remote_shell(self, command: str, cwd: Path, *, residuals: bool = True) -> Decision:
         try:
             tokens = self._line_tokens(command)
         except ValueError:
@@ -737,25 +809,25 @@ class ConsequenceKernel:
                 current.append(token)
                 continue
             if current:
-                decision = self._remote_segment(current, cwd)
+                decision = self._remote_segment(current, cwd, residuals=residuals)
                 if decision.outcome != "allow":
                     return decision
                 current = []
         return Decision("allow")
 
-    def _remote_segment(self, tokens: list[str], cwd: Path) -> Decision:
+    def _remote_segment(self, tokens: list[str], cwd: Path, *, residuals: bool = True) -> Decision:
         if not tokens:
             return Decision("allow")
         executable = Path(tokens[0]).name
         if executable in {"command", "builtin", "exec"} and len(tokens) > 1:
-            return self._remote_segment(tokens[1:], cwd)
+            return self._remote_segment(tokens[1:], cwd, residuals=residuals)
         if executable in {"bash", "dash", "fish", "ksh", "sh", "zsh"}:
             for index, token in enumerate(tokens[1:], start=1):
                 if token == "-c" or (token.startswith("-") and "c" in token[1:]):
                     if index + 1 >= len(tokens):
                         return self._remote_execution("remote host")
-                    return self._remote_shell(" ".join(tokens[index + 1 :]), cwd)
-        return self._shell(shlex.join(tokens), cwd)
+                    return self._remote_shell(" ".join(tokens[index + 1 :]), cwd, residuals=residuals)
+        return self._shell(shlex.join(tokens), cwd, residuals=residuals)
 
     @staticmethod
     def _remote_execution(host: str | None) -> Decision:
@@ -834,12 +906,13 @@ class ConsequenceKernel:
             index += 1
         return found
 
-    @classmethod
     def _shell_paths(
-        cls,
+        self,
         tokens: list[str],
         cwd: Path,
         exempt: frozenset[int] = frozenset(),
+        *,
+        residuals: bool = True,
     ) -> tuple[tuple[Path, ...], tuple[Path, ...], tuple[Path, ...]]:
         """Paths named by words, redirections and long option values.
 
@@ -851,7 +924,19 @@ class ConsequenceKernel:
         index = 0
         while index < len(tokens):
             token = tokens[index]
-            redirect = cls._output_redirection(token)
+            if residuals and index in exempt and glob.has_magic(token):
+                found.extend(
+                    self._glob_roots((self._resolve_from(token, cwd),), self.credential_paths)
+                )
+            if residuals and index not in exempt:
+                prefix = re.split(r"[<>]", token, maxsplit=1)[0]
+                if prefix and prefix != token and not prefix.isdigit():
+                    found.append(self._resolve_from(prefix, cwd))
+                if token.startswith("-") and not token.startswith("--"):
+                    attached = re.search(r"[/~]", token)
+                    if attached:
+                        found.append(self._resolve_from(token[attached.start():], cwd))
+            redirect = self._output_redirection(token)
             if redirect is not None:
                 start = index
                 target = redirect
@@ -865,37 +950,68 @@ class ConsequenceKernel:
                 candidates = [target]
                 if target.startswith("|") and target[1:]:
                     candidates.append(target[1:])
+                if residuals and target == "|" and index + 1 < len(tokens):
+                    index += 1
+                    candidates.append(tokens[index])
                 for candidate in candidates:
                     if candidate and not candidate.startswith("&"):
-                        path = cls._resolve_from(candidate, cwd)
+                        path = self._resolve_from(candidate, cwd)
                         if start not in exempt:
                             found.append(path)
                         redirect_targets.append(path)
                 index += 1
                 continue
-            redirect = cls._input_redirection(token)
+            redirect = self._input_redirection(token)
             if redirect is not None:
                 target = redirect
                 if not target and index + 1 < len(tokens):
                     index += 1
                     target = tokens[index]
                 if target:
-                    found.append(cls._resolve_from(target, cwd))
+                    found.append(self._resolve_from(target, cwd))
                 index += 1
                 continue
             if token.startswith("--") and "=" in token:
                 value = token.split("=", 1)[1]
                 if value:
-                    found.append(cls._resolve_from(value, cwd))
+                    found.append(self._resolve_from(value, cwd))
                 index += 1
                 continue
             if not token.startswith("-"):
-                path = cls._resolve_from(token, cwd)
+                path = self._resolve_from(token, cwd)
                 if index not in exempt:
                     found.append(path)
                 positionals.append(path)
             index += 1
+        if residuals:
+            found.extend(self._glob_roots(found, self.credential_paths))
         return tuple(found), tuple(positionals), tuple(redirect_targets)
+
+    @staticmethod
+    def _glob_roots(paths: Iterable[Path], roots: tuple[Path, ...]) -> tuple[Path, ...]:
+        """Protected roots that a glob path names or reaches inside.
+
+        Matching is pure, component by component, and never reads the
+        filesystem. As in bash without dotglob, a component that does not
+        start with a dot never matches a dot-named one, and without globstar
+        ** matches within one component like *. A glob naming only an
+        ancestor of a root, such as a parent listing, reaches no root.
+        """
+        found: list[Path] = []
+        depth = max((len(root.parts) for root in roots), default=0)
+        for path in paths:
+            if not glob.has_magic(str(path)):
+                continue
+            components = [_glob_component(part) for part in path.parts[:depth]]
+            for root in roots:
+                if len(path.parts) >= len(root.parts) and all(
+                    shortest <= len(name)
+                    and fnmatchcase(name, pattern)
+                    and (pattern.startswith(".") or not name.startswith("."))
+                    for (pattern, shortest), name in zip(components, root.parts)
+                ):
+                    found.append(root)
+        return tuple(found)
 
     @staticmethod
     def _output_redirection(token: str) -> str | None:
