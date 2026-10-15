@@ -6,6 +6,12 @@ from dataclasses import dataclass
 # Value-taking letters from `ssh` usage. ssh reads options with getopt, so a
 # cluster such as -tp2222 or -tp 2222 ends at the first value-taking letter.
 _VALUE_LETTERS = frozenset("BbcDEeFIiJLlmOoPpQRSWw")
+# scp and sftp pass -i and -o to ssh but take other values, from their usage.
+CLIENT_VALUE_LETTERS = {
+    "ssh": _VALUE_LETTERS,
+    "scp": frozenset("cDFiJloPSX"),
+    "sftp": frozenset("BbcDFiJloPRSsX"),
+}
 _ROUTE_FLAGS = {"-F", "-J", "-S", "-l", "-p"}
 _LOCAL_COMMAND_OPTIONS = {"localcommand", "proxycommand", "knownhostscommand"}
 _ROUTE_OPTIONS = {
@@ -27,7 +33,8 @@ class SshInvocation:
     remote_tokens: tuple[str, ...]
     remote_commands: tuple[str, ...]
     local_commands: tuple[str, ...]
-    identity_files: tuple[str, ...]
+    # Indexes of -i values given as their own word, so only that word is exempt.
+    identity_positions: tuple[int, ...]
     transport_only: bool
     opaque_config: bool
     route_overridden: bool
@@ -44,12 +51,14 @@ class SshInvocation:
         )
 
 
-def parse_ssh_invocation(args: list[str]) -> SshInvocation:
+def parse_ssh_invocation(
+    args: list[str], value_letters: frozenset[str] = _VALUE_LETTERS
+) -> SshInvocation:
     host: str | None = None
     remote_tokens: tuple[str, ...] = ()
     remote_commands: list[str] = []
     local_commands: list[str] = []
-    identity_files: list[str] = []
+    identity_positions: list[int] = []
     transport_only = False
     opaque_config = False
     route_overridden = False
@@ -74,7 +83,7 @@ def parse_ssh_invocation(args: list[str]) -> SshInvocation:
 
         index += 1
         for position, letter in enumerate(token[1:], start=2):
-            if letter not in _VALUE_LETTERS:
+            if letter not in value_letters:
                 if letter in "NGV":
                     transport_only = True
                 elif letter == "s":
@@ -85,21 +94,19 @@ def parse_ssh_invocation(args: list[str]) -> SshInvocation:
                 value = token[position:].removeprefix("=")
             elif index < len(args):
                 value = args[index]
+                if flag == "-i":
+                    identity_positions.append(index)
                 index += 1
             else:
                 value = None
                 malformed = True
                 break
-            if flag == "-i":
-                identity_files.append(value)
-            elif flag == "-F":
+            if flag == "-F":
                 opaque_config = True
             elif flag in {"-W", "-O", "-Q"}:
                 transport_only = True
             elif flag == "-o":
                 name, option_value = _config_option(value)
-                if name == "identityfile" and option_value:
-                    identity_files.append(option_value)
                 command_value = option_value if option_value.lower() != "none" else ""
                 if name in _LOCAL_COMMAND_OPTIONS and command_value:
                     local_commands.append(command_value)
@@ -127,7 +134,7 @@ def parse_ssh_invocation(args: list[str]) -> SshInvocation:
         remote_tokens=remote_tokens,
         remote_commands=tuple(remote_commands),
         local_commands=tuple(local_commands),
-        identity_files=tuple(identity_files),
+        identity_positions=tuple(identity_positions),
         transport_only=transport_only,
         opaque_config=opaque_config,
         route_overridden=route_overridden,

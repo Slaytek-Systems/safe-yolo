@@ -163,18 +163,25 @@ class DevinAdapterTests(unittest.TestCase):
         self.assertIsNone(handle_pre_tool(payload, self.kernel))
 
     def test_credential_paths_are_denied(self):
-        for tool_name in ("edit", "read"):
+        ssh = self.root / "home" / ".ssh"
+        for tool_name, path in (("edit", ssh / "config"), ("read", ssh / "id_ed25519")):
             with self.subTest(tool_name=tool_name):
                 denied = handle_pre_tool(
                     {
                         "hook_event_name": "PreToolUse",
                         "tool_name": tool_name,
-                        "tool_input": {"file_path": str(self.root / "home" / ".ssh" / "config")},
+                        "tool_input": {"file_path": str(path)},
                     },
                     self.kernel,
                 )
                 self.assertEqual("block", denied["decision"])
                 self.assertIn("credentials.access", denied["reason"])
+        readable = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "read",
+            "tool_input": {"file_path": str(ssh / "config")},
+        }
+        self.assertIsNone(handle_pre_tool(readable, self.kernel))
 
     def test_verified_release_emits_devin_hook_response(self):
         installed = install_release(ROOT, self.root / "installed")

@@ -1,31 +1,68 @@
-# Safe YOLO 3.0.0-beta.9
+# Safe YOLO 3.0.0-beta.10
 
-More direct forms of already-restricted commands are now recognized, and two
-production checks no longer deny read-only commands.
+Ordinary ssh setup no longer needs a workaround, and more spellings of
+already-restricted production, public-bind, and environment-dump commands are
+recognized.
 
-- Denied: `ssh` short-option clusters such as `-tp 2222`, `-tl admin`, or
-  `-vp2222`. The value-taking letter now consumes its value, so the remote
-  command or interactive session is checked as it is without the cluster.
-- Denied: commands behind leading assignments, such as `FOO=1 rm -rf build`,
-  `FOO=1 sudo ls`, or `KUBECONFIG=prod.yaml kubectl apply -f x.yaml`.
-  A quoted or escaped `NAME=` word runs as a command, not an assignment.
-  `env FOO=1 <command>` is unchanged.
-- Denied as file deletion: `shred` in any form and `truncate` at any size,
-  outside scratch paths. Option values such as `-s 0` or `-r ref` are not read
-  as targets, so `truncate -s 0 /tmp/build.log` stays allowed.
-- Denied as production mutation: `railway redeploy`, `restart`, `down`,
-  `delete` (and its `rm` and `remove` aliases), `railway deployment up` or
-  `redeploy`, `railway service redeploy` or `restart`, `flyctl` as `fly`, and `vc` as `vercel`.
-- Denied: `kubectl` mutations after `-v`, `--v`, `--vmodule`, or `--as-uid`
-  with a spaced value, such as `kubectl -v 6 apply -f x.yaml`.
-- Denied: `sed -i.bak`, `-Ei`, `-ie`, `--in-place`, `--in-place=.bak`, and
-  abbreviations such as `--in-pl=.bak` on Safe YOLO enforcement files.
-- Allowed: `railway logs --service deploy`, `railway run npm run deploy`, and
-  the local `railway dev up`. Railway commands are read at the command
-  position only.
-- Allowed: `kubectl --dry-run=client` and `--dry-run=server`. Bare
-  `--dry-run`, `--dry-run=none`, `--raw` requests, and a dry run that may be
-  another option's value stay denied.
+- Allowed: a single command of one of these exact shapes on the home ssh
+  directory's public files, `config`, `known_hosts`, `known_hosts.old`, and
+  `*.pub`, each named literally:
+  - `cat`, `head -n N`, `tail -n N`, `wc`, `grep PATTERN`, `diff`, `cmp`,
+    `stat`, `file`, or `ls` with only that command's listed display options;
+  - `ls` of the directory itself (names only; `-R` is denied);
+  - `ssh-keygen -l`, `-B`, or `-F <host>` with `-f <public file>` and `-E`;
+  - `ssh-keyscan [options] <hosts> >> <ssh dir>/known_hosts`, with that
+    append as the only redirection into the directory;
+  - a structured read tool on one public file.
+- A matching shape exempts only those literal public-file words, plus the one
+  `ssh-keyscan` append. A word containing `<` or `>` is never accepted as an
+  option value.
+- Besides that append, a shape or an `-i` exemption tolerates only `2>&1`,
+  `>&2`, `1>&2`, and `>`, `2>`, or `&>` to `/dev/null`. Any other redirection
+  anywhere in the command, such as `>|`, `>&<file>`, `&>file`, `<>`, `<`, a
+  here-document, a here-string, or process substitution, voids the exemption,
+  and the command is checked as in beta.9.
+- Allowed: `scp -i` and `sftp -i` with a key in the ssh directory, like
+  `ssh -i`. Only that option's separate value word is exempt, and only when it
+  is a literal path (no glob, redirection, or substitution) placed before any
+  redirection in a command whose redirections all fit the list above, and
+  outside every `private_paths` customization.
+  `ssh -i` with a key under `private_paths` is now denied too.
+- Still denied, for the direct forms the hook recognizes: private keys and
+  every other non-public file in the ssh directory; globs, `..`, option values,
+  long options, and redirections that name the directory in a reader; every
+  write except the one `ssh-keyscan` append; a public name whose symlink
+  resolves to a protected or non-public target, or a regular file with more
+  than one link; any public file under a `private_paths` customization; and any
+  command that chains, pipes, or substitutes another command. A public name
+  that links to another public file, such as `alias.pub` to `config`, reads
+  like that file.
+- Residual: the hook checks names and links, not content. A public name made
+  outside the hook that holds private key content, such as a copy or a
+  hardlink whose other name was removed, reads as public. Creating one through
+  the hook is a denied write into the directory. Forms that beta.9 already
+  missed stay missed: a path attached to a redirection
+  (`cat <key>>/tmp/x`), a glob in a directory component, and an attached short
+  option value (`ssh-keyscan -f<key>`).
+- Denied: clobber and combined redirections now name their real target in
+  every command. `>|<path>`, `2>|<path>`, and `>&<path>` were read as a
+  different path or as a descriptor copy, so `echo x >|<ssh dir>/config` and
+  `echo x >&<enforcement file>` were allowed in beta.9.
+- Denied as production mutation: `fly apps destroy` (also `app`, and `delete`,
+  `remove`, `rm`), `fly destroy`, `fly machine destroy` (also `machines`, `m`,
+  and `remove`, `rm`), `vercel remove`, `rm`, `rollback`, and `promote`, and
+  `railway <group> delete` (also `remove`, `rm`) for service, volume,
+  environment, bucket, functions, template, variable, and project, with the
+  group aliases from `railway --help`, also when group options such as
+  `--project <id>` come before the verb. `flyctl` and `vc` are read as `fly` and
+  `vercel`. `vercel rollback status` and `vercel promote status` stay allowed.
+- Denied as public exposure: `gunicorn -b` or `--bind`, `rails s -b` or
+  `--binding`, `jupyter --ip`, and `php -S` with `0.0.0.0`, `::`, or `[::]`,
+  with or without a port. Loopback addresses stay allowed.
+- Denied as an environment dump: bare `export`, `export -p`, `declare -x`,
+  `declare -p`, `typeset -x`, bare `set`, and `env` with abbreviated long
+  options such as `env --un FOO`. Assignments, `set -e`, `set -- a b`, and
+  `env -i PATH=/usr/bin make` stay allowed.
 
 Linux/Python 3.12+ is the proven platform. Codex, Claude Code, and Cursor have
 installation lifecycles. Native hook trust or restart remains harness-specific.
