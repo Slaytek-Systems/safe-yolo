@@ -390,6 +390,21 @@ class V3DenyOnlyTests(unittest.TestCase):
             }
         )
 
+    def test_quoted_or_escaped_assignment_words_run_as_commands(self):
+        self.assertDecisions(
+            {
+                "'FOO=/bin/rm' -rf build": ("deny", "filesystem.delete"),
+                '"FOO=/bin/rm" -rf build': ("deny", "filesystem.delete"),
+                "FOO\\=/bin/rm -rf build": ("deny", "filesystem.delete"),
+                "F'OO'=/bin/rm -rf build": ("deny", "filesystem.delete"),
+                "FOO='a b' rm -rf build": ("deny", "filesystem.delete"),
+                'FOO="x" sudo ls': ("deny", "privilege.modify"),
+                "FOO=/bin/rm -rf build": ("allow", None),
+                "NODE_ENV=test npm test": ("allow", None),
+                "FOO=1 make": ("allow", None),
+            }
+        )
+
     def test_shred_and_truncate_destroy_content_like_rm(self):
         config = self.root / "codex" / "config.toml"
         key = self.root / "home" / ".ssh" / "id_ed25519"
@@ -450,6 +465,13 @@ class V3DenyOnlyTests(unittest.TestCase):
                 "kubectl apply --dry-run=none -f x.yaml": mutate,
                 "kubectl apply --dry-run=client --dry-run=none -f x.yaml": mutate,
                 "kubectl apply --dry-run -f x.yaml": mutate,
+                "kubectl delete --raw=/api/v1/namespaces/prod/pods/web --dry-run=server": mutate,
+                "kubectl delete --raw=/api/v1/namespaces/prod/pods/web --dry-run=client": mutate,
+                "kubectl delete --raw /api/v1/namespaces/prod/pods/web --dry-run=server": mutate,
+                "kubectl create --raw=/api/v1/namespaces/prod/pods -f pod.json --dry-run=server": mutate,
+                "kubectl create --dry-run=client --raw /api/v1/namespaces/prod/pods -f pod.json": mutate,
+                "kubectl replace --raw=/api/v1/namespaces/prod/pods/web -f pod.json --dry-run=server": mutate,
+                "kubectl replace --raw /api/v1/namespaces/prod/pods/web -f pod.json --dry-run=client": mutate,
                 "railway logs --service deploy": allow,
                 "railway run npm run deploy": allow,
                 "railway deployment list": allow,
