@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import shlex
 from typing import Any, Literal
 
@@ -96,6 +97,39 @@ _GT_FORCE_SUBMIT_FORMS: dict[tuple[str, ...], tuple[tuple[frozenset[str], ...], 
     for command in ((), ("stack",), ("downstack",), ("upstack",))
     for verb in ("submit", "s")
 } | {("ss",): ((_FORCE,),)}
+# Commands that destroy file content, with their value-taking short letters
+# and long options from `<command> --help`. Option values are never targets.
+_CONTENT_DESTROYING_COMMANDS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "rm": ("", ()),
+    "unlink": ("", ()),
+    "rmdir": ("", ()),
+    "shred": ("ns", ("--iterations", "--size", "--random-source")),
+    "truncate": ("rs", ("--reference", "--size")),
+}
+_SED_VALUE_OPTIONS = ("efl", ("--expression", "--file", "--line-length"))
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+# Production CLIs by executable alias, and the command words that mutate.
+# Commands are read at the subcommand position, so arguments never match.
+_PRODUCTION_ALIASES = {"flyctl": "fly", "vc": "vercel"}
+_RAILWAY_MUTATING_COMMANDS = frozenset(
+    {
+        ("up",),
+        ("deploy",),
+        ("redeploy",),
+        ("restart",),
+        ("down",),
+        ("delete",),
+        ("rm",),
+        ("remove",),
+    }
+    | {
+        (group, verb)
+        for group in ("deployment", "deployments")
+        for verb in ("up", "deploy", "redeploy")
+    }
+    | {("service", "redeploy"), ("service", "restart")}
+)
+_KUBECTL_DRY_RUNS = frozenset({"--dry-run=client", "--dry-run=server"})
 _GIT_RESTORE_LONG_OPTIONS = (
     "--source",
     "--staged",
@@ -286,6 +320,16 @@ class ConsequenceKernel:
             tokens = shlex.split(command, posix=True)
         except ValueError:
             return Decision("allow")
+        decision = self._shell_tokens(tokens, cwd)
+        # Bash runs the word after leading NAME=value assignments. That view
+        # only adds denials; it never replaces the decision on the full words.
+        if decision.outcome == "allow" and _ASSIGNMENT.match(command):
+            while tokens and _ASSIGNMENT.match(tokens[0]):
+                tokens = tokens[1:]
+            return self._shell_tokens(tokens, cwd)
+        return decision
+
+    def _shell_tokens(self, tokens: list[str], cwd: Path) -> Decision:
         if not tokens:
             return Decision("allow")
         executable = Path(tokens[0]).name
@@ -323,8 +367,11 @@ class ConsequenceKernel:
                 "credentials.access",
                 "dumping the complete process environment is not available to the agent",
             )
-        if executable in {"rm", "unlink", "rmdir"}:
-            targets = [token for token in tokens[1:] if not token.startswith("-")]
+        if executable in _CONTENT_DESTROYING_COMMANDS:
+            _, operands, after_separator = self._parse_options(
+                tokens[1:], *_CONTENT_DESTROYING_COMMANDS[executable]
+            )
+            targets = operands + after_separator
             resolved = [self._resolve_from(token, cwd) for token in targets]
             if (
                 self.scratch_paths
@@ -455,6 +502,7 @@ class ConsequenceKernel:
             "rm",
             "unlink",
             "rmdir",
+            "shred",
             "chmod",
             "chown",
             "touch",
@@ -474,9 +522,15 @@ class ConsequenceKernel:
         elif executable == "mv":
             targets.extend(positionals)
             targets.extend(destination_flags)
-        elif executable == "sed" and "-i" in args:
+        elif executable == "sed" and cls._sed_in_place(args):
             targets.extend(positionals)
         return tuple(targets)
+
+    @staticmethod
+    def _sed_in_place(args: list[str]) -> bool:
+        options, _, _ = ConsequenceKernel._parse_options(args, *_SED_VALUE_OPTIONS)
+        names = {option.partition("=")[0] for option in options}
+        return "-i" in options or ConsequenceKernel._git_given(("--in-place",), names)
 
     @classmethod
     def _option_values(
@@ -678,12 +732,28 @@ class ConsequenceKernel:
 
     @staticmethod
     def _git_options(args: list[str], subcommand: str) -> set[str]:
-        short_values, long_values = _GIT_VALUE_OPTIONS.get(subcommand, ("", ()))
+        options, operands, _ = ConsequenceKernel._parse_options(
+            args, *_GIT_VALUE_OPTIONS.get(subcommand, ("", ()))
+        )
+        return options | set(operands)
+
+    @staticmethod
+    def _parse_options(
+        args: list[str],
+        short_values: str,
+        long_values: tuple[str, ...],
+    ) -> tuple[set[str], list[str], list[str]]:
+        """Read getopt-style args into options, operands, and operands after --.
+
+        Short clusters end at a value-taking letter. Values of value-taking
+        options are skipped and never read as options or operands.
+        """
         options: set[str] = set()
+        operands: list[str] = []
         tokens = iter(args)
         for token in tokens:
             if token == "--":
-                break
+                return options, operands, list(tokens)
             if token.startswith("--"):
                 options.add(token)
                 if "=" not in token and ConsequenceKernel._git_given(long_values, {token}):
@@ -696,8 +766,8 @@ class ConsequenceKernel:
                             next(tokens, None)
                         break
             else:
-                options.add(token)
-        return options
+                operands.append(token)
+        return options, operands, []
 
     @staticmethod
     def _git_command_args(args: list[str]) -> list[str]:
@@ -791,16 +861,17 @@ class ConsequenceKernel:
     @staticmethod
     def _production_mutation(tokens: list[str]) -> bool:
         executable = Path(tokens[0]).name
+        executable = _PRODUCTION_ALIASES.get(executable, executable)
         args = tokens[1:]
         if executable == "railway":
-            return any(arg in {"up", "deploy"} for arg in args)
+            return ConsequenceKernel._railway_command(args) is not None
         if executable == "fly":
             return bool(args and args[0] in {"deploy", "release"})
         if executable == "vercel":
             return "--prod" in args or "--production" in args
         if executable == "kubectl":
             command = ConsequenceKernel._kubectl_command_args(args)
-            if not command:
+            if not command or ConsequenceKernel._kubectl_dry_run(command):
                 return False
             if command[0] == "rollout":
                 return len(command) >= 2 and command[1] in {
@@ -838,6 +909,43 @@ class ConsequenceKernel:
         return False
 
     @staticmethod
+    def _railway_command(args: list[str]) -> tuple[str, ...] | None:
+        return next(
+            (
+                tuple(args[:length])
+                for length in (2, 1)
+                if tuple(args[:length]) in _RAILWAY_MUTATING_COMMANDS
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _kubectl_dry_run(command: list[str]) -> bool:
+        """kubectl reads the last --dry-run; client and server change nothing.
+
+        --raw sends the request as given and ignores --dry-run.
+
+        A dry run after a spaced option may be that option's value, so it
+        does not count.
+        """
+        given = command[: command.index("--")] if "--" in command else command
+        if any(token == "--raw" or token.startswith("--raw=") for token in given):
+            return False
+        dry_runs = [token for token in given if token.startswith("--dry-run")]
+        spaced_values = {
+            token
+            for previous, token in zip(given, given[1:])
+            if previous.startswith("-")
+            and "=" not in previous
+            and (len(previous) == 2 or previous.startswith("--"))
+        }
+        return (
+            bool(dry_runs)
+            and dry_runs[-1] in _KUBECTL_DRY_RUNS
+            and not spaced_values.intersection(dry_runs)
+        )
+
+    @staticmethod
     def _kubectl_verb(args: list[str]) -> str:
         command = ConsequenceKernel._kubectl_command_args(args)
         return command[0] if command else ""
@@ -847,6 +955,7 @@ class ConsequenceKernel:
         flags_with_values = {
             "--as",
             "--as-group",
+            "--as-uid",
             "--cache-dir",
             "--certificate-authority",
             "--client-certificate",
@@ -866,6 +975,9 @@ class ConsequenceKernel:
             "--token",
             "--user",
             "--username",
+            "-v",
+            "--v",
+            "--vmodule",
         }
         index = 0
         while index < len(args):
@@ -884,10 +996,10 @@ class ConsequenceKernel:
     @staticmethod
     def _production_display(tokens: list[str]) -> str:
         executable = Path(tokens[0]).name
+        executable = _PRODUCTION_ALIASES.get(executable, executable)
         args = tokens[1:]
         if executable == "railway":
-            subcommand = next((arg for arg in args if arg in {"up", "deploy"}), "mutation")
-            return f"railway {subcommand}"
+            return "railway " + " ".join(ConsequenceKernel._railway_command(args) or ("mutation",))
         if executable == "fly":
             return "fly " + (args[0] if args else "mutation")
         if executable == "vercel":

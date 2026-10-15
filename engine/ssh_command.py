@@ -3,31 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-_OPTIONS_WITH_VALUES = {
-    "-B",
-    "-b",
-    "-c",
-    "-D",
-    "-E",
-    "-e",
-    "-F",
-    "-I",
-    "-i",
-    "-J",
-    "-L",
-    "-l",
-    "-m",
-    "-O",
-    "-o",
-    "-P",
-    "-p",
-    "-Q",
-    "-R",
-    "-S",
-    "-W",
-    "-w",
-}
-_ATTACHED_VALUE_OPTIONS = tuple(sorted(_OPTIONS_WITH_VALUES, key=len, reverse=True))
+# Value-taking letters from `ssh` usage. ssh reads options with getopt, so a
+# cluster such as -tp2222 or -tp 2222 ends at the first value-taking letter.
+_VALUE_LETTERS = frozenset("BbcDEeFIiJLlmOoPpQRSWw")
 _ROUTE_FLAGS = {"-F", "-J", "-S", "-l", "-p"}
 _LOCAL_COMMAND_OPTIONS = {"localcommand", "proxycommand", "knownhostscommand"}
 _ROUTE_OPTIONS = {
@@ -94,20 +72,29 @@ def parse_ssh_invocation(args: list[str]) -> SshInvocation:
             remote_tokens = tuple(args[index + 1 :])
             break
 
-        flag, value, consumed = _option_value(args, index)
-        if flag is not None:
-            if value is None:
+        index += 1
+        for position, letter in enumerate(token[1:], start=2):
+            if letter not in _VALUE_LETTERS:
+                if letter in "NGV":
+                    transport_only = True
+                elif letter == "s":
+                    subsystem = True
+                continue
+            flag = "-" + letter
+            if position < len(token):
+                value = token[position:].removeprefix("=")
+            elif index < len(args):
+                value = args[index]
+                index += 1
+            else:
+                value = None
                 malformed = True
                 break
             if flag == "-i":
                 identity_files.append(value)
             elif flag == "-F":
                 opaque_config = True
-            elif flag == "-W":
-                transport_only = True
-            elif flag == "-O":
-                transport_only = True
-            elif flag == "-Q":
+            elif flag in {"-W", "-O", "-Q"}:
                 transport_only = True
             elif flag == "-o":
                 name, option_value = _config_option(value)
@@ -126,15 +113,9 @@ def parse_ssh_invocation(args: list[str]) -> SshInvocation:
                     route_overridden = True
             if flag in _ROUTE_FLAGS:
                 route_overridden = True
-            index += consumed
-            continue
-
-        short_flags = token[1:]
-        if "N" in short_flags or "G" in short_flags or "V" in short_flags:
-            transport_only = True
-        if "s" in short_flags:
-            subsystem = True
-        index += 1
+            break
+        if malformed:
+            break
 
     if remote_tokens and remote_tokens[0] in {"|", "||", "|&", "&&", ";"}:
         remote_tokens = ()
@@ -153,18 +134,6 @@ def parse_ssh_invocation(args: list[str]) -> SshInvocation:
         subsystem=subsystem,
         malformed=malformed or host is None,
     )
-
-
-def _option_value(args: list[str], index: int) -> tuple[str | None, str | None, int]:
-    token = args[index]
-    if token in _OPTIONS_WITH_VALUES:
-        if index + 1 >= len(args):
-            return token, None, 1
-        return token, args[index + 1], 2
-    for flag in _ATTACHED_VALUE_OPTIONS:
-        if token.startswith(flag) and len(token) > len(flag):
-            return flag, token[len(flag) :].removeprefix("="), 1
-    return None, None, 1
 
 
 def _config_option(option: str) -> tuple[str, str]:
