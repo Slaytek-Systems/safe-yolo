@@ -30,7 +30,10 @@ _GIT_DISCARDING_FORMS: dict[tuple[str, ...], tuple[tuple[frozenset[str], ...], .
     ("filter-repo",): ((),),
 }
 _GIT_REF_DELETING_FORMS: dict[tuple[str, ...], tuple[tuple[frozenset[str], ...], ...]] = {
-    ("branch",): ((frozenset({"-D"}),), (frozenset({"-d", "--delete"}), _FORCE)),
+    ("branch",): (
+        (frozenset({"-D", "-M", "-C"}),),
+        (frozenset({"-d", "--delete", "-m", "--move", "-c", "--copy"}), _FORCE),
+    ),
     ("update-ref",): ((frozenset({"-d", "--delete"}),),),
 }
 # Value-taking short letters and long options per subcommand, from
@@ -54,8 +57,45 @@ _GIT_VALUE_OPTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
         ),
     ),
     "update-ref": ("m", ()),
+    "push": ("o", ("--push-option", "--repo", "--receive-pack", "--exec", "--recurse-submodules")),
     "gc": ("", ("--max-cruft-size",)),
 }
+_GIT_PUSH_FORCING = ("-f", "--force", "--force-with-lease", "--mirror", "--prune", "--tags")
+_GIT_PUSH_DELETING = ("-d", "--delete")
+# Global options from `git -h` that take a value, spaced or attached.
+_GIT_VALUE_GLOBALS = (
+    "-C",
+    "-c",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--config-env",
+    "--attr-source",
+)
+_GIT_BOOLEAN_GLOBALS = frozenset(
+    {
+        "--no-pager",
+        "-P",
+        "--paginate",
+        "-p",
+        "--literal-pathspecs",
+        "--no-literal-pathspecs",
+        "--glob-pathspecs",
+        "--noglob-pathspecs",
+        "--icase-pathspecs",
+        "--no-optional-locks",
+        "--no-replace-objects",
+        "--bare",
+        "--exec-path",
+    }
+)
+# Graphite commands from `gt --help` that force push. Plain submit uses
+# --force-with-lease; only an explicit force overwrites the remote branch.
+_GT_FORCE_SUBMIT_FORMS: dict[tuple[str, ...], tuple[tuple[frozenset[str], ...], ...]] = {
+    (*command, verb): ((_FORCE,),)
+    for command in ((), ("stack",), ("downstack",), ("upstack",))
+    for verb in ("submit", "s")
+} | {("ss",): ((_FORCE,),)}
 _GIT_RESTORE_LONG_OPTIONS = (
     "--source",
     "--staged",
@@ -309,6 +349,14 @@ class ConsequenceKernel:
                 "git.delete_ref",
                 self._git_display(git_args),
             )
+        if executable == "gt" and self._git_form_matches(
+            self._gt_command_args(tokens[1:]), _GT_FORCE_SUBMIT_FORMS
+        ):
+            return Decision(
+                "approval_required",
+                "git.history_mutation",
+                "gt submit --force",
+            )
         if self._production_mutation(tokens):
             return Decision(
                 "approval_required",
@@ -552,18 +600,9 @@ class ConsequenceKernel:
         if not args:
             return False
         if args[0] == "push":
-            return any(
-                token in {
-                    "-f",
-                    "--force",
-                    "--force-with-lease",
-                    "--tags",
-                    "--mirror",
-                    "--prune",
-                }
-                or token.startswith("--force-with-lease=")
-                or token.startswith("+")
-                for token in args[1:]
+            options, refspecs = ConsequenceKernel._git_push_parts(args[1:])
+            return ConsequenceKernel._git_given(_GIT_PUSH_FORCING, options) or any(
+                refspec.startswith("+") for refspec in refspecs
             )
         if args[0] == "clean":
             return not any(token in {"-n", "--dry-run"} for token in args[1:])
@@ -586,11 +625,21 @@ class ConsequenceKernel:
             return False
         if args[0] != "push":
             return ConsequenceKernel._git_form_matches(args, _GIT_REF_DELETING_FORMS)
-        return any(
-            token in {"--delete", "-d"}
-            or (token.startswith(":") and len(token) > 1)
-            for token in args[1:]
+        options, refspecs = ConsequenceKernel._git_push_parts(args[1:])
+        return ConsequenceKernel._git_given(_GIT_PUSH_DELETING, options) or any(
+            refspec.startswith(":") and len(refspec) > 1 for refspec in refspecs
         )
+
+    @staticmethod
+    def _git_push_parts(args: list[str]) -> tuple[set[str], list[str]]:
+        """Split push into option names, ignoring their values, and refspecs."""
+        options = ConsequenceKernel._git_options(args, "push")
+        names = {
+            option.partition("=")[0] for option in options if option.startswith("-")
+        }
+        after_separator = args[args.index("--") + 1 :] if "--" in args else []
+        refspecs = [option for option in options if not option.startswith("-")]
+        return names, refspecs + after_separator
 
     @staticmethod
     def _git_form_matches(
@@ -653,29 +702,26 @@ class ConsequenceKernel:
     @staticmethod
     def _git_command_args(args: list[str]) -> list[str]:
         remaining = list(args)
-        boolean_globals = {
-            "--no-pager",
-            "--paginate",
-            "-p",
-            "--literal-pathspecs",
-            "--no-literal-pathspecs",
-            "--glob-pathspecs",
-            "--noglob-pathspecs",
-            "--icase-pathspecs",
-            "--no-optional-locks",
-            "--bare",
-        }
         while remaining:
-            if remaining[0] in {"-C", "-c", "--git-dir", "--work-tree"} and len(remaining) >= 2:
+            token = remaining[0]
+            if token in _GIT_VALUE_GLOBALS and len(remaining) >= 2:
                 remaining = remaining[2:]
                 continue
-            if remaining[0].startswith(("--git-dir=", "--work-tree=")):
-                remaining = remaining[1:]
-                continue
-            if remaining[0] in boolean_globals:
+            name, equals, _ = token.partition("=")
+            attached = token[:2] in {"-C", "-c"} or (
+                equals and (name in _GIT_VALUE_GLOBALS or name == "--exec-path")
+            )
+            if attached or token in _GIT_BOOLEAN_GLOBALS:
                 remaining = remaining[1:]
                 continue
             break
+        return remaining
+
+    @staticmethod
+    def _gt_command_args(args: list[str]) -> list[str]:
+        remaining = list(args)
+        while remaining and remaining[0].startswith("-"):
+            remaining = remaining[2:] if remaining[0] == "--cwd" else remaining[1:]
         return remaining
 
     @staticmethod

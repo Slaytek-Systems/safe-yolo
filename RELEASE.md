@@ -12,6 +12,16 @@ are now denied, and `git restore --staged` is allowed.
   refuses to delete unmerged branches.
 - Allowed: `git restore --staged`, which only changes the index. Restoring the
   working tree stays denied.
+- Denied: forced `git push` written as a short cluster or abbreviation, such as
+  `-fu` or `--forc`. Push option values, such as `-o -f`, are no longer read as
+  flags.
+- Denied as ref deletion or overwrite: `git push -ud` or `--del`, and
+  `git branch -M`, `-C`, `-m -f`, or `-c -f`. Plain `git branch -m` and `-c`
+  stay allowed because Git refuses to overwrite an existing branch.
+- Denied: `gt submit --force` and its aliases. Plain `gt submit` stays allowed
+  because it pushes with a lease.
+- Git global options such as `-P`, `--namespace`, and attached `-C<path>` no
+  longer hide the command that follows them.
 - A denied file deletion now suggests `git rm <path>` without `-f` for tracked
   files. Git keeps the file recoverable and refuses when it has local changes.
 
