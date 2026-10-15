@@ -316,12 +316,22 @@ class ConsequenceKernel:
 
     def _shell(self, command: str, cwd: Path) -> Decision:
         command = self._mask_direct_git_push_heredoc_body(command)
+        lexer = shlex.shlex(command, posix=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens: list[str] = []
+        assigning = True
+        start = 0
         try:
-            tokens = shlex.split(command, posix=True)
+            while (token := lexer.get_token()) is not None:
+                end = lexer.instream.tell()
+                # Bash assigns only when NAME= is unquoted and unescaped.
+                if not (assigning and _ASSIGNMENT.match(command[start:end].lstrip())):
+                    assigning = False
+                    tokens.append(token)
+                start = end
         except ValueError:
             return Decision("allow")
-        while tokens and _ASSIGNMENT.match(tokens[0]):
-            tokens = tokens[1:]
         if not tokens:
             return Decision("allow")
         executable = Path(tokens[0]).name
@@ -915,10 +925,14 @@ class ConsequenceKernel:
     def _kubectl_dry_run(command: list[str]) -> bool:
         """kubectl reads the last --dry-run; client and server change nothing.
 
+        --raw sends the request as given and ignores --dry-run.
+
         A dry run after a spaced option may be that option's value, so it
         does not count.
         """
         given = command[: command.index("--")] if "--" in command else command
+        if any(token == "--raw" or token.startswith("--raw=") for token in given):
+            return False
         dry_runs = [token for token in given if token.startswith("--dry-run")]
         spaced_values = {
             token
