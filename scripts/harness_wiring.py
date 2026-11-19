@@ -51,6 +51,42 @@ def is_safe_yolo_command(command: Any, home: Path, entry: str = "codex_v3") -> b
     return required_flags <= set(values) <= value_flags and values["--entry"] == entry
 
 
+def looks_like_safe_yolo_command(command: Any) -> bool:
+    """Recognise a Safe YOLO bootstrap hook from any installation, release or entry."""
+    if not isinstance(command, str):
+        return False
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    return (
+        len(tokens) >= 2
+        and re.fullmatch(r"python3(\.\d+)?", Path(tokens[0]).name) is not None
+        and Path(tokens[1]).name == "bootstrap.py"
+        and "--entry" in tokens
+        and "--manifest-sha256" in tokens
+    )
+
+
+def _hook_is_safe_yolo(hook: Any) -> bool:
+    return isinstance(hook, dict) and looks_like_safe_yolo_command(hook.get("command"))
+
+
+def without_safe_yolo_groups(groups: Any) -> list[Any]:
+    """Hook groups that hold no Safe YOLO hook, in their original order."""
+    if not isinstance(groups, list):
+        return []
+    return [
+        group
+        for group in groups
+        if not (
+            isinstance(group, dict)
+            and isinstance(group.get("hooks"), list)
+            and any(_hook_is_safe_yolo(hook) for hook in group["hooks"])
+        )
+    ]
+
+
 def prepare_command_hooks(
     path: Path,
     home: Path,
@@ -73,28 +109,27 @@ def prepare_command_hooks(
     if not isinstance(hooks, dict):
         raise RuntimeError(f"{label} hooks field must be an object.")
     existing_pretool = hooks.get("PreToolUse", [])
-    recognized_pretool = (
-        isinstance(existing_pretool, list)
-        and bool(existing_pretool)
-        and all(
-            isinstance(group, dict)
-            and group.get("matcher") == "*"
-            and isinstance(group.get("hooks"), list)
-            and bool(group["hooks"])
-            and all(
-                isinstance(hook, dict)
-                and hook.get("type") == "command"
-                and is_safe_yolo_command(hook.get("command"), home, entry)
-                for hook in group["hooks"]
-            )
-            for group in existing_pretool
-        )
+    refusal = RuntimeError(
+        f"{label} already has an existing PreToolUse entry Safe YOLO cannot keep or replace. "
+        "It must be a list of hook groups, and any Safe YOLO hook in it must be this "
+        "installation's own, alone in a group matched to *."
     )
-    if existing_pretool and not recognized_pretool:
-        raise RuntimeError(
-            f"{label} already has an existing PreToolUse command hook. "
-            "Safe YOLO will not replace a foreign enforcement surface."
-        )
+    if not isinstance(existing_pretool, list):
+        raise refusal
+    others: list[Any] = []
+    for group in existing_pretool:
+        entries = group.get("hooks") if isinstance(group, dict) else None
+        if not isinstance(entries, list):
+            raise refusal
+        if not any(_hook_is_safe_yolo(hook) for hook in entries):
+            others.append(group)
+        elif group.get("matcher") != "*" or not all(
+            isinstance(hook, dict)
+            and hook.get("type") == "command"
+            and is_safe_yolo_command(hook.get("command"), home, entry)
+            for hook in entries
+        ):
+            raise refusal
     if hooks.get("PostToolUse", []):
         raise RuntimeError(f"{label} has a non-empty PostToolUse lifecycle; Safe YOLO will not replace it.")
     hooks["PreToolUse"] = [
@@ -108,7 +143,8 @@ def prepare_command_hooks(
                     "statusMessage": "Checking explicit Safe YOLO restrictions",
                 }
             ],
-        }
+        },
+        *others,
     ]
     if entry == "codex_v3":
         document["description"] = (

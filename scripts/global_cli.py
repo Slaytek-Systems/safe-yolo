@@ -102,9 +102,17 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
         document = json.loads(config.read_text())
         event = 'preToolUse' if harness == 'cursor' else 'PreToolUse'
         original_hooks = original.get('hooks', {})
-        if original_hooks.get(event):
+        if harness == 'cursor':
+            legacy, others = bool(original_hooks.get(event)), []
+        else:
+            from scripts.harness_wiring import without_safe_yolo_groups
+            legacy = without_safe_yolo_groups(original_hooks.get(event)) != (original_hooks.get(event) or [])
+            others = without_safe_yolo_groups(document['hooks'].get(event))
+        if legacy:
             raise RuntimeError('The legacy baseline already contains an enforcement hook; a complete uninstall needs operator review.')
-        if event in original_hooks:
+        if others:
+            document['hooks'][event] = others
+        elif event in original_hooks and not original_hooks[event]:
             document['hooks'][event] = original_hooks[event]
         else:
             document['hooks'].pop(event, None)

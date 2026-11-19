@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from scripts.harness_wiring import looks_like_safe_yolo_command
 from scripts.release_manifest import ENTRYPOINTS, verify_manifest
 
 
@@ -54,9 +55,9 @@ def inspect_codex_wiring(
     except (OSError, json.JSONDecodeError) as error:
         return {"healthy": False, "problems": [*problems, f"hooks unreadable: {type(error).__name__}"]}
     hooks = document.get("hooks", {}) if isinstance(document, dict) else {}
-    pretool = _command_hooks(hooks, "PreToolUse")
+    pretool = _safe_yolo_hooks(hooks, "PreToolUse")
     if len(pretool) != 1:
-        problems.append("exactly one PreToolUse command hook is required")
+        problems.append("exactly one Safe YOLO PreToolUse command hook is required")
     elif pretool[0][0] != "*" or not _command_is_pinned(
         pretool[0][1],
         bootstrap_path=bootstrap_path,
@@ -113,9 +114,9 @@ def inspect_claude_code_wiring(
     if document.get("disableAllHooks"):
         problems.append("disableAllHooks must not be set")
     hooks = document.get("hooks", {})
-    pretool = _command_hooks(hooks, "PreToolUse")
+    pretool = _safe_yolo_hooks(hooks, "PreToolUse")
     if len(pretool) != 1:
-        problems.append("exactly one PreToolUse command hook is required")
+        problems.append("exactly one Safe YOLO PreToolUse command hook is required")
     elif pretool[0][0] not in {"*", ""} or not _command_is_pinned(
         pretool[0][1],
         bootstrap_path=bootstrap_path,
@@ -170,6 +171,14 @@ def _command_hooks(hooks: Any, event: str) -> list[tuple[str, str]]:
             ):
                 found.append((matcher, hook["command"]))
     return found
+
+
+def _safe_yolo_hooks(hooks: Any, event: str) -> list[tuple[str, str]]:
+    return [
+        (matcher, command)
+        for matcher, command in _command_hooks(hooks, event)
+        if looks_like_safe_yolo_command(command)
+    ]
 
 
 def _command_is_pinned(

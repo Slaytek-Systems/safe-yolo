@@ -52,8 +52,9 @@ python3 safe-yolo doctor --all
 ```
 
 Run only the relevant install commands. The installer applies to the selected
-user's global harness configuration across projects. It refuses conflicting
-enforcement hooks. Codex currently requires these existing settings in its
+user's global harness configuration across projects. In Codex and Claude Code
+other tools' `PreToolUse` hooks stay beside Safe YOLO's; Cursor must have no
+other `preToolUse` hook. Codex currently requires these existing settings in its
 `config.toml`; the installer checks them and does not change native permissions:
 
 ```toml
