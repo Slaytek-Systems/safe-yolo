@@ -3,8 +3,10 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from adapters import claude_code_v3, codex_v3
+from engine import broad_search
 from scripts.harness_specs import HARNESSES
 
 
@@ -19,9 +21,8 @@ class BroadSearchTests(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory()
         cls.addClassCleanup(cls.temp.cleanup)
         safe_yolo = Path(cls.temp.name) / "safe-yolo"
-        cls.codex = codex_v3.build_kernel(
-            safe_yolo_home=safe_yolo, codex_home=f"{HOME}/.codex", user_home=HOME
-        )
+        cls.safe_yolo = safe_yolo
+        cls.codex = cls.codex_for(HOME)
         cls.claude = claude_code_v3.build_kernel(
             safe_yolo_home=safe_yolo, claude_home=f"{HOME}/.claude", user_home=HOME
         )
@@ -31,8 +32,12 @@ class BroadSearchTests(unittest.TestCase):
             if line
         ]
 
-    def shell(self, command):
-        return self.codex.evaluate({
+    @classmethod
+    def codex_for(cls, home):
+        return codex_v3.build_kernel(safe_yolo_home=cls.safe_yolo, codex_home=f"{HOME}/.codex", user_home=home)
+
+    def shell(self, command, kernel=None):
+        return (kernel or self.codex).evaluate({
             "hook_event_name": "PreToolUse",
             "cwd": "/workspace",
             "tool_name": "exec_command",
@@ -98,6 +103,41 @@ class BroadSearchTests(unittest.TestCase):
         self.assertEqual("deny", self.shell("grep -r foo /tmp; " + "x" * 1000).outcome)
         self.assertEqual("allow", self.shell("grep -r foo /tmp; " + "x" * 65536).outcome)
 
+    def test_depth_that_is_not_a_short_ascii_number_is_allowed(self):
+        for depth in ("\u00b2", "\u0663", "9" * 4301, "-1", "x"):
+            with self.subTest(depth=depth[:8]):
+                self.assertEqual("allow", self.shell(f"find . -maxdepth {depth} -print").outcome)
+                self.assertEqual("allow", self.shell(f"find / -maxdepth {depth} -print").outcome)
+                self.assertEqual("allow", self.shell(f"find / -mindepth {depth} -prune").outcome)
+
+    def test_recognizer_error_is_no_decision(self):
+        with mock.patch.object(broad_search, "inspect", side_effect=RuntimeError("boom")):
+            self.assertEqual("allow", self.shell("find / -name x").outcome)
+            self.assertEqual("filesystem.delete", self.shell("rm -rf build; grep -r foo /tmp").consequence)
+        self.assertEqual(BROAD, self.shell("find / -name x").consequence)
+
+    def test_unquoted_home_that_the_shell_would_split_or_glob_is_allowed(self):
+        for home in ("/Users/Review User", "/Users/a*b", "/Users/a?b", "/Users/a[b]", "/Users/a\tb"):
+            with self.subTest(home=home):
+                kernel = self.codex_for(home)
+                self.assertEqual("allow", self.shell("grep -r needle $HOME/.cache ./src", kernel).outcome)
+                self.assertEqual("allow", self.shell("rg needle ${HOME}/.cache", kernel).outcome)
+                for command in ('grep -r needle "$HOME/.cache" ./src', "grep -r needle ~/.cache ./src"):
+                    decision = self.shell(command, kernel)
+                    self.assertEqual(("deny", BROAD), (decision.outcome, decision.consequence))
+                    self.assertTrue(decision.display.endswith(f" {home}/.cache"), decision.display)
+
+    def test_home_is_normalised_like_the_path_words(self):
+        for home, root in (("/", "/.local/state"), ("//Users/reviewer", "/Users/reviewer/.local/state"),
+                           ("/Users/reviewer/", "/Users/reviewer/.local/state")):
+            with self.subTest(home=home):
+                kernel = self.codex_for(home)
+                decision = self.shell('grep -rl "5e6d3bdf" ~/.local/state', kernel)
+                self.assertEqual(("deny", BROAD), (decision.outcome, decision.consequence))
+                self.assertTrue(decision.display.endswith(" " + root), decision.display)
+                self.assertEqual(BROAD, self.shell("find ~ -name x", kernel).consequence)
+                self.assertEqual("allow", self.shell("grep -r x ~/.local/state/app", kernel).outcome)
+
     def test_claude_code_bash_is_denied_like_codex(self):
         denied = self.claude_tool("Bash", {"command": 'grep -rl "5e6d3bdf" ~/.local/state'})
         reason = denied["hookSpecificOutput"]["permissionDecisionReason"]
@@ -119,6 +159,8 @@ class BroadSearchTests(unittest.TestCase):
             ("Grep", {"pattern": "x", "path": "/tmp/claude-x"}),
             ("Grep", {"pattern": "x", "path": "."}),
             ("Grep", {"pattern": "x", "path": "~"}),
+            ("Grep", {"pattern": "x", "path": "~/.cache"}),
+            ("Grep", {"pattern": "x", "path": "$HOME/.cache"}),
             ("Grep", {"pattern": "/tmp", "path": "src"}),
             ("Grep", {"pattern": "x", "path": ["/tmp"]}),
             ("Glob", {"pattern": "**/*.md", "path": "/tmp"}),

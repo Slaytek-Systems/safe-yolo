@@ -149,3 +149,13 @@
 {"id": "allow-outside-the-contract-2", "command": "./grep -r foo /tmp", "expected": "allow"}
 {"id": "allow-outside-the-contract-3", "command": "/home/test/project/bin/grep -r needle /tmp", "expected": "allow"}
 {"id": "allow-outside-the-contract-4", "command": "ag foo /tmp", "expected": "allow"}
+{"id": "allow-shallow-prune-1", "command": "find / -mindepth 1 -prune -print", "expected": "allow"}
+{"id": "allow-shallow-prune-2", "command": "find ~ -prune -print", "expected": "allow"}
+{"id": "allow-shallow-prune-3", "command": "find /home -mindepth 3 -prune -o -name x -print", "expected": "allow"}
+{"id": "allow-unknown-depth-1", "command": "find . -maxdepth ² -print", "expected": "allow"}
+{"id": "allow-unknown-depth-2", "command": "find / -maxdepth ² -print", "expected": "allow"}
+{"id": "deny-conditional-prune-1", "command": "find / -name node_modules -prune -o -name x -print", "expected": "deny", "root": "/"}
+{"id": "deny-conditional-prune-2", "command": "find / -mindepth 4 -prune -print", "expected": "deny", "root": "/"}
+{"id": "deny-conditional-prune-3", "command": "find / -depth -mindepth 1 -prune -print", "expected": "deny", "root": "/"}
+{"id": "deny-conditional-prune-4", "command": "find / -mindepth 1 -prune -mindepth 9 -print", "expected": "deny", "root": "/"}
+{"id": "deny-conditional-prune-5", "command": "find / -mindepth 1 -not -prune -print", "expected": "deny", "root": "/"}
