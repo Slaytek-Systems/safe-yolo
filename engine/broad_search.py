@@ -68,6 +68,8 @@ _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 _HOME_VARIABLE = re.compile(r"\$(?:HOME(?![A-Za-z0-9_])|\{HOME\})")
 # The name HOME other than as $HOME or ${HOME}: an assignment, export, unset or read may give it another value.
 _HOME_NAMED = re.compile(r"(?<![$A-Za-z0-9_{])HOME(?![A-Za-z0-9_])")
+# A home holding one of these is split or globbed by the shell when $HOME is not quoted.
+_SPLITS_OR_GLOBS = re.compile(r"[\s*?\[]")
 
 
 class Hit(NamedTuple):
@@ -81,7 +83,8 @@ def _simple_commands(script: str, home: str) -> list[list[str]]:
     Each word is the literal text the shell would pass. A command that holds a
     variable other than $HOME or a substitution is dropped, because one of its
     words is unknown. Where the script names HOME itself, $HOME is unknown too
-    and `~` stays as written. Reading stops at the first heredoc, backtick,
+    and `~` stays as written. An unquoted $HOME is also unknown when the home
+    holds whitespace or a glob character. Reading stops at the first heredoc, backtick,
     unclosed quote, substitution inside double quotes or bracket that is not
     plainly a subshell, so nothing after it is judged.
     """
@@ -90,6 +93,7 @@ def _simple_commands(script: str, home: str) -> list[list[str]]:
     word: list[str] | None = None
     unknown = redirect = False  # the command has an unreadable word; the next word is a redirect target
     home_known = not _HOME_NAMED.search(script)
+    bare_home_known = home_known and not _SPLITS_OR_GLOBS.search(home)
     i, size = 0, len(script)
 
     def add(text: str) -> None:
@@ -177,7 +181,7 @@ def _simple_commands(script: str, home: str) -> list[list[str]]:
             newline = script.find("\n", i)
             i = size if newline < 0 else newline
         elif ch == "$":
-            variable = home_known and _HOME_VARIABLE.match(script, i)
+            variable = bare_home_known and _HOME_VARIABLE.match(script, i)
             unknown = unknown or not variable
             add(home if variable else ch)
             i = variable.end() if variable else i + 1
@@ -240,38 +244,54 @@ def _search_paths(tool: str, args: list[str]) -> list[str]:
 def _find_paths(args: list[str]) -> list[str]:
     """The words a deep find would walk: the ones before its first option or operator.
 
-    None of them when a later `-word` is not in the table or a shallow -maxdepth is given.
+    None of them when a later `-word` is not in the table, a depth is not a
+    short ASCII number, a shallow -maxdepth is given, or the expression opens
+    with `-prune`, alone or after one shallow -mindepth. That -prune is tested
+    on every file from -mindepth down, so the walk stops there, unless -depth
+    turns -prune off.
     """
     start = next((n for n, arg in enumerate(args) if arg.startswith(("-", "(", "!", ","))), len(args))
-    rest = iter(args[start:])
+    expression = args[start:]
+    pruned = expression[2 if expression[:1] == ["-mindepth"] else 0:][:1] == ["-prune"]
+    rest = iter(expression)
     for arg in rest:
         if arg.startswith("-"):
             if arg not in _FIND:
                 return []
             value = next(rest, "") if _FIND[arg] else ""
-            if arg == "-maxdepth" and value.isdigit() and int(value) <= MAX_FIND_DEPTH:
-                return []
-    return args[:start]
+            if arg in ("-maxdepth", "-mindepth"):
+                if not (value.isascii() and value.isdigit() and len(value) <= 9):
+                    return []
+                shallow = int(value) <= MAX_FIND_DEPTH
+                if arg == "-maxdepth" and shallow:
+                    return []
+                pruned = pruned and (arg == "-maxdepth" or shallow)
+            pruned = pruned and arg != "-depth"
+    return [] if pruned else args[:start]
 
 
-def _root_named(words: list[str], roots: set[str]) -> str | None:
+def _normal(path: str) -> str | None:
+    """The one spelling of an absolute path that roots and path words are compared in."""
+    return "/" + os.path.normpath(path).lstrip("/") if path.startswith("/") else None
+
+
+def _root_named(words: list[str], roots: set[str | None]) -> str | None:
     for word in words:
-        if word.startswith("/"):
-            path = "/" + os.path.normpath(word).lstrip("/")
-            if path in roots:
-                return path
+        path = _normal(word)
+        if path and path in roots:
+            return path
     return None
 
 
-def _roots(home: str) -> set[str]:
-    return {*SYSTEM_ROOTS, home} | {f"{home}/{name}" for name in HOME_ROOTS}
+def _roots(home: str) -> set[str | None]:
+    return {*SYSTEM_ROOTS, *(_normal(f"{home}/{name}") for name in ("", *HOME_ROOTS))}
 
 
 def _classify(script: str, home: str) -> Hit | None:
     """The first command in a shell script that names a whole root to search."""
     if len(script) > MAX_SCRIPT or "POSIXLY_CORRECT" in script:  # POSIXLY_CORRECT changes how options are read
         return None
-    walk_roots = {*WALK_ROOTS, home}
+    walk_roots = {*WALK_ROOTS, _normal(home)}
     for words in _simple_commands(script, home):
         start = next((n for n, word in enumerate(words) if word not in _KEYWORDS and not _ASSIGNMENT.match(word)),
                      len(words))

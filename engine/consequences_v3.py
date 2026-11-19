@@ -96,7 +96,10 @@ class DenyOnlyKernel(ConsequenceKernel):
             return Decision("allow")
         if recognized.outcome != "allow":
             return Decision("deny", recognized.consequence, recognized.display)
-        search = broad_search.inspect(payload, self.user_home)
+        try:
+            search = broad_search.inspect(payload, self.user_home)
+        except Exception:  # a recognizer that cannot read the call has no decision to give
+            search = None
         if search:
             return Decision(
                 "deny",

@@ -17,9 +17,11 @@ examples: `grep -rl <text> ~/.local/state` (75 s),
   `.local/share`, `.cache` or a harness folder (`.codex`, `.claude`,
   `.cursor`, `.grok`, `.config/opencode`, `.gemini`, `.devin`).
 - Denied: `find` over `/`, `/home`, `/Users` or the user home, unless it
-  carries `-maxdepth` 3 or less.
+  carries `-maxdepth` 3 or less, or its expression opens with `-prune`, alone
+  or after one `-mindepth` of 3 or less, with no `-depth`.
 - Denied: a native grep tool call, such as Claude Code's Grep, whose `path`
-  is exactly one of the roots above.
+  is an absolute path that is exactly one of the roots above. The tool does
+  no shell expansion, so `~/.cache` there is allowed.
 - The denial names the root and the safer route: list the root with `ls`,
   then search the named subfolder.
 
