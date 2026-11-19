@@ -7,34 +7,41 @@ const TIMEOUT_MS = 10000;
 
 function decide(payload) {
   return new Promise((resolve) => {
+    let child;
+    let timer;
     let settled = false;
+    let out = "";
+    let err = "";
     const finish = (result) => {
       if (!settled) {
         settled = true;
+        clearTimeout(timer);
         resolve(result);
       }
     };
-    let child;
+    // The bootstrap runs the adapter as its own child, so stop the whole process group.
+    const fail = (message) => {
+      if (!settled && child?.pid) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {}
+      }
+      finish({ error: message });
+    };
     try {
-      child = spawn(COMMAND[0], COMMAND.slice(1), { stdio: ["pipe", "pipe", "pipe"] });
+      child = spawn(COMMAND[0], COMMAND.slice(1), { stdio: ["pipe", "pipe", "pipe"], detached: true });
     } catch (error) {
       finish({ error: String(error?.message ?? error) });
       return;
     }
-    let out = "";
-    let err = "";
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      finish({ error: `no decision within ${TIMEOUT_MS} ms` });
-    }, TIMEOUT_MS);
+    timer = setTimeout(() => fail(`no decision within ${TIMEOUT_MS} ms`), TIMEOUT_MS);
+    child.on("error", (error) => fail(String(error?.message ?? error)));
+    for (const name of ["stdin", "stdout", "stderr"]) {
+      child[name].on("error", (error) => fail(`${name}: ${error?.message ?? error}`));
+    }
     child.stdout.on("data", (chunk) => (out += chunk));
     child.stderr.on("data", (chunk) => (err += chunk));
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      finish({ error: String(error?.message ?? error) });
-    });
     child.on("close", (code) => {
-      clearTimeout(timer);
       if (code !== 0) {
         finish({ error: `exit ${code}${err ? `: ${err.trim().slice(0, 300)}` : ""}` });
         return;
@@ -48,7 +55,6 @@ function decide(payload) {
       } catch {}
       finish({ error: "adapter returned no decision" });
     });
-    child.stdin.on("error", () => {});
     child.stdin.end(JSON.stringify(payload));
   });
 }
