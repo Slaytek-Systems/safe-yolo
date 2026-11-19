@@ -124,8 +124,9 @@ Rollback restores the previous installed runtime and hook pin. Uninstall removes
 the integrations installed by this lifecycle, retaining unrelated settings.
 Use `--harness cursor` (or another supported ID) to act on just one integration.
 Both refuse to overwrite configuration changed since the last installation;
-only a successful update to a different version accepts such an edit as the
-new baseline. Installations whose first-found configuration already held a
+a successful update to a different version takes such an edit as its rollback
+snapshot. Nothing locks the file, so do not save harness settings while one of
+these commands runs. Installations whose first-found configuration already held a
 Safe YOLO hook (or, in Cursor, any `preToolUse` hook) require operator review
 for complete removal. Restart the affected harness afterward.
 

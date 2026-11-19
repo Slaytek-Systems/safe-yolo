@@ -55,7 +55,7 @@ def inspect_codex_wiring(
     except (OSError, json.JSONDecodeError) as error:
         return {"healthy": False, "problems": [*problems, f"hooks unreadable: {type(error).__name__}"]}
     hooks = document.get("hooks", {}) if isinstance(document, dict) else {}
-    pretool = _safe_yolo_hooks(hooks, "PreToolUse", bootstrap_path)
+    pretool = _safe_yolo_hooks(hooks, "PreToolUse")
     if len(pretool) != 1:
         problems.append("exactly one Safe YOLO PreToolUse command hook is required")
     elif pretool[0][0] != "*" or not _command_is_pinned(
@@ -114,7 +114,7 @@ def inspect_claude_code_wiring(
     if document.get("disableAllHooks"):
         problems.append("disableAllHooks must not be set")
     hooks = document.get("hooks", {})
-    pretool = _safe_yolo_hooks(hooks, "PreToolUse", bootstrap_path)
+    pretool = _safe_yolo_hooks(hooks, "PreToolUse")
     if len(pretool) != 1:
         problems.append("exactly one Safe YOLO PreToolUse command hook is required")
     elif pretool[0][0] not in {"*", ""} or not _command_is_pinned(
@@ -173,7 +173,7 @@ def _command_hooks(hooks: Any, event: str) -> list[tuple[str, str]]:
     return found
 
 
-def _safe_yolo_hooks(hooks: Any, event: str, legacy_bootstrap: str | Path) -> list[tuple[str, str]]:
+def _safe_yolo_hooks(hooks: Any, event: str) -> list[tuple[str, str]]:
     groups = hooks.get(event, []) if isinstance(hooks, dict) else []
     if not isinstance(groups, list):
         return []
@@ -182,7 +182,7 @@ def _safe_yolo_hooks(hooks: Any, event: str, legacy_bootstrap: str | Path) -> li
         for group in groups
         if isinstance(group, dict) and isinstance(group.get("hooks"), list)
         for hook in group["hooks"]
-        if is_safe_yolo_hook(hook, Path(legacy_bootstrap))
+        if is_safe_yolo_hook(hook)
     ]
 
 

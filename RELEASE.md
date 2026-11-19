@@ -12,23 +12,28 @@ intact.
 - First install appends Safe YOLO's group after the existing `PreToolUse`
   groups. Update replaces Safe YOLO's one hook where it stands. No other hook
   changes position, because Codex records hook trust by position.
-- Doctor requires exactly one Safe YOLO `PreToolUse` hook, in a group matched
-  to `*` and pinned to the installed release. Other owners' hooks are not
-  counted.
-- Uninstall removes Safe YOLO's hook and leaves every other hook. In Codex, a
-  group it empties ahead of another owner's group stays as an empty group. It
-  keeps the file's current permissions, restores the Codex `description` only
-  when the installer's own text is still there, and refuses when the file
-  changes while it works.
+- Doctor requires exactly one Safe YOLO `PreToolUse` hook, pinned to the
+  installed release. Install always writes its group with matcher `*`. Doctor
+  accepts `*` in Codex and `*` or an empty matcher in Claude Code. Other
+  owners' hooks are not counted.
+- Uninstall removes Safe YOLO's hook and leaves every other hook, including
+  groups that were already empty. In Codex, a group it empties ahead of
+  another group stays as an empty group, and uninstall refuses when another
+  hook follows Safe YOLO's inside the same group, because removing it would
+  move that hook. Uninstall keeps the file's current permissions and restores
+  the Codex `description` only when the installer's own text is still there.
+- Uninstall stages the new file, then compares the live file with what it
+  read, then renames. A save that lands before the comparison is refused. A
+  save by another program between the comparison and the rename is still
+  lost; nothing locks the file.
 - Update accepts a receipt from before the release-pinned bootstrap.
-- Still refused: a `PreToolUse` value that is not a list of hook groups, more
-  than one Safe YOLO hook, a Safe YOLO hook this installation did not write
-  (another home or entry, or a pin split across `command` and `args`), and a
-  Safe YOLO hook in a group not matched to `*`.
-- Still refused at install: any non-empty `PostToolUse` list, in Codex and
-  Claude Code.
-- Uninstall still needs operator review when the file as first found already
-  held a Safe YOLO hook.
+- Still refused at install: a `PreToolUse` value that is not a list of
+  well-formed hook groups, more than one Safe YOLO hook, a Safe YOLO hook this
+  installation did not write (another home or entry, or a pin split across
+  `command` and `args`), a Safe YOLO hook in a group not matched to `*`, and
+  any non-empty `PostToolUse` list.
+- Uninstall still needs operator review when the file as first found, before
+  the first install, already held a Safe YOLO hook.
 
 Limits. Both harnesses run matching hooks concurrently. Claude Code documents
 that a deny outranks every other decision. Codex's source lets any block win
@@ -38,8 +43,9 @@ rewritten input. Safe YOLO is backpressure, not a boundary against other
 same-user configuration. Cursor is unchanged and still requires Safe YOLO to
 be its only `preToolUse` hook. Doctor still reports any later edit to the
 harness file as "configuration changed after activation". Deactivate, rollback
-and uninstall refuse after such an edit; only a successful update to a
-different version records the edited file as the new baseline.
+and uninstall refuse after such an edit. A successful update to a different
+version takes the edited file as its rollback snapshot; uninstall still
+compares against the file as first found.
 
 Linux/Python 3.12+ is the proven platform. Codex, Claude Code, and Cursor have
 installation lifecycles. Native hook trust or restart remains harness-specific.

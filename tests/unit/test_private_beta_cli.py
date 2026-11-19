@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 import shlex
 import shutil
@@ -146,26 +147,39 @@ class PrivateBetaCliTests(unittest.TestCase):
         return restore(self.safe_yolo_home, self.user_home, "codex", uninstall=True)
 
     @patch("scripts.distribute.verify_source", return_value="b" * 40)
-    def test_install_appends_its_hook_after_another_owners(self, _verify):
+    def test_install_appends_its_hook_and_uninstall_restores_the_other_owners_groups(self, _verify):
         other = {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo other"}]}
-        unrelated_bootstrap = {
+        unrelated_bootstraps = {
             "matcher": "*",
-            "hooks": [{"type": "command", "command": "python3 /opt/tool/bootstrap.py --entry web --manifest-sha256 x"}],
+            "hooks": [
+                {"type": "command", "command": "python3 /opt/tool/bootstrap.py --entry web --manifest-sha256 x"},
+                {
+                    "type": "command",
+                    "command": "python3 /opt/tool/releases/1/scripts/bootstrap.py --release /opt/tool/releases/1 "
+                    "--manifest-sha256 x --entry audit",
+                },
+            ],
         }
-        self.hooks.write_text(json.dumps({"hooks": {"PreToolUse": [other, unrelated_bootstrap]}}) + "\n")
+        empty = {"matcher": "Bash", "hooks": []}
+        before = [other, unrelated_bootstraps, empty]
+        self.hooks.write_text(json.dumps({"hooks": {"PreToolUse": before}}) + "\n")
         original_bytes = self.hooks.read_bytes()
         self.install()
         groups = self.pretool()
-        self.assertEqual([other, unrelated_bootstrap], groups[:2])
-        self.assertEqual("*", groups[2]["matcher"])
-        self.assertIn("--entry codex_v3", groups[2]["hooks"][0]["command"])
+        self.assertEqual(before, groups[:3])
+        self.assertEqual("*", groups[3]["matcher"])
+        self.assertIn("--entry codex_v3", groups[3]["hooks"][0]["command"])
         report = doctor_codex(safe_yolo_home=self.safe_yolo_home, codex_home=self.codex_home)
         self.assertTrue(report["healthy"], report)
+        self.uninstall()
+        self.assertEqual(before, self.pretool())
+        self.install("3.0.0-beta.3")
         deactivate_codex(safe_yolo_home=self.safe_yolo_home, codex_home=self.codex_home)
-        self.assertEqual(original_bytes, self.hooks.read_bytes())
+        self.assertEqual(before, self.pretool())
+        self.assertNotEqual(b"", original_bytes)
 
     @patch("scripts.distribute.verify_source", return_value="b" * 40)
-    def test_update_replaces_its_hook_in_place_and_uninstall_moves_no_other_hook(self, _verify):
+    def test_update_replaces_its_hook_in_place_beside_a_hook_sharing_its_group(self, _verify):
         self.install()
         document = json.loads(self.hooks.read_text())
         sibling = {"type": "command", "command": "echo sibling"}
@@ -174,7 +188,6 @@ class PrivateBetaCliTests(unittest.TestCase):
         document["hooks"]["PreToolUse"].append(later)
         document["description"] = "mine"
         self.hooks.write_text(json.dumps(document))
-        self.hooks.chmod(0o600)
 
         self.install("3.0.0-beta.3")
 
@@ -187,38 +200,48 @@ class PrivateBetaCliTests(unittest.TestCase):
         report = doctor_codex(safe_yolo_home=self.safe_yolo_home, codex_home=self.codex_home)
         self.assertTrue(report["healthy"], report)
 
-        self.uninstall()
-
-        self.assertEqual(
-            {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [sibling]}, later]}, "description": "mine"},
-            json.loads(self.hooks.read_text()),
-        )
-        self.assertEqual(0o600, self.hooks.stat().st_mode & 0o777)
+        updated_bytes = self.hooks.read_bytes()
+        with self.assertRaisesRegex(RuntimeError, "would move it"):
+            self.uninstall()
+        self.assertEqual(updated_bytes, self.hooks.read_bytes())
 
     @patch("scripts.distribute.verify_source", return_value="b" * 40)
-    def test_uninstall_keeps_an_emptied_group_ahead_of_another_owners_hook(self, _verify):
+    def test_uninstall_moves_no_later_hook_and_keeps_tightened_permissions(self, _verify):
+        self.hooks.write_text('{"hooks": {}, "description": "mine"}\n')
+        self.hooks.chmod(0o644)
         self.install()
         later = {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo later"}]}
         document = json.loads(self.hooks.read_text())
         document["hooks"]["PreToolUse"].append(later)
         self.hooks.write_text(json.dumps(document))
+        self.hooks.chmod(0o600)
         self.install("3.0.0-beta.3")
         self.uninstall()
-        self.assertEqual([{"matcher": "*", "hooks": []}, later], self.pretool())
+        self.assertEqual(
+            {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": []}, later]}, "description": "mine"},
+            json.loads(self.hooks.read_text()),
+        )
+        self.assertEqual(0o600, self.hooks.stat().st_mode & 0o777)
 
     @patch("scripts.distribute.verify_source", return_value="b" * 40)
-    def test_uninstall_refuses_when_the_file_changes_under_it(self, _verify):
+    def test_uninstall_refuses_when_the_file_is_saved_while_it_stages_the_new_one(self, _verify):
+        self.hooks.write_text('{"hooks": {}, "mine": true}\n')
         self.install()
         newer = b'{"hooks": {"PreToolUse": [], "SessionStart": []}}\n'
+        real_fsync = os.fsync
+        saved = []
 
-        def concurrent_save(groups, *args, **kwargs):
-            self.hooks.write_bytes(newer)
-            return []
+        def save_once(descriptor):
+            if not saved:
+                saved.append(True)
+                self.hooks.write_bytes(newer)
+            real_fsync(descriptor)
 
-        with patch("scripts.harness_wiring.remove_safe_yolo_hooks", side_effect=concurrent_save):
+        with patch("scripts.global_cli.os.fsync", side_effect=save_once):
             with self.assertRaisesRegex(RuntimeError, "refusing to overwrite newer work"):
                 self.uninstall()
         self.assertEqual(newer, self.hooks.read_bytes())
+        self.assertEqual([self.hooks.name], [path.name for path in self.codex_home.iterdir() if "hooks" in path.name])
 
     @patch("scripts.distribute.verify_source", return_value="b" * 40)
     def test_install_refuses_a_safe_yolo_hook_it_did_not_write(self, _verify):
@@ -226,14 +249,25 @@ class PrivateBetaCliTests(unittest.TestCase):
             "/usr/bin/python3 /srv/other/.safe-yolo/releases/9/scripts/bootstrap.py --release "
             "/srv/other/.safe-yolo/releases/9 --manifest-sha256 abc --entry codex_v3 --state-dir /srv/other/state"
         )
-        split = {
-            "type": "command",
-            "command": "/usr/bin/python3",
-            "args": elsewhere.split()[1:],
-        }
-        for hook in ({"type": "command", "command": elsewhere}, split):
+        legacy_elsewhere = elsewhere.replace("/releases/9/scripts/bootstrap.py", "/bootstrap.py")
+        for hook in (
+            {"type": "command", "command": elsewhere},
+            {"type": "command", "command": legacy_elsewhere},
+            {"type": "command", "command": "/usr/bin/python3", "args": elsewhere.split()[1:]},
+            {"type": "command", "command": "/opt/my tools/python3", "args": elsewhere.split()[1:]},
+        ):
             with self.subTest(hook=hook):
                 self.hooks.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [hook]}]}}))
+                original_bytes = self.hooks.read_bytes()
+                with self.assertRaisesRegex(RuntimeError, "existing PreToolUse"):
+                    self.install()
+                self.assertEqual(original_bytes, self.hooks.read_bytes())
+
+    @patch("scripts.distribute.verify_source", return_value="b" * 40)
+    def test_install_refuses_a_hook_declaration_the_harness_cannot_load(self, _verify):
+        for hook in ({"type": "command", "cmd": "echo other"}, {"command": "echo other"}, "echo other"):
+            with self.subTest(hook=hook):
+                self.hooks.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [hook]}]}}))
                 original_bytes = self.hooks.read_bytes()
                 with self.assertRaisesRegex(RuntimeError, "existing PreToolUse"):
                     self.install()
@@ -243,8 +277,12 @@ class PrivateBetaCliTests(unittest.TestCase):
     def test_doctor_reports_a_second_safe_yolo_pretool_hook(self, _verify):
         self.install()
         own = self.pretool()[0]["hooks"][0]
-        for extra in (dict(own), {"type": "command", "command": own["command"].split()[0],
-                                  "args": shlex.split(own["command"])[1:]}):
+        arguments = shlex.split(own["command"])[1:]
+        for extra in (
+            dict(own),
+            {"type": "command", "command": "/usr/bin/python3", "args": arguments},
+            {"type": "command", "command": "/opt/my tools/python3", "args": arguments},
+        ):
             with self.subTest(extra=extra):
                 document = json.loads(self.hooks.read_text())
                 document["hooks"]["PreToolUse"] = [{"matcher": "*", "hooks": [own]}, {"matcher": "*", "hooks": [extra]}]

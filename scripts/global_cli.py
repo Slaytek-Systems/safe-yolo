@@ -87,6 +87,29 @@ def active_receipts(home: Path) -> list[dict[str, Any]]:
             for receipt, _ in [_read_harness_receipt(home, spec)] if receipt.get('status') == 'active']
 
 
+def _replace_if_unchanged(config: Path, expected: bytes, payload: bytes) -> None:
+    """Swap in `payload` only while `config` still holds `expected`.
+
+    The new file is fully staged first, so the comparison is the last step before
+    the rename. A save by another program between those two steps is still lost.
+    """
+    mode = config.stat().st_mode & 0o777
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f'.{config.name}.', dir=config.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, 'wb') as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, mode)
+        if config.is_symlink() or not config.is_file() or config.read_bytes() != expected:
+            raise RuntimeError('Harness configuration changed; refusing to overwrite newer work.')
+        os.replace(temporary, config)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
 def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[str, Any]:
     from scripts.distribute import _atomic_write, _read_harness_receipt, _sha256, _spec
     receipt, path = _read_harness_receipt(home, _spec(harness))
@@ -108,9 +131,8 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
             legacy, others = bool(original_hooks.get(event)), []
         else:
             from scripts.harness_wiring import remove_safe_yolo_hooks, safe_yolo_hook_slots
-            legacy = bool(safe_yolo_hook_slots(original_hooks.get(event), home / 'bootstrap.py'))
-            others = remove_safe_yolo_hooks(document['hooks'].get(event, []), home / 'bootstrap.py',
-                                            keep_positions=harness == 'codex')
+            legacy = bool(safe_yolo_hook_slots(original_hooks.get(event)))
+            others = remove_safe_yolo_hooks(document['hooks'].get(event, []), keep_positions=harness == 'codex')
         if legacy:
             raise RuntimeError('The legacy baseline already contains an enforcement hook; a complete uninstall needs operator review.')
         if others:
@@ -133,15 +155,15 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
                     document['description'] = original['description']
                 else:
                     document.pop('description')
-        if config.is_symlink() or not config.is_file() or config.read_bytes() != current_bytes:
-            raise RuntimeError('Harness configuration changed; refusing to overwrite newer work.')
         if not document and original_bytes is None:
             from datetime import datetime, UTC
+            if config.is_symlink() or not config.is_file() or config.read_bytes() != current_bytes:
+                raise RuntimeError('Harness configuration changed; refusing to overwrite newer work.')
             retained = home / 'backups' / ('uninstalled-' + harness + '-' + datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ'))
             os.replace(config, retained)
         else:
             payload = original_bytes if document == original and original_bytes is not None else (json.dumps(document, indent=2) + '\n').encode()
-            _atomic_write(config, payload, config.stat().st_mode & 0o777)
+            _replace_if_unchanged(config, current_bytes, payload)
         receipt['status'] = 'inactive'
         _atomic_write(path, (json.dumps(receipt, indent=2) + '\n').encode())
         return {'status': 'inactive', 'harness': harness, 'next_action': 'Restart the harness to unload Safe YOLO.'}
