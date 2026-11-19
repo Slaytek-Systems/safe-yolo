@@ -1,9 +1,11 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from adapters.opencode_v3 import build_kernel, handle, normalize_payload
 from scripts.install import install_release
@@ -111,6 +113,36 @@ class OpenCodeV3AdapterTests(unittest.TestCase):
                 denied = handle(self.payload("read", {"filePath": str(path)}), self.kernel)
                 self.assertEqual("deny", denied["decision"])
                 self.assertEqual("credentials.access", denied["policy_id"])
+
+    def test_v2_credential_database_and_its_sidecars_are_denied(self):
+        default_data = self.root / "home" / ".local" / "share" / "opencode"
+        xdg_data = self.root / "xdg-data" / "opencode"
+        cases = (
+            ({}, default_data / "opencode.db"),
+            ({"XDG_DATA_HOME": str(self.root / "xdg-data")}, xdg_data / "opencode.db"),
+            ({"XDG_DATA_HOME": str(self.root / "xdg-data"), "OPENCODE_DB": "custom.db"}, xdg_data / "custom.db"),
+            ({"OPENCODE_DB": str(self.root / "elsewhere" / "chosen.db")}, self.root / "elsewhere" / "chosen.db"),
+        )
+        for environment, database in cases:
+            with self.subTest(environment=environment), patch.dict(os.environ, environment):
+                for name in ("XDG_DATA_HOME", "OPENCODE_DB"):
+                    if name not in environment:
+                        os.environ.pop(name, None)
+                kernel = build_kernel(
+                    safe_yolo_home=self.root / "safe-yolo",
+                    opencode_config=self.root / "config" / "opencode",
+                    user_home=self.root / "home",
+                    cwd=self.project,
+                )
+                for suffix in ("", "-wal", "-shm", "-journal"):
+                    path = Path(f"{database}{suffix}")
+                    denied = handle(self.payload("read", {"filePath": str(path)}), kernel)
+                    self.assertEqual("credentials.access", denied["policy_id"], path)
+                    shell = handle(self.payload("bash", {"command": f"sqlite3 {path} .dump"}), kernel)
+                    self.assertEqual("deny", shell["decision"], path)
+                nearby = database.parent / "log" / "opencode.log"
+                allowed = handle(self.payload("read", {"filePath": str(nearby)}), kernel)
+                self.assertEqual("allow", allowed["decision"], nearby)
 
     def test_normalization_maps_opencode_tools(self):
         bash = normalize_payload(self.payload("bash", {"command": "npm test"}))

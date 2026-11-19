@@ -1,9 +1,12 @@
 import json
+import os
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
-from scripts.publish import publish
+from scripts.package import build_bundle
+from scripts.publish import ROOT, acceptance, publish
 
 
 class PublicationTests(unittest.TestCase):
@@ -54,6 +57,28 @@ class PublicationTests(unittest.TestCase):
         self.assertIn('--verify-tag', command)
         self.assertIn('--prerelease', command)
         self.assertNotIn('--clobber', command)
+
+
+class AcceptanceIsolationTests(unittest.TestCase):
+    @patch('scripts.package.verify_source', return_value='a' * 40)
+    def test_check_never_touches_the_callers_home_or_runs_their_opencode(self, _verify):
+        revision = 'a' * 40
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / 'caller-home'
+            home.mkdir()
+            host_bin = root / 'host-bin'
+            host_bin.mkdir()
+            host_opencode = host_bin / 'opencode'
+            host_opencode.write_text('#!/bin/sh\nmkdir -p "$HOME/.local/share/opencode"\necho 1.19.6\n')
+            host_opencode.chmod(0o755)
+            archive = build_bundle(ROOT, root / 'bundle', revision)
+            caller = {'HOME': str(home), 'PATH': os.pathsep.join([str(host_bin), '/usr/bin', '/bin']),
+                      'XDG_CONFIG_HOME': str(home / '.config'), 'OPENCODE_CONFIG_DIR': str(home / 'oc')}
+            with patch.dict('os.environ', caller):
+                acceptance(archive, revision)
+
+            self.assertEqual([], list(home.iterdir()))
 
 
 if __name__ == '__main__':

@@ -1,7 +1,10 @@
+from contextlib import redirect_stderr, redirect_stdout
 import errno
+import io
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -10,7 +13,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from scripts.distribute import deactivate_harness, doctor_harness, harness_catalog, install_harness
+from scripts.distribute import deactivate_harness, doctor_harness, harness_catalog, install_harness, main
 from scripts.global_cli import restore
 from scripts.package import MANIFEST, build_bundle, digest
 
@@ -150,10 +153,17 @@ class OpenCodeLifecycleTests(unittest.TestCase):
     def receipt(self):
         return json.loads((self.safe_yolo_home / "state" / "installations" / "opencode.json").read_text())
 
-    def opencode_on_path(self, version: str):
+    def opencode_on_path(self, output: str):
         stub = self.bin / "opencode"
-        stub.write_text(f"#!/bin/sh\necho 'opencode {version}'\n")
+        stub.write_text(f"#!/bin/sh\nprintf '%s' {shlex.quote(output)}\n")
         stub.chmod(0o755)
+
+    def uninstall(self):
+        return restore(self.safe_yolo_home.resolve(), self.user_home, "opencode", uninstall=True)
+
+    def retained_copies(self):
+        backups = self.safe_yolo_home / "backups"
+        return sorted(path for path in backups.rglob("*safe-yolo.js") if path.is_file()) if backups.exists() else []
 
     def doctor(self):
         return doctor_harness(
@@ -318,7 +328,7 @@ class OpenCodeLifecycleTests(unittest.TestCase):
         self.assertEqual(edited, self.plugin.read_bytes())
 
     def test_install_refuses_an_opencode_v1_binary_and_keeps_its_plugin(self):
-        self.opencode_on_path("1.14.2")
+        self.opencode_on_path("1.14.2\n")
         self.plugin.write_bytes(V1_PLUGIN)
 
         with self.assertRaisesRegex(RuntimeError, "OpenCode 1.14.2 .*V2"):
@@ -327,7 +337,7 @@ class OpenCodeLifecycleTests(unittest.TestCase):
         self.assertEqual(V1_PLUGIN, self.plugin.read_bytes())
 
     def test_install_with_a_v2_binary_says_runtime_loading_is_unverified(self):
-        self.opencode_on_path("v2.3.2")
+        self.opencode_on_path("opencode v2.3.2\n")
 
         receipt = self.install()
 
@@ -335,17 +345,16 @@ class OpenCodeLifecycleTests(unittest.TestCase):
         self.assertIn("opencode api plugin.list", receipt["next_action"])
         self.assertIn("cannot prove", self.doctor()["activation_check"])
 
-    def test_uninstall_and_deactivate_retire_the_plugin_across_filesystems(self):
+    def test_uninstall_and_deactivate_never_rename_the_plugin_out_of_its_folder(self):
         real_replace = os.replace
-        backups = self.safe_yolo_home.resolve() / "backups"
 
         def replace_across_mounts(source, destination):
-            if Path(source).parent == self.plugins.resolve() and Path(destination).is_relative_to(backups):
+            if Path(source).parent == self.plugins.resolve() and Path(destination).parent != self.plugins.resolve():
                 raise OSError(errno.EXDEV, "Invalid cross-device link")
             return real_replace(source, destination)
 
         for name, remove in (
-            ("uninstall", lambda: restore(self.safe_yolo_home.resolve(), self.user_home, "opencode", uninstall=True)),
+            ("uninstall", self.uninstall),
             ("deactivate", lambda: deactivate_harness(
                 harness="opencode", safe_yolo_home=self.safe_yolo_home, user_home=self.user_home)),
         ):
@@ -361,7 +370,115 @@ class OpenCodeLifecycleTests(unittest.TestCase):
                 self.assertEqual(installed, Path(retained).read_bytes())
                 self.assertEqual(OTHER_PLUGIN, self.other.read_bytes())
 
-    def test_uninstall_resumes_after_the_receipt_write_fails(self):
+    def test_failed_fresh_install_across_filesystems_leaves_no_plugin(self):
+        real_replace = os.replace
+
+        def replace_across_mounts(source, destination):
+            if Path(source).parent == self.plugins.resolve() and Path(destination).parent != self.plugins.resolve():
+                raise OSError(errno.EXDEV, "Invalid cross-device link")
+            return real_replace(source, destination)
+
+        with patch("os.replace", replace_across_mounts), \
+                patch("scripts.distribute._run_canaries", return_value={"allow": True, "deny": False}):
+            with self.assertRaisesRegex(RuntimeError, "activation failed"):
+                self.install()
+
+        self.assertFalse(self.plugin.exists())
+        self.assertFalse((self.safe_yolo_home / "state" / "installations" / "opencode.json").exists())
+        self.assertEqual(OTHER_PLUGIN, self.other.read_bytes())
+        self.assertEqual(1, len(self.retained_copies()))
+
+    def test_uninstall_says_how_to_confirm_removal(self):
+        self.install()
+
+        self.assert_removal_guidance(self.uninstall())
+
+    def assert_removal_guidance(self, result):
+        self.assertEqual("inactive", result["status"])
+        self.assertIn("restart", result["next_action"].lower())
+        self.assertIn("absent", result["next_action"])
+        self.assertIn(str(self.plugins.resolve()), result["next_action"])
+        self.assertNotIn("`active`", result["next_action"])
+        self.assertNotIn("is denied", result["next_action"])
+
+    def test_uninstall_interrupted_after_removal_reports_missing_then_finishes(self):
+        self.install()
+        installed = self.plugin.read_bytes()
+        import scripts.distribute as distribute
+        real_write = distribute._atomic_write
+        receipt_path = self.safe_yolo_home.resolve() / "state" / "installations" / "opencode.json"
+
+        def fail_inactive_receipt(path, payload, mode=0o600):
+            if Path(path) == receipt_path and b'"inactive"' in payload:
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return real_write(path, payload, mode)
+
+        with patch("scripts.distribute._atomic_write", fail_inactive_receipt):
+            with self.assertRaises(OSError):
+                self.uninstall()
+
+        self.assertFalse(self.plugin.exists())
+        self.assertEqual("active", self.receipt()["status"])
+        report = self.doctor()
+        self.assertFalse(report["healthy"])
+        self.assertIn("installed harness configuration is missing", report["problems"])
+
+        result = self.uninstall()
+
+        self.assert_removal_guidance(result)
+        self.assertEqual("inactive", self.receipt()["status"])
+        self.assertEqual([Path(self.receipt()["uninstalled_config_backup"])], self.retained_copies())
+        self.assertEqual(installed, Path(self.receipt()["uninstalled_config_backup"]).read_bytes())
+
+    def test_uninstall_interrupted_before_removal_leaves_a_working_install_and_finishes(self):
+        self.install()
+        real_unlink = Path.unlink
+
+        def fail_plugin_unlink(path, *args, **kwargs):
+            if path == self.plugin.resolve():
+                raise OSError(errno.EACCES, "Permission denied")
+            return real_unlink(path, *args, **kwargs)
+
+        with patch.object(Path, "unlink", fail_plugin_unlink):
+            with self.assertRaises(OSError):
+                self.uninstall()
+
+        self.assertTrue(self.doctor()["healthy"])
+        self.assertEqual("active", self.receipt()["status"])
+
+        self.assert_removal_guidance(self.uninstall())
+        self.assertFalse(self.plugin.exists())
+        self.assertEqual(1, len(self.retained_copies()))
+
+    def test_uninstall_refuses_a_plugin_edited_while_it_is_copied(self):
+        self.install()
+        import scripts.distribute as distribute
+        real_write = distribute._atomic_write
+        edited = self.plugin.read_bytes() + b"// edited\n"
+
+        def edit_during_copy(path, payload, mode=0o600):
+            result = real_write(path, payload, mode)
+            if Path(path).is_relative_to(self.safe_yolo_home.resolve() / "backups"):
+                self.plugin.write_bytes(edited)
+            return result
+
+        with patch("scripts.distribute._atomic_write", edit_during_copy):
+            with self.assertRaisesRegex(RuntimeError, "changed"):
+                self.uninstall()
+
+        self.assertEqual(edited, self.plugin.read_bytes())
+        self.assertEqual("active", self.receipt()["status"])
+
+    def test_uninstall_without_plugin_or_verified_copy_refuses(self):
+        self.install()
+        self.plugin.unlink()
+
+        with self.assertRaisesRegex(RuntimeError, "no verified copy"):
+            self.uninstall()
+
+        self.assertEqual("active", self.receipt()["status"])
+
+    def test_resumed_uninstall_refuses_a_tampered_copy_or_a_symlinked_plugins_folder(self):
         self.install()
         import scripts.distribute as distribute
         real_write = distribute._atomic_write
@@ -374,16 +491,84 @@ class OpenCodeLifecycleTests(unittest.TestCase):
 
         with patch("scripts.distribute._atomic_write", fail_inactive_receipt):
             with self.assertRaises(OSError):
-                restore(self.safe_yolo_home.resolve(), self.user_home, "opencode", uninstall=True)
+                self.uninstall()
+        (copy,) = self.retained_copies()
+        verified = copy.read_bytes()
 
-        result = restore(self.safe_yolo_home.resolve(), self.user_home, "opencode", uninstall=True)
+        copy.write_bytes(verified + b"// tampered\n")
+        with self.assertRaisesRegex(RuntimeError, "no verified copy"):
+            self.uninstall()
+        self.assertEqual("active", self.receipt()["status"])
 
-        self.assertEqual("inactive", result["status"])
-        self.assertEqual("inactive", self.receipt()["status"])
-        self.assertFalse(self.plugin.exists())
-        self.assertTrue(Path(self.receipt()["uninstalled_config_backup"]).is_file())
+        copy.write_bytes(verified)
+        outside = self.root / "outside-plugins"
+        self.plugins.rename(outside)
+        self.plugins.symlink_to(outside)
+        with self.assertRaisesRegex(RuntimeError, "symlink"):
+            self.uninstall()
+        self.assertEqual("active", self.receipt()["status"])
 
-    def test_a_symlinked_plugin_is_refused_by_every_lifecycle_step(self):
+    def test_empty_opencode_config_dir_is_treated_as_unset(self):
+        xdg = self.root / "xdg"
+        (xdg / "opencode").mkdir(parents=True)
+        shutil.rmtree(self.user_home / ".config")
+        os.environ["XDG_CONFIG_HOME"] = str(xdg)
+        os.environ["OPENCODE_CONFIG_DIR"] = ""
+        working = self.root / "working-directory"
+        working.mkdir()
+        previous = os.getcwd()
+        os.chdir(working)
+        self.addCleanup(os.chdir, previous)
+
+        catalog = {item["id"]: item for item in harness_catalog(self.user_home)}
+        receipt = self.install()
+
+        self.assertTrue(catalog["opencode"]["detected"])
+        self.assertEqual(str((xdg / "opencode" / "plugins" / "safe-yolo.js").resolve()), receipt["config_path"])
+        self.assertEqual([], list(working.iterdir()))
+
+    def test_auto_install_skips_opencode_v1_but_explicit_install_refuses(self):
+        self.opencode_on_path("1.14.2\n")
+        self.plugin.write_bytes(V1_PLUGIN)
+        (self.user_home / ".cursor").mkdir()
+        arguments = ["--home", str(self.safe_yolo_home), "--user-home", str(self.user_home), "install",
+                     "--source", str(self.source)]
+
+        with patch("scripts.distribute.verify_source", return_value="e" * 40), \
+                patch("scripts.distribute._current_commit", return_value="e" * 40):
+            with redirect_stdout(io.StringIO()) as output:
+                code = main(arguments)
+            with redirect_stderr(io.StringIO()):
+                explicit = main([*arguments, "--harness", "opencode"])
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(0, code)
+        self.assertEqual(["cursor"], [report["harness"] for report in result["reports"]])
+        self.assertEqual(["opencode"], [item["harness"] for item in result["skipped"]])
+        self.assertIn("V1", result["skipped"][0]["reason"])
+        self.assertEqual(2, explicit)
+        self.assertEqual(V1_PLUGIN, self.plugin.read_bytes())
+
+    def test_install_accepts_only_a_whole_opencode_version_line(self):
+        self.plugin.write_bytes(V1_PLUGIN)
+        for output in (
+            "other-app 4.12.3\n",
+            "opencode wrapper 4.12.3\n1.14.2\n",
+            "opencode v2.3.2\nopencode v1.14.2\n",
+            "4.12.3 (other-app)\n",
+            "1.19.6\n",
+            "",
+        ):
+            with self.subTest(output=output):
+                self.opencode_on_path(output)
+                with self.assertRaises(RuntimeError):
+                    self.install()
+                self.assertEqual(V1_PLUGIN, self.plugin.read_bytes())
+
+        self.opencode_on_path("2.3.2\n")
+        self.assertEqual("active", self.install()["status"])
+
+    def test_a_symlinked_plugin_is_refused_by_doctor_deactivate_and_uninstall(self):
         self.install()
         elsewhere = self.root / "elsewhere.js"
         shutil.copy2(self.plugin, elsewhere)
