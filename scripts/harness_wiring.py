@@ -51,40 +51,85 @@ def is_safe_yolo_command(command: Any, home: Path, entry: str = "codex_v3") -> b
     return required_flags <= set(values) <= value_flags and values["--entry"] == entry
 
 
-def looks_like_safe_yolo_command(command: Any) -> bool:
-    """Recognise a Safe YOLO bootstrap hook from any installation, release or entry."""
-    if not isinstance(command, str):
+SAFE_YOLO_FLAGS = frozenset(
+    {
+        "--release",
+        "--manifest-sha256",
+        "--entry",
+        "--state-dir",
+        "--host-contract",
+        "--safe-yolo-home",
+        "--user-home",
+        "--harness-home",
+        "--audit-only",
+    }
+)
+CODEX_DESCRIPTION = "Safe YOLO v3 default-open policy with explicit hard denials and no approval path."
+
+
+def is_safe_yolo_hook(hook: Any, legacy_bootstrap: Path | None = None) -> bool:
+    """Recognise a Safe YOLO bootstrap hook from any release, entry or installation.
+
+    Reads the whole invocation, including a separate `args` list, so a pin this
+    installer did not write is still seen and never mistaken for another tool's hook.
+    """
+    if not isinstance(hook, dict) or not isinstance(hook.get("command"), str):
         return False
     try:
-        tokens = shlex.split(command)
+        tokens = shlex.split(hook["command"])
     except ValueError:
         return False
-    return (
-        len(tokens) >= 2
-        and re.fullmatch(r"python3(\.\d+)?", Path(tokens[0]).name) is not None
-        and Path(tokens[1]).name == "bootstrap.py"
-        and "--entry" in tokens
-        and "--manifest-sha256" in tokens
+    args = hook.get("args")
+    if isinstance(args, list) and all(isinstance(arg, str) for arg in args):
+        tokens = [*tokens, *args]
+    if len(tokens) < 2 or not re.fullmatch(r"python3(\.\d+)?", Path(tokens[0]).name):
+        return False
+    bootstrap = Path(tokens[1])
+    in_release = (
+        bootstrap.name == "bootstrap.py"
+        and bootstrap.parent.name == "scripts"
+        and bootstrap.parent.parent.parent.name == "releases"
     )
+    if not in_release and bootstrap != legacy_bootstrap:
+        return False
+    flags = {token for token in tokens[2:] if token.startswith("--")}
+    return {"--release", "--manifest-sha256", "--entry"} <= flags <= SAFE_YOLO_FLAGS
 
 
-def _hook_is_safe_yolo(hook: Any) -> bool:
-    return isinstance(hook, dict) and looks_like_safe_yolo_command(hook.get("command"))
-
-
-def without_safe_yolo_groups(groups: Any) -> list[Any]:
-    """Hook groups that hold no Safe YOLO hook, in their original order."""
+def safe_yolo_hook_slots(groups: Any, legacy_bootstrap: Path | None = None) -> list[tuple[int, int]]:
+    """Positions, as (group, hook), of every Safe YOLO hook in an event's group list."""
     if not isinstance(groups, list):
         return []
     return [
-        group
-        for group in groups
-        if not (
-            isinstance(group, dict)
-            and isinstance(group.get("hooks"), list)
-            and any(_hook_is_safe_yolo(hook) for hook in group["hooks"])
-        )
+        (group_index, hook_index)
+        for group_index, group in enumerate(groups)
+        if isinstance(group, dict) and isinstance(group.get("hooks"), list)
+        for hook_index, hook in enumerate(group["hooks"])
+        if is_safe_yolo_hook(hook, legacy_bootstrap)
     ]
+
+
+def remove_safe_yolo_hooks(
+    groups: list[Any], legacy_bootstrap: Path | None = None, *, keep_positions: bool
+) -> list[Any]:
+    """Drop Safe YOLO hooks and leave every other hook as it was.
+
+    Codex records hook trust by position. With `keep_positions`, a group emptied
+    ahead of another owner's group stays as an empty group so nothing after it moves.
+    """
+    slots = set(safe_yolo_hook_slots(groups, legacy_bootstrap))
+    kept: list[Any] = []
+    for group_index, group in enumerate(groups):
+        if not any(index == group_index for index, _ in slots):
+            kept.append(group)
+            continue
+        hooks = [hook for hook_index, hook in enumerate(group["hooks"]) if (group_index, hook_index) not in slots]
+        kept.append({**group, "hooks": hooks})
+    if not keep_positions:
+        return [group for group in kept if not (isinstance(group, dict) and group.get("hooks") == [])]
+    while kept and isinstance(kept[-1], dict) and kept[-1].get("hooks") == []:
+        kept.pop()
+    return kept
 
 
 def prepare_command_hooks(
@@ -111,45 +156,39 @@ def prepare_command_hooks(
     existing_pretool = hooks.get("PreToolUse", [])
     refusal = RuntimeError(
         f"{label} already has an existing PreToolUse entry Safe YOLO cannot keep or replace. "
-        "It must be a list of hook groups, and any Safe YOLO hook in it must be this "
-        "installation's own, alone in a group matched to *."
+        "It must be a list of hook groups holding at most one Safe YOLO hook, and that hook "
+        "must be this installation's own command hook in a group matched to *."
     )
-    if not isinstance(existing_pretool, list):
+    if not isinstance(existing_pretool, list) or not all(
+        isinstance(group, dict) and isinstance(group.get("hooks"), list) for group in existing_pretool
+    ):
         raise refusal
-    others: list[Any] = []
-    for group in existing_pretool:
-        entries = group.get("hooks") if isinstance(group, dict) else None
-        if not isinstance(entries, list):
-            raise refusal
-        if not any(_hook_is_safe_yolo(hook) for hook in entries):
-            others.append(group)
-        elif group.get("matcher") != "*" or not all(
-            isinstance(hook, dict)
-            and hook.get("type") == "command"
-            and is_safe_yolo_command(hook.get("command"), home, entry)
-            for hook in entries
-        ):
-            raise refusal
     if hooks.get("PostToolUse", []):
         raise RuntimeError(f"{label} has a non-empty PostToolUse lifecycle; Safe YOLO will not replace it.")
-    hooks["PreToolUse"] = [
-        {
-            "matcher": "*",
-            "hooks": [
-                {
-                    "type": "command",
-                    "command": command,
-                    "timeout": 10,
-                    "statusMessage": "Checking explicit Safe YOLO restrictions",
-                }
-            ],
-        },
-        *others,
-    ]
+    own_hook = {
+        "type": "command",
+        "command": command,
+        "timeout": 10,
+        "statusMessage": "Checking explicit Safe YOLO restrictions",
+    }
+    slots = safe_yolo_hook_slots(existing_pretool, home / "bootstrap.py")
+    if not slots:
+        hooks["PreToolUse"] = [*existing_pretool, {"matcher": "*", "hooks": [own_hook]}]
+    else:
+        group_index, hook_index = slots[0]
+        group = existing_pretool[group_index]
+        current = group["hooks"][hook_index]
+        if (
+            len(slots) != 1
+            or group.get("matcher") != "*"
+            or current.get("type") != "command"
+            or "args" in current
+            or not is_safe_yolo_command(current.get("command"), home, entry)
+        ):
+            raise refusal
+        group["hooks"][hook_index] = own_hook
     if entry == "codex_v3":
-        document["description"] = (
-            "Safe YOLO v3 default-open policy with explicit hard denials and no approval path."
-        )
+        document.setdefault("description", CODEX_DESCRIPTION)
     return document, original_bytes, mode
 
 

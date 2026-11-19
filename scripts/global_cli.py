@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -90,7 +91,8 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
     from scripts.distribute import _atomic_write, _read_harness_receipt, _sha256, _spec
     receipt, path = _read_harness_receipt(home, _spec(harness))
     config = Path(receipt['config_path'])
-    if config.is_symlink() or not config.is_file() or _sha256(config) != receipt['installed_config_sha256']:
+    current_bytes = None if config.is_symlink() or not config.is_file() else config.read_bytes()
+    if current_bytes is None or hashlib.sha256(current_bytes).hexdigest() != receipt['installed_config_sha256']:
         raise RuntimeError('Harness configuration changed; refusing to overwrite newer work.')
     if uninstall:
         baseline = receipt.get('original_install', receipt)
@@ -99,15 +101,16 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
         if baseline['previous_config_existed']:
             original_bytes = Path(baseline['previous_config_backup']).read_bytes()
             original = json.loads(original_bytes)
-        document = json.loads(config.read_text())
+        document = json.loads(current_bytes)
         event = 'preToolUse' if harness == 'cursor' else 'PreToolUse'
         original_hooks = original.get('hooks', {})
         if harness == 'cursor':
             legacy, others = bool(original_hooks.get(event)), []
         else:
-            from scripts.harness_wiring import without_safe_yolo_groups
-            legacy = without_safe_yolo_groups(original_hooks.get(event)) != (original_hooks.get(event) or [])
-            others = without_safe_yolo_groups(document['hooks'].get(event))
+            from scripts.harness_wiring import remove_safe_yolo_hooks, safe_yolo_hook_slots
+            legacy = bool(safe_yolo_hook_slots(original_hooks.get(event), home / 'bootstrap.py'))
+            others = remove_safe_yolo_hooks(document['hooks'].get(event, []), home / 'bootstrap.py',
+                                            keep_positions=harness == 'codex')
         if legacy:
             raise RuntimeError('The legacy baseline already contains an enforcement hook; a complete uninstall needs operator review.')
         if others:
@@ -118,19 +121,27 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
             document['hooks'].pop(event, None)
         if not document['hooks'] and 'hooks' not in original:
             document.pop('hooks')
-        owned_key = 'version' if harness == 'cursor' else 'description' if harness == 'codex' else None
-        if owned_key:
-            if owned_key in original:
-                document[owned_key] = original[owned_key]
+        if harness == 'cursor':
+            if 'version' in original:
+                document['version'] = original['version']
             else:
-                document.pop(owned_key, None)
+                document.pop('version', None)
+        elif harness == 'codex':
+            from scripts.harness_wiring import CODEX_DESCRIPTION
+            if document.get('description') == CODEX_DESCRIPTION:
+                if 'description' in original:
+                    document['description'] = original['description']
+                else:
+                    document.pop('description')
+        if config.is_symlink() or not config.is_file() or config.read_bytes() != current_bytes:
+            raise RuntimeError('Harness configuration changed; refusing to overwrite newer work.')
         if not document and original_bytes is None:
             from datetime import datetime, UTC
             retained = home / 'backups' / ('uninstalled-' + harness + '-' + datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ'))
             os.replace(config, retained)
         else:
             payload = original_bytes if document == original and original_bytes is not None else (json.dumps(document, indent=2) + '\n').encode()
-            _atomic_write(config, payload, baseline['previous_config_mode'])
+            _atomic_write(config, payload, config.stat().st_mode & 0o777)
         receipt['status'] = 'inactive'
         _atomic_write(path, (json.dumps(receipt, indent=2) + '\n').encode())
         return {'status': 'inactive', 'harness': harness, 'next_action': 'Restart the harness to unload Safe YOLO.'}

@@ -283,9 +283,13 @@ def install_harness(
             raise RuntimeError('Existing installation needs attention: ' + '; '.join(report['problems']))
         return previous_receipt
     if previous_receipt:
-        current_wiring = _inspect_wiring(spec, target, home, Path(previous_receipt['release']),
-                                        previous_receipt['manifest_sha256'], user_home=user,
-                                        harness_home=target.parent, bootstrap=Path(previous_receipt['bootstrap']))
+        # Receipts older than the pinned release bootstrap carry neither a bootstrap nor a home context.
+        recorded_bootstrap = previous_receipt.get('bootstrap')
+        current_wiring = _inspect_wiring(
+            spec, target, home, Path(previous_receipt['release']), previous_receipt['manifest_sha256'],
+            user_home=Path(previous_receipt['user_home']) if previous_receipt.get('user_home') else None,
+            harness_home=Path(previous_receipt['harness_home']) if previous_receipt.get('harness_home') else None,
+            bootstrap=Path(recorded_bootstrap) if recorded_bootstrap else home / 'bootstrap.py')
         if not current_wiring['healthy']:
             raise RuntimeError('Existing Safe YOLO hook changed; refusing to overwrite it.')
         previous_receipt = {**previous_receipt, 'installed_config_sha256': _sha256(target)}
