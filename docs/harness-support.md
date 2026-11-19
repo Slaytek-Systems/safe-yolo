@@ -23,10 +23,19 @@ python3 safe-yolo harnesses
 `supported` and `beta` entries expose `install`, `doctor`, and `deactivate`.
 `adapter-only` entries deliberately reject those commands.
 
+Each installation records the configuration folder it wired. For every
+supported harness, install refuses a different folder while that installation
+is active, for example after `CODEX_HOME`, `CLAUDE_CONFIG_DIR`,
+`OPENCODE_CONFIG_DIR`, `XDG_CONFIG_HOME` or `--config-home` changes. To move or
+repoint a harness's configuration, run `safe-yolo uninstall --harness <id>`
+first, then install against the new folder. To reinstall in place, use the
+recorded folder.
+
 OpenCode support targets OpenCode V2 (proven on 2.3.2). Safe YOLO owns one
 file, `plugins/safe-yolo.js` in the OpenCode config folder. It finds that
-folder the way OpenCode does: `OPENCODE_CONFIG_DIR` when set, otherwise
-`$XDG_CONFIG_HOME/opencode`, otherwise `~/.config/opencode`. Install refuses
+folder the way the OpenCode 2.3.2 CLI does: a non-empty `OPENCODE_CONFIG_DIR`,
+otherwise a non-empty `$XDG_CONFIG_HOME/opencode`, otherwise
+`~/.config/opencode`. An empty `OPENCODE_CONFIG_DIR` counts as unset. Install refuses
 when an active OpenCode installation is wired to a different folder; update
 stays in the folder its receipt records. It adds no `opencode.json` entry and
 leaves other plugins alone.
@@ -36,8 +45,13 @@ YOLO's: byte-identical to a plugin rendered from an installed release, or the
 retired V1 plugin with only its five pin constants changed. Any other file is
 refused and left unchanged. The V1 copy is backed up first. Install also
 refuses when the `opencode` on `PATH` reports a 1.x version, because V1 cannot
-run the V2 plugin and would lose its working V1 hook; with no `opencode` on
-`PATH` install proceeds. The plugin file must be a regular file, not a
+run the V2 plugin and would lose its working V1 hook. It accepts only output
+that is one version line in the shape OpenCode prints, `opencode v2.3.2` or a
+bare `2.3.2`, and refuses anything else, including more than one line, empty
+output, or no answer within 30 seconds. This is a sanity check on the text,
+not proof of which program printed it. With no `opencode` on `PATH` install
+proceeds. `install` without `--harness` skips a V1 OpenCode, says why, and
+still installs the other detected harnesses; `--harness opencode` refuses. The plugin file must be a regular file, not a
 symlink, and its `plugins` folder must not be a symlink. Install, doctor,
 update, rollback, uninstall and deactivate all apply that rule.
 
@@ -48,13 +62,18 @@ started.
 
 Doctor checks the file, the release and direct canaries. It cannot prove that
 the running OpenCode loaded the plugin: if `setup` fails, OpenCode logs
-`failed to load plugin` and runs without Safe YOLO. After a restart, check it:
+`failed to load plugin` and runs without Safe YOLO. After a restart, check it
+against the server and location your sessions use. A bare `opencode api`
+call can start or select the default server and asks about its default
+location, which may not be the session you care about:
 
 ```sh
 opencode api plugin.list
 ```
 
-The `safe-yolo` entry must show `"state":{"status":"active"}`. A plugin that
+The `safe-yolo` entry must show `"state":{"status":"active"}`, and its source
+must be the `plugins/safe-yolo.js` file in the config folder Safe YOLO
+installed to. A plugin that
 failed to load shows `"status":"failed"` with its error. The first call after
 the server starts can return an empty list while plugins load; run it again.
 `opencode plugin list` lists failed plugins without their status, so it is not
@@ -62,9 +81,21 @@ a check. Then, in a session, ask for `echo hello`, which should run, and
 `git push --force origin main` in a scratch repository, which Safe YOLO should
 deny.
 
-Uninstall moves the plugin file to `~/.safe-yolo/backups/`, copying and
-verifying it when that folder is on another filesystem, and can be rerun to
-finish if it is interrupted. `deactivate` restores the exact previous file.
+Uninstall, and deactivate when there was no previous file, copy the plugin to
+`~/.safe-yolo/backups/`, check the copy, check the plugin still has the bytes
+Safe YOLO installed, and only then delete it. A failed fresh install removes
+its plugin the same way. The copy's name comes from the plugin's digest. If an
+uninstall stops after deleting the plugin, doctor reports the plugin missing,
+and running uninstall again finds that copy and finishes. If the plugin is
+missing and no matching copy exists, or the plugin changed, uninstall refuses
+and changes nothing. `deactivate` restores the exact previous file when there
+was one. After uninstall, restart each OpenCode server that loaded Safe YOLO
+and confirm the plugin is absent.
+
+The OpenCode adapter treats OpenCode's credential stores as credentials: the
+V1 `auth.json` and the V2 SQLite database, `opencode.db` in OpenCode's data
+folder (`$XDG_DATA_HOME/opencode`, otherwise `~/.local/share/opencode`, or
+`OPENCODE_DB`), with its `-wal`, `-shm` and `-journal` files.
 
 Current native contract references:
 

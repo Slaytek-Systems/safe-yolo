@@ -26,7 +26,8 @@ python3 /tmp/safe-yolo-install.py
 
 Inspect the downloaded installer first if desired. To select one tool explicitly,
 use `python3 /tmp/safe-yolo-install.py --harness cursor` (or `codex`, `claude-code`, `opencode`).
-No administrator access is needed.
+No administrator access is needed. Without `--harness`, an OpenCode V1 on
+`PATH` is reported under `skipped` and the other tools still install.
 
 For a manual or offline installation, download the ZIP and its `.zip.sha256`
 from Releases, verify before extraction, then run:
@@ -93,6 +94,12 @@ safe-yolo doctor
 
 Update downloads a verified release and updates active installations. For an
 offline update use `safe-yolo update --source /path/to/extracted-release`.
+Each installation records the configuration folder it wired, and install
+refuses a different folder for that harness while it is active. Before moving
+a tool's configuration or pointing `CODEX_HOME`, `CLAUDE_CONFIG_DIR`,
+`OPENCODE_CONFIG_DIR` or `XDG_CONFIG_HOME` elsewhere, run
+`safe-yolo uninstall --harness <id>`, then install again. To reinstall in
+place, use the recorded folder.
 Each harness is updated independently; if one fails, completed installations
 remain usable. Run doctor to inspect the state before retrying.
 
@@ -135,8 +142,10 @@ snapshot. Nothing locks the file, so do not save harness settings while one of
 these commands runs. Installations whose first-found configuration already held a
 Safe YOLO hook require operator review for complete removal. OpenCode differs:
 update refuses an edited plugin rather than snapshotting it, and uninstall
-moves Safe YOLO's plugin to `~/.safe-yolo/backups/` even when install replaced
-a V1 copy. Restart the affected harness afterward.
+copies Safe YOLO's plugin to `~/.safe-yolo/backups/` and then deletes it, even
+when install replaced a V1 copy. Restart the affected harness afterward; for
+OpenCode, restart each server that loaded Safe YOLO and confirm the plugin is
+absent.
 
 Inactive releases, management commands, customizations, and recovery evidence
 are retained on disk. Uninstall stops enforcement; it does not erase your files.
