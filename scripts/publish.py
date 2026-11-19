@@ -35,7 +35,8 @@ def acceptance(archive: Path, revision: str) -> None:
         other_plugin = user / '.config/opencode/plugins/other.js'
         other_plugin.write_text('export default { id: "other", setup() {} }\n')
         environment = {key: value for key, value in os.environ.items()
-                       if key not in {'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME', 'PYTHONPATH'}}
+                       if key not in {'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME', 'OPENCODE_CONFIG_DIR',
+                                       'PYTHONPATH'}}
 
         def run(args: list[str]) -> dict:
             result = subprocess.run(args, cwd=root, env=environment, capture_output=True,
