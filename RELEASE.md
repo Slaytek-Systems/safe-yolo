@@ -5,27 +5,40 @@ including the hand-installed Safe YOLO V1 copy. The new plugin uses the
 same policy engine as beta.13.
 
 - `safe-yolo install --harness opencode` writes one V2 plugin,
-  `plugins/safe-yolo.js`, in the OpenCode config folder (`~/.config/opencode`,
-  or `$XDG_CONFIG_HOME/opencode`). It adds no `opencode.json` entry and leaves
-  other plugins alone.
+  `plugins/safe-yolo.js`, in the folder OpenCode reads: `OPENCODE_CONFIG_DIR`
+  when set, otherwise `$XDG_CONFIG_HOME/opencode`, otherwise
+  `~/.config/opencode`. It adds no `opencode.json` entry and leaves other
+  plugins alone. `install` with no `--harness` detects OpenCode from that
+  folder even when `opencode` is not on `PATH`.
+- Install refuses when the `opencode` on `PATH` is 1.x, and when an active
+  OpenCode installation is wired to a different folder. Update stays in the
+  folder its receipt records.
 - The plugin sends each tool call to the pinned release and stops the call on a
   deny. It also stops the call when the adapter fails, exits non-zero, returns
-  no decision, or takes more than 10 seconds.
-- An existing Safe YOLO plugin at that path, such as a V1 copy, is backed up
-  and replaced. Any other file there is refused and left unchanged.
+  no decision, hits a pipe error, or takes more than 10 seconds; on a pipe
+  error or timeout it stops the bootstrap and the adapter it started.
+- Install replaces a file at that path only when it is byte-identical to a
+  plugin rendered from an installed release, or is the retired V1 plugin with
+  only its pin constants changed. The V1 copy is backed up. Any other file is
+  refused and left unchanged.
+- The plugin must be a regular file in a `plugins` folder that is not a
+  symlink, for every lifecycle command.
 - Doctor, update, rollback, uninstall and deactivate cover OpenCode. Doctor
   checks that the plugin is byte-identical to the one rendered from the pinned
   release, and runs allow and deny canaries. Uninstall moves the plugin to
-  `~/.safe-yolo/backups/`; deactivate restores the exact previous file.
+  `~/.safe-yolo/backups/`, across filesystems too, and a rerun finishes an
+  interrupted uninstall. Deactivate restores the exact previous file.
 - The OpenCode adapter now keeps a shell call's `workdir` for both `bash` and
   `shell`, so a relative path is judged where the command runs.
 - `scripts/publish.py --check` now exercises four harnesses.
 
 Limits. If OpenCode cannot load the plugin, it logs `failed to load plugin`
-and runs without Safe YOLO; doctor cannot detect that. Another plugin's
-`execute.before` hook can change a tool's input after Safe YOLO has read it.
-After install, run `opencode service restart` if the OpenCode background
-service is running.
+and runs without Safe YOLO; doctor cannot detect that. After install, run
+`opencode service restart` if the OpenCode background service is running,
+then check that `opencode api plugin.list` shows the `safe-yolo` entry with
+status `active`, not `failed`, and try a harmless allowed and a denied command
+in a session. Another plugin's `execute.before` hook can change a tool's input
+after Safe YOLO has read it.
 
 ## Changes from beta.12, first shipped in beta.13
 

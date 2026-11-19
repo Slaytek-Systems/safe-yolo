@@ -332,7 +332,7 @@ class OpenCodeLifecycleTests(unittest.TestCase):
         receipt = self.install()
 
         self.assertIn("cannot prove", receipt["next_action"])
-        self.assertIn("opencode plugin list", receipt["next_action"])
+        self.assertIn("opencode api plugin.list", receipt["next_action"])
         self.assertIn("cannot prove", self.doctor()["activation_check"])
 
     def test_uninstall_and_deactivate_retire_the_plugin_across_filesystems(self):

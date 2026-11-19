@@ -75,7 +75,8 @@ hooks = true
 The installer reports the native activation step for the selected harness.
 Codex and Claude Code require their own hook review/reload flow. Cursor watches
 its user hook file and reloads it automatically. OpenCode loads its plugin when
-its server starts. These native observations are
+its server starts; doctor cannot prove it loaded, so check
+`opencode api plugin.list` as the support matrix describes. These native observations are
 kept separate from direct adapter canaries.
 
 To verify the immutable release, hook pin, configuration, and direct runtime

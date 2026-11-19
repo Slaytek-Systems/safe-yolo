@@ -469,8 +469,9 @@ def install_harness(
             "opencode": (
                 "Run `opencode service restart` if the OpenCode background service is running, then start a new "
                 "session. Doctor checks the plugin file and release but cannot prove OpenCode loaded the plugin: "
-                "run `opencode plugin list` and confirm safe-yolo is listed as active, then check that `echo hello` "
-                "runs and `git push --force origin main` in a scratch repository is denied."
+                "run `opencode api plugin.list` and confirm the safe-yolo entry has state status `active`, not "
+                "`failed` (repeat it if the list is empty while plugins load), then in a session check that "
+                "`echo hello` runs and `git push --force origin main` in a scratch repository is denied."
             ),
         }[spec.id],
     }
