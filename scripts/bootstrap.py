@@ -84,6 +84,7 @@ def main() -> int:
         "codex_v3": "--codex-home",
         "claude_code_v3": "--claude-home",
         "cursor_v3": "--cursor-home",
+        "opencode_v3": "--opencode-config",
     }
     if args.harness_home is not None:
         harness_flag = harness_home_flags.get(args.entry)

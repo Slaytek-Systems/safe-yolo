@@ -25,10 +25,13 @@ from scripts.harness_specs import HARNESS_BY_ID, HARNESS_HOME_ENV, HARNESSES, Ha
 from scripts.package import MANIFEST as DISTRIBUTION_MANIFEST, verify_bundle
 from scripts.harness_wiring import (
     inspect_cursor_wiring as _inspect_cursor_wiring,
+    inspect_opencode_wiring as _inspect_opencode_wiring,
     pinned_command as _pinned_command,
     prepare_command_hooks as _prepare_hooks,
     prepare_cursor_hooks as _prepare_cursor_hooks,
+    prepare_opencode_plugin as _prepare_opencode_plugin,
     read_json_object as _read_json_object,
+    render_opencode_plugin as _render_opencode_plugin,
 )
 
 
@@ -111,6 +114,10 @@ def _run_canaries(
     elif harness == "claude-code":
         allowed_payload = {**base, "tool_name": "Bash", "tool_input": {"command": "git status --short"}}
         denied_payload = {**base, "tool_name": "Bash", "tool_input": {"command": "git push --force-with-lease"}}
+    elif harness == "opencode":
+        opencode_base = {"tool": "shell", "sessionID": "canary", "callID": "canary", "cwd": str(Path.cwd())}
+        allowed_payload = {**opencode_base, "args": {"command": "git status --short"}}
+        denied_payload = {**opencode_base, "args": {"command": "git push --force-with-lease"}}
     else:
         cursor_base = {"hook_event_name": "preToolUse", "cwd": str(Path.cwd()), "tool_name": "Shell"}
         allowed_payload = {**cursor_base, "tool_input": {"command": "git status --short"}}
@@ -129,6 +136,11 @@ def _run_canaries(
         capture_output=True,
         check=False,
     )
+    if harness == "opencode":
+        return {
+            outcome: completed.returncode == 0 and _opencode_decision(completed.stdout) == outcome
+            for outcome, completed in (("allow", allowed), ("deny", denied))
+        }
     allow_ok = allowed.returncode == 0 and not allowed.stdout.strip()
     try:
         denial = json.loads(denied.stdout)
@@ -148,6 +160,14 @@ def _run_canaries(
         except (json.JSONDecodeError, AttributeError):
             allow_ok = False
     return {"allow": allow_ok, "deny": deny_ok}
+
+
+def _opencode_decision(stdout: str) -> str | None:
+    try:
+        decision = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None
+    return decision.get("decision") if isinstance(decision, dict) else None
 
 
 def _receipt_path(home: Path) -> Path:
@@ -193,6 +213,8 @@ def _has_harness_receipt(home: Path, spec: HarnessSpec) -> bool:
 def _config_path(spec: HarnessSpec, user_home: Path, config_home: str | Path | None) -> Path:
     environment_name = HARNESS_HOME_ENV.get(spec.id)
     environment_home = os.environ.get(environment_name) if environment_name else None
+    if spec.id == "opencode" and os.environ.get("XDG_CONFIG_HOME"):
+        environment_home = str(Path(os.environ["XDG_CONFIG_HOME"]) / "opencode")
     root = (
         Path(config_home).expanduser().resolve(strict=False)
         if config_home is not None
@@ -203,6 +225,11 @@ def _config_path(spec: HarnessSpec, user_home: Path, config_home: str | Path | N
         )
     )
     return root / spec.config_file
+
+
+def _config_root(spec: HarnessSpec, config_path: Path) -> Path:
+    """The harness configuration folder that holds this config file."""
+    return config_path.parents[len(Path(spec.config_file).parts) - 1]
 
 
 def _inspect_wiring(
@@ -240,6 +267,15 @@ def _inspect_wiring(
             user_home=user_home,
             harness_home=harness_home,
         )
+    if spec.id == "opencode":
+        return _inspect_opencode_wiring(
+            config_path,
+            home,
+            release,
+            digest,
+            user_home=user_home,
+            harness_home=harness_home,
+        )
     return _inspect_cursor_wiring(
         config_path,
         home,
@@ -264,6 +300,7 @@ def install_harness(
     home = Path(safe_yolo_home).expanduser().resolve(strict=False)
     user = Path(user_home).expanduser().resolve(strict=False)
     target = _config_path(spec, user, config_home)
+    harness_home = _config_root(spec, target)
     previous_receipt = None
     if _has_harness_receipt(home, spec):
         existing, _ = _read_harness_receipt(home, spec)
@@ -285,7 +322,7 @@ def install_harness(
     if previous_receipt:
         current_wiring = _inspect_wiring(spec, target, home, Path(previous_receipt['release']),
                                         previous_receipt['manifest_sha256'], user_home=user,
-                                        harness_home=target.parent, bootstrap=Path(previous_receipt['bootstrap']))
+                                        harness_home=harness_home, bootstrap=Path(previous_receipt['bootstrap']))
         if not current_wiring['healthy']:
             raise RuntimeError('Existing Safe YOLO hook changed; refusing to overwrite it.')
         previous_receipt = {**previous_receipt, 'installed_config_sha256': _sha256(target)}
@@ -295,14 +332,19 @@ def install_harness(
         digest,
         spec.entry,
         user_home=user,
-        harness_home=target.parent,
+        harness_home=harness_home,
     )
-    if spec.id == "cursor":
-        candidate, original_bytes, original_mode = _prepare_cursor_hooks(target, home, command)
+    if spec.id == "opencode":
+        original_bytes, original_mode = _prepare_opencode_plugin(target)
+        payload = _render_opencode_plugin(release, command)
     else:
-        candidate, original_bytes, original_mode = _prepare_hooks(
-            target, home, command, entry=spec.entry, label=spec.name
-        )
+        if spec.id == "cursor":
+            candidate, original_bytes, original_mode = _prepare_cursor_hooks(target, home, command)
+        else:
+            candidate, original_bytes, original_mode = _prepare_hooks(
+                target, home, command, entry=spec.entry, label=spec.name
+            )
+        payload = (json.dumps(candidate, indent=2) + "\n").encode()
     backup_root = home / "backups" / (
         f"pre-{spec.id}-{version}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
     )
@@ -311,7 +353,6 @@ def install_harness(
     if original_bytes is not None:
         backup_path = backup_root / target.name
         _atomic_write(backup_path, original_bytes, original_mode)
-    payload = (json.dumps(candidate, indent=2) + "\n").encode()
     _atomic_write(target, payload, original_mode)
     try:
         wiring = _inspect_wiring(
@@ -321,7 +362,7 @@ def install_harness(
             release,
             digest,
             user_home=user,
-            harness_home=target.parent,
+            harness_home=harness_home,
             bootstrap=release / "scripts" / "bootstrap.py",
         )
         canaries = _run_canaries(
@@ -331,7 +372,7 @@ def install_harness(
             harness=spec.id,
             entry=spec.entry,
             user_home=user,
-            harness_home=target.parent,
+            harness_home=harness_home,
         )
         if not wiring["healthy"] or not all(canaries.values()):
             raise RuntimeError(
@@ -355,7 +396,7 @@ def install_harness(
         "manifest_sha256": digest,
         "config_path": str(target),
         "user_home": str(user),
-        "harness_home": str(target.parent),
+        "harness_home": str(harness_home),
         "installed_config_sha256": _sha256(target),
         "previous_config_existed": original_bytes is not None,
         "previous_config_backup": str(backup_path) if backup_path else None,
@@ -366,6 +407,7 @@ def install_harness(
             "codex": "Restart Codex, open /hooks, review this command, and trust its hash.",
             "claude-code": "Restart Claude Code, then run /hooks and verify the Safe YOLO PreToolUse hook.",
             "cursor": "Cursor watches the user hooks file and reloads it automatically; verify Safe YOLO in Hooks.",
+            "opencode": "Run `opencode service restart` if the OpenCode background service is running, then start a new session.",
         }[spec.id],
     }
     if previous_receipt:
@@ -603,7 +645,8 @@ def main(argv: list[str] | None = None) -> int:
                 launcher = install_command(source, args.home.resolve(), args.user_home.resolve())
                 reports = [install_harness(harness=receipt['harness'], source=source,
                            safe_yolo_home=args.home, user_home=receipt.get('user_home', args.user_home),
-                           config_home=Path(receipt['config_path']).parent, expected_commit=revision)
+                           config_home=receipt.get('harness_home') or Path(receipt['config_path']).parent,
+                           expected_commit=revision)
                            for receipt in receipts]
                 result = {'healthy': True, 'reports': reports, 'command': str(launcher)}
         elif args.command in {'rollback', 'uninstall'}:

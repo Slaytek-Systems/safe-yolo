@@ -263,3 +263,61 @@ def inspect_cursor_wiring(
         ):
             problems.append("Cursor preToolUse hook is not pinned to the expected release")
     return {"healthy": not problems, "problems": problems}
+
+
+OPENCODE_PLUGIN_TEMPLATE = Path("adapters") / "opencode_v2_plugin.js"
+_OPENCODE_COMMAND_SLOT = "/* SAFE_YOLO_COMMAND */ []"
+
+
+def render_opencode_plugin(release: Path, command: str) -> bytes:
+    """The OpenCode plugin of this release, calling exactly this pinned command."""
+    template = (release / OPENCODE_PLUGIN_TEMPLATE).read_text(encoding="utf-8")
+    if template.count(_OPENCODE_COMMAND_SLOT) != 1:
+        raise RuntimeError("OpenCode plugin template has no single command slot.")
+    return template.replace(_OPENCODE_COMMAND_SLOT, json.dumps(shlex.split(command))).encode()
+
+
+def looks_like_safe_yolo_plugin(payload: bytes) -> bool:
+    """Recognise a Safe YOLO OpenCode plugin from any release, V1 hand-placed copies included."""
+    text = payload.decode("utf-8", errors="replace")
+    return all(marker in text for marker in ("bootstrap.py", "--manifest-sha256", "opencode_v3"))
+
+
+def prepare_opencode_plugin(path: Path) -> tuple[bytes | None, int]:
+    """Previous bytes and mode of the plugin file Safe YOLO is about to own."""
+    if not path.exists() and not path.is_symlink():
+        return None, 0o600
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError("OpenCode plugin path is unavailable or unsafe.")
+    original = path.read_bytes()
+    if not looks_like_safe_yolo_plugin(original):
+        raise RuntimeError(
+            f"{path} is not a Safe YOLO plugin. Safe YOLO will not overwrite another plugin; "
+            "move it aside through operator review first."
+        )
+    return original, path.stat().st_mode & 0o777
+
+
+def inspect_opencode_wiring(
+    path: Path,
+    home: Path,
+    release: Path,
+    digest: str,
+    *,
+    user_home: Path | None = None,
+    harness_home: Path | None = None,
+) -> dict[str, Any]:
+    command = pinned_command(
+        home, release, digest, "opencode_v3", user_home=user_home, harness_home=harness_home
+    )
+    try:
+        actual = path.read_bytes()
+        expected = render_opencode_plugin(release, command)
+    except (OSError, RuntimeError) as error:
+        return {"healthy": False, "problems": [f"OpenCode plugin unreadable: {type(error).__name__}"]}
+    if actual != expected:
+        return {
+            "healthy": False,
+            "problems": ["OpenCode plugin is not the Safe YOLO plugin pinned to the expected release"],
+        }
+    return {"healthy": True, "problems": []}

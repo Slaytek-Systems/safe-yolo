@@ -63,6 +63,30 @@ class OpenCodeV3AdapterTests(unittest.TestCase):
                 self.assertEqual("deny", denied["decision"])
                 self.assertEqual(consequence, denied["policy_id"])
 
+    def test_shell_tools_are_judged_in_their_own_workdir(self):
+        for command, consequence in (
+            ("git push --force origin main", "git.history_mutation"),
+            ("sudo apt install jq", "privilege.modify"),
+        ):
+            with self.subTest(command=command):
+                denied = handle(self.payload("shell", {"command": command}), self.kernel)
+                self.assertEqual(consequence, denied["policy_id"])
+        self.assertEqual("allow", handle(self.payload("shell", {"command": "echo hello"}), self.kernel)["decision"])
+
+        for tool in ("shell", "bash"):
+            with self.subTest(tool=tool):
+                in_scratch = handle(
+                    self.payload(tool, {"command": "rm stale.json", "workdir": "/tmp"}, cwd="/workspace/app"),
+                    self.kernel,
+                )
+                in_project = handle(
+                    self.payload(tool, {"command": "rm stale.json", "workdir": "/workspace/app"}, cwd="/tmp"),
+                    self.kernel,
+                )
+
+                self.assertEqual("allow", in_scratch["decision"])
+                self.assertEqual("filesystem.delete", in_project["policy_id"])
+
     def test_structured_edits_to_enforcement_are_denied(self):
         for tool, path in (
             ("edit", self.root / "config" / "opencode" / "opencode.json"),

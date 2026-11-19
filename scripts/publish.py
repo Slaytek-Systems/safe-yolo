@@ -27,13 +27,15 @@ def acceptance(archive: Path, revision: str) -> None:
         if verify_bundle(source) != revision:
             raise ValueError('Source provenance mismatch')
         user = root / 'user'
-        for directory in ('.codex', '.claude', '.cursor'):
+        for directory in ('.codex', '.claude', '.cursor', '.config/opencode/plugins'):
             (user / directory).mkdir(parents=True)
         (user / '.codex/config.toml').write_text(
             'approval_policy = "never"\nsandbox_mode = "danger-full-access"\n[features]\nhooks = true\n')
         (user / '.claude/settings.json').write_text('{"theme": "dark"}\n')
+        other_plugin = user / '.config/opencode/plugins/other.js'
+        other_plugin.write_text('export default { id: "other", setup() {} }\n')
         environment = {key: value for key, value in os.environ.items()
-                       if key not in {'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'PYTHONPATH'}}
+                       if key not in {'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME', 'PYTHONPATH'}}
 
         def run(args: list[str]) -> dict:
             result = subprocess.run(args, cwd=root, env=environment, capture_output=True,
@@ -42,18 +44,21 @@ def acceptance(archive: Path, revision: str) -> None:
 
         result = run([sys.executable, str(source / 'safe-yolo'), '--home', str(user / '.safe-yolo'),
                       '--user-home', str(user), 'install'])
-        if {item['harness'] for item in result['reports']} != {'codex', 'claude-code', 'cursor'}:
-            raise ValueError('Expected three installed harnesses')
+        if {item['harness'] for item in result['reports']} != {'codex', 'claude-code', 'cursor', 'opencode'}:
+            raise ValueError('Expected four installed harnesses')
         source.rename(root / 'moved-download')
         launcher = str(user / '.local/bin/safe-yolo')
         if not run([launcher, 'doctor'])['healthy']:
             raise ValueError('Global doctor failed')
         run([launcher, 'update', '--source', str(root / 'moved-download')])
         run([launcher, 'uninstall'])
-        if (user / '.codex/hooks.json').exists() or (user / '.cursor/hooks.json').exists():
+        if any((user / path).exists() for path in
+               ('.codex/hooks.json', '.cursor/hooks.json', '.config/opencode/plugins/safe-yolo.js')):
             raise ValueError('Uninstall left an active integration')
         if (user / '.claude/settings.json').read_text() != '{"theme": "dark"}\n':
             raise ValueError('Uninstall changed unrelated settings')
+        if other_plugin.read_text() != 'export default { id: "other", setup() {} }\n':
+            raise ValueError('Uninstall changed another OpenCode plugin')
 
 
 def publish(archive: Path, version: str, revision: str) -> None:
@@ -105,7 +110,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix='safe-yolo-publish-') as temporary:
         archive = build_bundle(ROOT, Path(temporary), revision)
         acceptance(archive, revision)
-        print(f'PROVEN: {version} at {revision}: bundle and three-harness lifecycle', flush=True)
+        print(f'PROVEN: {version} at {revision}: bundle and four-harness lifecycle', flush=True)
         if args.publish:
             publish(archive, version, revision)
 

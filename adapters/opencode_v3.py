@@ -15,6 +15,7 @@ from adapters.hook_payload import normalize_hook_payload
 from engine.consequences_v3 import DenyOnlyKernel
 
 
+SHELL_NAMES = {"bash", "shell"}
 EDIT_NAMES = {"edit", "write"}
 READ_NAMES = {"read"}
 PATCH_NAMES = {"patch", "apply_patch"}
@@ -88,9 +89,12 @@ def normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
     tool = str(normalized.get("tool") or normalized.get("tool_name") or "")
     lower = tool.lower()
     tool_input = dict(args)
-    if lower == "bash":
+    if lower in SHELL_NAMES:
         command = args.get("command", args.get("cmd", ""))
         tool_input = {"command": command if isinstance(command, str) else ""}
+        workdir = args.get("workdir")
+        if isinstance(workdir, str) and workdir:
+            tool_input["workdir"] = workdir
         mapped = "bash"
     elif lower in EDIT_NAMES:
         path = _first(args, PATH_KEYS)

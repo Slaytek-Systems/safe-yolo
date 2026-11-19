@@ -92,6 +92,17 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
     config = Path(receipt['config_path'])
     if config.is_symlink() or not config.is_file() or _sha256(config) != receipt['installed_config_sha256']:
         raise RuntimeError('Harness configuration changed; refusing to overwrite newer work.')
+    if uninstall and harness == 'opencode':
+        # Safe YOLO owns the whole plugin file. A replaced V1 copy never ran on OpenCode V2,
+        # so uninstall retains the file as evidence rather than restoring it.
+        from datetime import datetime, UTC
+        retained = home / 'backups' / ('uninstalled-opencode-' + datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ') + '-' + config.name)
+        retained.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(config, retained)
+        receipt['status'] = 'inactive'
+        receipt['uninstalled_config_backup'] = str(retained)
+        _atomic_write(path, (json.dumps(receipt, indent=2) + '\n').encode())
+        return {'status': 'inactive', 'harness': harness, 'next_action': receipt['next_action']}
     if uninstall:
         baseline = receipt.get('original_install', receipt)
         original_bytes = None
