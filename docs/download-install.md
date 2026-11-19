@@ -25,7 +25,7 @@ python3 /tmp/safe-yolo-install.py
 ```
 
 Inspect the downloaded installer first if desired. To select one tool explicitly,
-use `python3 /tmp/safe-yolo-install.py --harness cursor` (or `codex`, `claude-code`).
+use `python3 /tmp/safe-yolo-install.py --harness cursor` (or `codex`, `claude-code`, `opencode`).
 No administrator access is needed.
 
 For a manual or offline installation, download the ZIP and its `.zip.sha256`
@@ -48,13 +48,15 @@ Install each harness you use:
 python3 safe-yolo install --harness cursor
 python3 safe-yolo install --harness claude-code
 python3 safe-yolo install --harness codex
+python3 safe-yolo install --harness opencode
 python3 safe-yolo doctor --all
 ```
 
 Run only the relevant install commands. The installer applies to the selected
 user's global harness configuration across projects. In Codex and Claude Code
 other tools' `PreToolUse` hooks stay beside Safe YOLO's; Cursor must have no
-other `preToolUse` hook. Codex currently requires these existing settings in its
+other `preToolUse` hook. In OpenCode Safe YOLO owns only
+`plugins/safe-yolo.js` and leaves other plugins alone. Codex currently requires these existing settings in its
 `config.toml`; the installer checks them and does not change native permissions:
 
 ```toml
@@ -156,7 +158,8 @@ checks `Slaytek-Systems/safe-yolo` for future versions. Old downloads remain ava
 
 ## Limits
 
-The beta provides installation lifecycles for Codex, Claude Code, and Cursor.
+The beta provides installation lifecycles for Codex, Claude Code, Cursor, and
+OpenCode V2.
 Other included adapters are experimental and have no supported installer yet.
 Linux is verified; macOS and Windows acceptance is pending. No mobile app is
 required because enforcement runs on the machine running the coding harness.

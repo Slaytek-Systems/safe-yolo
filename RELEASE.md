@@ -1,36 +1,34 @@
-# Safe YOLO 3.0.0-beta.13
+# Safe YOLO 3.0.0-beta.14
 
-Safe YOLO now owns its own `PreToolUse` hook in Codex and Claude Code, not the
-whole `PreToolUse` list. No decision changes: the policy is the one in beta.12.
+OpenCode V2 is now a beta lifecycle harness. Before this release Safe YOLO saw
+no OpenCode tool call: the hand-placed plugin used the V1 API, and OpenCode V2
+does not run V1 plugins. No policy decision changes; the policy is the one in
+beta.13.
 
-Before this release, install and update required Safe YOLO's hook to be the
-only `PreToolUse` hook. A second hook from another tool made `safe-yolo update`
-stop with "Existing Safe YOLO hook changed; refusing to overwrite it", and
-`doctor` report the installation unhealthy, although Safe YOLO's own hook was
-intact.
+- `safe-yolo install --harness opencode` writes one V2 plugin,
+  `plugins/safe-yolo.js`, in the OpenCode config folder (`~/.config/opencode`,
+  or `$XDG_CONFIG_HOME/opencode`). It adds no `opencode.json` entry and leaves
+  other plugins alone.
+- The plugin sends each tool call to the pinned release and stops the call on a
+  deny. It also stops the call when the adapter fails, exits non-zero, returns
+  no decision, or takes more than 10 seconds.
+- An existing Safe YOLO plugin at that path, such as a V1 copy, is backed up
+  and replaced. Any other file there is refused and left unchanged.
+- Doctor, update, rollback, uninstall and deactivate cover OpenCode. Doctor
+  checks that the plugin is byte-identical to the one rendered from the pinned
+  release, and runs allow and deny canaries. Uninstall moves the plugin to
+  `~/.safe-yolo/backups/`; deactivate restores the exact previous file.
+- The OpenCode adapter now keeps a shell call's `workdir` for both `bash` and
+  `shell`, so a relative path is judged where the command runs.
+- `scripts/publish.py --check` now exercises four harnesses.
 
-- Install and update keep every `PreToolUse` hook group that holds no Safe
-  YOLO hook, in its original order, after Safe YOLO's own group.
-- Doctor requires exactly one Safe YOLO `PreToolUse` hook, matched to `*` and
-  pinned to the installed release. Other owners' hooks are not counted.
-- Uninstall removes Safe YOLO's group and leaves the others.
-- Still refused: a `PreToolUse` value that is not a list of hook groups, a
-  Safe YOLO hook from another installation or entry, and a Safe YOLO hook that
-  shares a group with another command or is not matched to `*`.
+Limits. If OpenCode cannot load the plugin, it logs `failed to load plugin`
+and runs without Safe YOLO; doctor cannot detect that. Another plugin's
+`execute.before` hook can change a tool's input after Safe YOLO has read it.
+After install, run `opencode service restart` if the OpenCode background
+service is running. Proven on OpenCode 2.3.2 on Linux.
 
-Limits. Both harnesses run matching hooks concurrently. Claude Code documents
-that a deny outranks every other decision, so another hook cannot cancel a
-Safe YOLO denial there. Codex documents that one hook cannot stop another from
-starting, and gives no rule for combining `PreToolUse` decisions. Another hook
-can still rewrite a tool input after Safe YOLO has read it. Safe YOLO is
-backpressure, not a boundary against other same-user configuration. Cursor is
-unchanged and still requires Safe YOLO to be its only `preToolUse` hook. A
-non-empty `PostToolUse` list is still refused at install. Doctor still reports
-any later edit to the harness file as "configuration changed after
-activation", and deactivate, rollback and uninstall still refuse after such an
-edit until the next update records the file again.
-
-Linux/Python 3.12+ is the proven platform. Codex, Claude Code, and Cursor have
-installation lifecycles. Native hook trust or restart remains harness-specific.
-Local customizations are preserved. The custom distribution permission remains
-in effect; publication is not a change to an OSI-approved license.
+Linux/Python 3.12+ is the proven platform. Codex, Claude Code, Cursor, and
+OpenCode have installation lifecycles. Local customizations are preserved. The
+custom distribution permission remains in effect; publication is not a change
+to an OSI-approved license.
