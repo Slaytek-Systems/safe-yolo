@@ -99,7 +99,7 @@ class PrivateBetaCliTests(unittest.TestCase):
         self.assertIn(str(receipt["bootstrap"]), command)
 
     @patch("scripts.distribute.verify_source", return_value="b" * 40)
-    def test_install_preserves_unrelated_events_and_refuses_conflicting_pretool(self, _verify):
+    def test_install_preserves_unrelated_events_and_refuses_malformed_pretool(self, _verify):
         original = {
             "hooks": {
                 "SessionStart": [
@@ -119,22 +119,6 @@ class PrivateBetaCliTests(unittest.TestCase):
         self.assertTrue(receipt["previous_hooks_existed"])
 
         deactivate_codex(safe_yolo_home=self.safe_yolo_home, codex_home=self.codex_home)
-        conflict = {
-            "hooks": {
-                "PreToolUse": [
-                    {"matcher": "*", "hooks": [{"type": "command", "command": "echo foreign"}]}
-                ]
-            }
-        }
-        self.hooks.write_text(json.dumps(conflict) + "\n")
-        with self.assertRaisesRegex(RuntimeError, "existing PreToolUse"):
-            install_codex(
-                source=self.source,
-                safe_yolo_home=self.safe_yolo_home,
-                codex_home=self.codex_home,
-                expected_commit="b" * 40,
-            )
-
         self.hooks.write_text(json.dumps({"hooks": {"PreToolUse": {"command": "echo malformed"}}}))
         with self.assertRaisesRegex(RuntimeError, "existing PreToolUse"):
             install_codex(
@@ -143,6 +127,64 @@ class PrivateBetaCliTests(unittest.TestCase):
                 codex_home=self.codex_home,
                 expected_commit="b" * 40,
             )
+
+    @patch("scripts.distribute.verify_source", return_value="b" * 40)
+    def test_install_keeps_another_owners_pretool_hook_beside_its_own(self, _verify):
+        other = {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo other"}]}
+        self.hooks.write_text(json.dumps({"hooks": {"PreToolUse": [other]}}) + "\n")
+        original_bytes = self.hooks.read_bytes()
+        install_codex(
+            source=self.source,
+            safe_yolo_home=self.safe_yolo_home,
+            codex_home=self.codex_home,
+            expected_commit="b" * 40,
+        )
+        groups = json.loads(self.hooks.read_text())["hooks"]["PreToolUse"]
+        self.assertEqual(2, len(groups))
+        self.assertEqual("*", groups[0]["matcher"])
+        self.assertIn("--entry codex_v3", groups[0]["hooks"][0]["command"])
+        self.assertEqual(other, groups[1])
+        report = doctor_codex(safe_yolo_home=self.safe_yolo_home, codex_home=self.codex_home)
+        self.assertTrue(report["healthy"], report)
+        deactivate_codex(safe_yolo_home=self.safe_yolo_home, codex_home=self.codex_home)
+        self.assertEqual(original_bytes, self.hooks.read_bytes())
+
+    @patch("scripts.distribute.verify_source", return_value="b" * 40)
+    def test_install_refuses_a_safe_yolo_hook_it_does_not_own(self, _verify):
+        elsewhere = (
+            "/usr/bin/python3 /srv/other/.safe-yolo/releases/9/scripts/bootstrap.py --release "
+            "/srv/other/.safe-yolo/releases/9 --manifest-sha256 abc --entry codex_v3 --state-dir /srv/other/state"
+        )
+        shared = {"matcher": "*", "hooks": [{"type": "command", "command": "echo other"}]}
+        for group in (
+            {"matcher": "*", "hooks": [{"type": "command", "command": elsewhere}]},
+            {"matcher": "*", "hooks": [shared["hooks"][0], {"type": "command", "command": elsewhere}]},
+        ):
+            with self.subTest(group=group):
+                self.hooks.write_text(json.dumps({"hooks": {"PreToolUse": [group]}}) + "\n")
+                original_bytes = self.hooks.read_bytes()
+                with self.assertRaisesRegex(RuntimeError, "existing PreToolUse"):
+                    install_codex(
+                        source=self.source,
+                        safe_yolo_home=self.safe_yolo_home,
+                        codex_home=self.codex_home,
+                        expected_commit="b" * 40,
+                    )
+                self.assertEqual(original_bytes, self.hooks.read_bytes())
+
+    @patch("scripts.distribute.verify_source", return_value="b" * 40)
+    def test_doctor_reports_a_second_safe_yolo_pretool_hook(self, _verify):
+        install_codex(
+            source=self.source,
+            safe_yolo_home=self.safe_yolo_home,
+            codex_home=self.codex_home,
+            expected_commit="b" * 40,
+        )
+        document = json.loads(self.hooks.read_text())
+        document["hooks"]["PreToolUse"].append(json.loads(json.dumps(document["hooks"]["PreToolUse"][0])))
+        self.hooks.write_text(json.dumps(document))
+        report = doctor_codex(safe_yolo_home=self.safe_yolo_home, codex_home=self.codex_home)
+        self.assertIn("exactly one Safe YOLO PreToolUse command hook is required", report["problems"])
 
     @patch("scripts.distribute.verify_source", return_value="c" * 40)
     def test_doctor_and_deactivate_restore_exact_previous_hooks(self, _verify):
