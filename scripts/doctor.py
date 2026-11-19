@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.harness_wiring import looks_like_safe_yolo_command
+from scripts.harness_wiring import is_safe_yolo_hook
 from scripts.release_manifest import ENTRYPOINTS, verify_manifest
 
 
@@ -174,11 +174,21 @@ def _command_hooks(hooks: Any, event: str) -> list[tuple[str, str]]:
 
 
 def _safe_yolo_hooks(hooks: Any, event: str) -> list[tuple[str, str]]:
+    groups = hooks.get(event, []) if isinstance(hooks, dict) else []
+    if not isinstance(groups, list):
+        return []
     return [
-        (matcher, command)
-        for matcher, command in _command_hooks(hooks, event)
-        if looks_like_safe_yolo_command(command)
+        (str(group.get("matcher") or ""), _flat_command(hook))
+        for group in groups
+        if isinstance(group, dict) and isinstance(group.get("hooks"), list)
+        for hook in group["hooks"]
+        if is_safe_yolo_hook(hook)
     ]
+
+
+def _flat_command(hook: dict[str, Any]) -> str:
+    # A pin split across `command` and `args` is never one this installer wrote.
+    return hook["command"] if hook.get("type") == "command" and "args" not in hook else ""
 
 
 def _command_is_pinned(

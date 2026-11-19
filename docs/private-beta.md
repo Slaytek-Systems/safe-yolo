@@ -23,9 +23,9 @@ adapters. Lifecycle support is promoted per harness according to the
 7. records an independent receipt under
    `~/.safe-yolo/state/installations/<harness>.json`.
 
-In Codex and Claude Code it keeps other owners' `PreToolUse` hooks beside its
-own and refuses only a Safe YOLO hook it does not own. In Cursor it still
-refuses any other `preToolUse` hook. Deactivation refuses to overwrite
+In Codex and Claude Code it keeps other owners' `PreToolUse` hooks in place
+beside its own. It refuses a Safe YOLO hook it did not write and any non-empty
+`PostToolUse` list. In Cursor it still refuses any other `preToolUse` hook. Deactivation refuses to overwrite
 configuration changed after installation.
 
 ## First install
