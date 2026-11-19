@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any
@@ -66,11 +67,22 @@ def build_kernel(
         enforcement_paths=tuple(enforcement),
         credential_paths=(
             str(home / ".local" / "share" / "opencode" / "auth.json"),
+            *_credential_database_paths(home),
             str(home / ".ssh"),
             str(home / ".gnupg"),
         ),
         scratch_paths=expand_scratch_paths(scratch_paths, home),
     )
+
+
+def _credential_database_paths(home: Path) -> tuple[str, ...]:
+    """OpenCode V2 keeps credential values in SQLite (packages/cli/src/database-path.ts at v2.3.2)."""
+    data = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share") / "opencode"
+    database = os.environ.get("OPENCODE_DB") or "opencode.db"
+    if database == ":memory:":
+        return ()
+    path = data / database
+    return tuple(f"{path}{suffix}" for suffix in ("", "-wal", "-shm", "-journal"))
 
 
 def _first(values: dict[str, Any], keys: tuple[str, ...]) -> str:

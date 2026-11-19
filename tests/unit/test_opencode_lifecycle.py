@@ -576,9 +576,9 @@ class OpenCodeLifecycleTests(unittest.TestCase):
         self.plugin.symlink_to(elsewhere)
 
         self.assertFalse(self.doctor()["healthy"])
-        with self.assertRaisesRegex(RuntimeError, "changed"):
+        with self.assertRaisesRegex(RuntimeError, "symlink"):
             deactivate_harness(harness="opencode", safe_yolo_home=self.safe_yolo_home, user_home=self.user_home)
-        with self.assertRaisesRegex(RuntimeError, "changed"):
+        with self.assertRaisesRegex(RuntimeError, "symlink"):
             restore(self.safe_yolo_home.resolve(), self.user_home, "opencode", uninstall=True)
         self.assertTrue(self.plugin.is_symlink())
         self.assertTrue(elsewhere.is_file())

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import UTC, datetime
-import errno
 import hashlib
 import json
 import os
@@ -218,9 +217,9 @@ def _harness_root(spec: HarnessSpec, user_home: Path, config_home: str | Path | 
     if config_home is not None:
         chosen = Path(config_home)
     elif spec.id == "opencode":
-        # OpenCode's own order (packages/util/src/global.ts): OPENCODE_CONFIG_DIR, even when empty,
+        # OpenCode 2.3.2's CLI order (packages/cli/src/index.ts): a non-empty OPENCODE_CONFIG_DIR,
         # then a non-empty XDG_CONFIG_HOME, then ~/.config.
-        if "OPENCODE_CONFIG_DIR" in os.environ:
+        if os.environ.get("OPENCODE_CONFIG_DIR"):
             chosen = Path(os.environ["OPENCODE_CONFIG_DIR"])
         elif os.environ.get("XDG_CONFIG_HOME"):
             chosen = Path(os.environ["XDG_CONFIG_HOME"]) / "opencode"
@@ -237,8 +236,19 @@ def _config_path(spec: HarnessSpec, user_home: Path, config_home: str | Path | N
     return _harness_root(spec, user_home, config_home) / spec.config_file
 
 
+class OpenCodeV1Error(RuntimeError):
+    """The OpenCode on PATH is V1, which cannot run the V2 plugin."""
+
+
+# `opencode --version` prints `opencode v2.3.2` on V2 and a bare `1.19.6` on V1 (yargs).
+_OPENCODE_VERSION_LINE = re.compile(r"(?:opencode v)?(?P<major>\d+)\.\d+\.\d+(?:-[0-9A-Za-z.]+)?\n?")
+
+
 def _require_opencode_v2() -> None:
-    """Refuse to replace a working V1 plugin when the OpenCode on PATH is V1."""
+    """Refuse to replace a working V1 plugin when the OpenCode on PATH is V1.
+
+    A sanity check on the version text, not proof of which program printed it.
+    """
     binary = shutil.which("opencode")
     if binary is None:
         return
@@ -246,31 +256,51 @@ def _require_opencode_v2() -> None:
         completed = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=30, check=False)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise RuntimeError(f"Could not read the OpenCode version from {binary}: {error}") from error
-    match = re.search(r"(\d+)\.\d+(?:\.\d+)?", completed.stdout)
+    match = _OPENCODE_VERSION_LINE.fullmatch(completed.stdout)
     if completed.returncode != 0 or match is None:
-        raise RuntimeError(f"Could not read the OpenCode version from {binary}; nothing was changed.")
-    if int(match.group(1)) < 2:
         raise RuntimeError(
-            f"OpenCode {match.group(0)} on PATH ({binary}) is V1. This Safe YOLO plugin runs only on "
+            f"{binary} --version did not print one OpenCode version line; nothing was changed."
+        )
+    if int(match.group("major")) < 2:
+        raise OpenCodeV1Error(
+            f"OpenCode {completed.stdout.strip()} on PATH ({binary}) is V1. This Safe YOLO plugin runs only on "
             "OpenCode V2, so the existing plugin was left unchanged. Upgrade OpenCode, then install again."
         )
 
 
-def _retire(path: Path, destination: Path, expected: bytes) -> None:
-    """Move an owned file into Safe YOLO's backups, copying when they sit on different filesystems."""
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.replace(path, destination)
-        return
-    except OSError as error:
-        if error.errno != errno.EXDEV:
-            raise
-    _atomic_write(destination, expected, path.stat().st_mode & 0o777)
-    if destination.read_bytes() != expected:
+def _retire(harness: str, path: Path, expected_sha256: str, home: Path) -> Path:
+    """Take an owned file out of the harness folder, keeping a verified copy in Safe YOLO's backups.
+
+    Copy, re-check, unlink: no rename, so the backups may sit on another filesystem. The copy's
+    name comes from the harness and digest, so a run interrupted after the unlink can be finished
+    by a retry that finds the file gone and that copy in place.
+    """
+    problem = _opencode_plugin_path_problem(path) if harness == "opencode" else None
+    if problem:
+        raise RuntimeError(problem)
+    destination = home / "backups" / f"retired-{harness}-{expected_sha256}-{path.name}"
+
+    def holds_expected(candidate: Path) -> bool:
+        return (
+            not candidate.is_symlink()
+            and candidate.is_file()
+            and hashlib.sha256(candidate.read_bytes()).hexdigest() == expected_sha256
+        )
+
+    if not path.exists() and not path.is_symlink():
+        if holds_expected(destination):
+            return destination
+        raise RuntimeError(f"{path} is missing and no verified copy exists at {destination}; needs operator review.")
+    if not holds_expected(path):
+        raise RuntimeError(f"{path} changed since installation; refusing to remove newer work.")
+    payload = path.read_bytes()
+    _atomic_write(destination, payload, path.stat().st_mode & 0o777)
+    if not holds_expected(destination):
         raise RuntimeError(f"Could not keep a verified copy of {path}; it was left in place.")
-    if path.is_symlink() or not path.is_file() or path.read_bytes() != expected:
-        raise RuntimeError("Harness configuration changed; refusing to overwrite newer work.")
+    if not holds_expected(path):
+        raise RuntimeError(f"{path} changed since installation; refusing to remove newer work.")
     path.unlink()
+    return destination
 
 
 def _config_root(spec: HarnessSpec, config_path: Path) -> Path:
@@ -439,8 +469,7 @@ def install_harness(
             )
     except Exception as error:
         if original_bytes is None:
-            failed = backup_root / f"failed-{target.name}"
-            os.replace(target, failed)
+            _retire(spec.id, target, hashlib.sha256(payload).hexdigest(), home)
         else:
             _atomic_write(target, original_bytes, original_mode)
         raise RuntimeError(f"Safe YOLO activation failed; previous hooks restored: {error}") from error
@@ -469,8 +498,9 @@ def install_harness(
             "opencode": (
                 "Run `opencode service restart` if the OpenCode background service is running, then start a new "
                 "session. Doctor checks the plugin file and release but cannot prove OpenCode loaded the plugin: "
-                "run `opencode api plugin.list` and confirm the safe-yolo entry has state status `active`, not "
-                "`failed` (repeat it if the list is empty while plugins load), then in a session check that "
+                "run `opencode api plugin.list` against the server and location your sessions use and confirm the "
+                "safe-yolo entry has state status `active`, not `failed`, with this plugin file as its source "
+                "(repeat it if the list is empty while plugins load), then in a session check that "
                 "`echo hello` runs and `git push --force origin main` in a scratch repository is denied."
             ),
         }[spec.id],
@@ -559,23 +589,22 @@ def deactivate_harness(
     if receipt.get("status") != "active":
         raise RuntimeError(f"Safe YOLO {spec.name} installation is not active.")
     config_path = Path(str(receipt.get("config_path", "")))
-    if (
-        config_path.is_symlink()
-        or not config_path.is_file()
-        or (spec.id == "opencode" and _opencode_plugin_path_problem(config_path))
-        or _sha256(config_path) != receipt.get("installed_config_sha256")
-    ):
-        raise RuntimeError(f"{spec.name} configuration changed since installation; refusing to overwrite newer work.")
     if receipt.get("previous_config_existed"):
+        if (
+            config_path.is_symlink()
+            or not config_path.is_file()
+            or (spec.id == "opencode" and _opencode_plugin_path_problem(config_path))
+            or _sha256(config_path) != receipt.get("installed_config_sha256")
+        ):
+            raise RuntimeError(
+                f"{spec.name} configuration changed since installation; refusing to overwrite newer work."
+            )
         backup = Path(str(receipt.get("previous_config_backup")))
         if not backup.is_file():
             raise RuntimeError("Previous configuration backup is missing; refusing an incomplete rollback.")
         _atomic_write(config_path, backup.read_bytes(), int(receipt.get("previous_config_mode", 0o600)))
     else:
-        retained = home / "backups" / (
-            f"deactivated-{spec.id}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ')}-{config_path.name}"
-        )
-        _retire(config_path, retained, config_path.read_bytes())
+        retained = _retire(spec.id, config_path, str(receipt.get("installed_config_sha256")), home)
         receipt["deactivated_config_backup"] = str(retained)
     receipt["status"] = "inactive"
     receipt["deactivated_at"] = datetime.now(UTC).isoformat()
@@ -688,10 +717,17 @@ def main(argv: list[str] | None = None) -> int:
             revision = _current_commit(source)
             from scripts.global_cli import install_command
             launcher = install_command(source, args.home.resolve(), args.user_home.resolve())
-            reports = [install_harness(harness=harness, source=source, safe_yolo_home=args.home,
-                       user_home=args.user_home, config_home=args.config_home, expected_commit=revision)
-                       for harness in selected]
-            result = reports[0] if args.harness else {'healthy': True, 'reports': reports}
+            reports, skipped = [], []
+            for harness in selected:
+                try:
+                    reports.append(install_harness(harness=harness, source=source, safe_yolo_home=args.home,
+                                   user_home=args.user_home, config_home=args.config_home,
+                                   expected_commit=revision))
+                except OpenCodeV1Error as error:
+                    if args.harness:
+                        raise
+                    skipped.append({'harness': harness, 'reason': str(error)})
+            result = reports[0] if args.harness else {'healthy': True, 'reports': reports, 'skipped': skipped}
             result['command'] = str(launcher) if launcher else None
             result['path_note'] = 'Add ~/.local/bin to PATH if safe-yolo is not found.'
         elif args.command == 'update':

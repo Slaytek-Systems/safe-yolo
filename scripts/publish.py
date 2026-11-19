@@ -34,9 +34,20 @@ def acceptance(archive: Path, revision: str) -> None:
         (user / '.claude/settings.json').write_text('{"theme": "dark"}\n')
         other_plugin = user / '.config/opencode/plugins/other.js'
         other_plugin.write_text('export default { id: "other", setup() {} }\n')
+        # The host's own `opencode --version` creates its config, data, state and cache folders, and a host V1
+        # would fail the check, so the check sees only a fixture that prints the V2 version line.
+        fixture = root / 'bin'
+        fixture.mkdir()
+        (fixture / 'opencode').write_text("#!/bin/sh\necho 'opencode v2.3.2'\n")
+        (fixture / 'opencode').chmod(0o755)
+        search = [str(fixture)] + [entry for entry in os.environ.get('PATH', os.defpath).split(os.pathsep)
+                                   if entry and not (Path(entry) / 'opencode').exists()]
         environment = {key: value for key, value in os.environ.items()
-                       if key not in {'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME', 'OPENCODE_CONFIG_DIR',
-                                       'PYTHONPATH'}}
+                       if key not in {'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'OPENCODE_CONFIG_DIR', 'OPENCODE_DB',
+                                      'PYTHONPATH'}}
+        environment.update(HOME=str(user), PATH=os.pathsep.join(search),
+                           XDG_CONFIG_HOME=str(user / '.config'), XDG_DATA_HOME=str(user / '.local/share'),
+                           XDG_STATE_HOME=str(user / '.local/state'), XDG_CACHE_HOME=str(user / '.cache'))
 
         def run(args: list[str]) -> dict:
             result = subprocess.run(args, cwd=root, env=environment, capture_output=True,
