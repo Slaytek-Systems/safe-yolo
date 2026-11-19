@@ -118,6 +118,7 @@ manual artifact copying belongs there.
 - `adapters/grok_v3.py` — stateless Grok CLI `PreToolUse` transport over the same kernel (see `hosts/linux/devbox.grok-candidate.hooks.json`).
 - `adapters/cursor_v3.py` — stateless Cursor Agent transport over the same kernel (see `hosts/linux/devbox.cursor-candidate.hooks.json`).
 - `adapters/opencode_v3.py` — stateless OpenCode transport over the same kernel, called by the V2 plugin `adapters/opencode_v2_plugin.js` from its `execute.before` tool hook.
+- `adapters/opencode_v1_retired_plugin.js` — the retired hand-placed V1 plugin. Install replaces a file of this shape, with only its pin constants changed, or a plugin rendered from an installed release, and nothing else.
 - `adapters/antigravity_v3.py` — stateless Antigravity ACP `PreToolUse` transport over the same kernel (see `hosts/linux/devbox.antigravity-candidate.hooks.json`).
 - `tests/unit/test_v3_*`, `tests/unit/test_devin_adapter.py`, `tests/unit/test_claude_code_adapter.py`, `tests/unit/test_grok_adapter.py`, `tests/unit/test_cursor_v3_adapter.py`, and `tests/unit/test_opencode_v3_adapter.py` — allow, deny, release, and executable-hook journeys.
 - `hosts/linux/devbox.v3-candidate.hooks.json` — non-active cutover example.
