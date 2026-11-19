@@ -108,6 +108,7 @@ def build_kernel(
         customizations_path=safe_yolo / 'customizations.json',
         observation_dir=observation_dir,
         observation_harness="antigravity",
+        user_home=home,
         enforcement_paths=tuple(enforcement),
         credential_paths=(
             str(gemini / "antigravity-acp" / "acp_token.json"),

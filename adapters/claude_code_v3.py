@@ -54,6 +54,7 @@ def build_kernel(
         customizations_path=safe_yolo / 'customizations.json',
         observation_dir=observation_dir,
         observation_harness="claude-code",
+        user_home=home,
         enforcement_paths=tuple(enforcement),
         credential_paths=(
             str(claude / ".credentials.json"),

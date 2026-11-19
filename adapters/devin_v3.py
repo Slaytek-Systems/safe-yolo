@@ -29,6 +29,7 @@ def build_kernel(
         customizations_path=Path(safe_yolo_home).expanduser() / 'customizations.json',
         observation_dir=observation_dir,
         observation_harness="devin",
+        user_home=home,
         enforcement_paths=(
             str(Path(safe_yolo_home).expanduser()),
             str(config.parent),
