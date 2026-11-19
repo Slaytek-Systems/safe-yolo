@@ -11,7 +11,8 @@ The deny set is:
 - direct deployment or infrastructure mutation, including protection bypasses;
 - interactive, hidden, or restricted remote execution, and privileged execution;
 - public network exposure;
-- credential access; and
+- credential access;
+- recursive search of a whole storage root; and
 - modification of Safe YOLO or its hook surface.
 
 Ordinary feature-branch pushes, pull-request creation, and protected merges
@@ -107,6 +108,7 @@ bridge release moves updates here automatically. No ongoing development or
 manual artifact copying belongs there.
 
 - `engine/consequences_v3.py` — current deny-only direct consequence policy. Output redirects and mutating executables bind `enforcement.modify` to the actual write target; v3 adapters declare trusted scratch roots (`/tmp` and `~/tmp` by default, replaceable with `--scratch`) so `rm`/`unlink`/`rmdir` and structured `delete_file`/`remove_file` inside those roots is allowed.
+- `engine/broad_search.py` — shared recognizer for `grep -r`, `rg`, `find` and native grep tool calls that name a whole storage root. Anything the command text does not settle is allowed.
 - `engine/ssh_command.py` — shared SSH argv parser. Explicit no-session transport and visible ordinary remote commands are allowed; interactive shells, opaque config files, subsystems, command-bearing options with restricted effects, and redirected maintenance commands are denied.
 - `adapters/codex_v3.py` — stateless Codex `PreToolUse` transport.
 - `adapters/devin_v3.py` — stateless Devin `PreToolUse` transport over the same kernel.

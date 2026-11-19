@@ -61,6 +61,7 @@ def build_kernel(
         customizations_path=safe_yolo / 'customizations.json',
         observation_dir=observation_dir,
         observation_harness="opencode",
+        user_home=home,
         enforcement_paths=tuple(enforcement),
         credential_paths=(
             str(home / ".local" / "share" / "opencode" / "auth.json"),

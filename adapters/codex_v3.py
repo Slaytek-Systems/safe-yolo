@@ -23,6 +23,7 @@ SAFE_METHODS = {
     "network.public_exposure": "bind to loopback and use the approved preview or forwarding path",
     "credentials.access": "use the approved credential broker or value-blind readiness check",
     "enforcement.modify": "publish an immutable reviewed Safe YOLO release through operator maintenance",
+    "filesystem.broad_search": "list the root first with `ls <root>`, then search the named subfolder; `find` on a root also passes with -maxdepth 3 or less",
     "interactive.process_write": "use a fresh one-shot command with an explicit working directory",
 }
 
@@ -52,6 +53,7 @@ def build_kernel(
         customizations_path=safe_yolo / 'customizations.json',
         observation_dir=observation_dir,
         observation_harness="codex",
+        user_home=home,
         enforcement_paths=(
             str(safe_yolo),
             str(codex / "config.toml"),

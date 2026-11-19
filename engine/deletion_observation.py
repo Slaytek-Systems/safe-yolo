@@ -27,7 +27,7 @@ DELETE_COMMANDS = {"rm", "rmdir", "unlink", "shred", "truncate"}
 POLICIES = {
     "filesystem.delete", "git.delete_ref", "git.history_mutation", "production.mutate",
     "remote.execute", "privilege.modify", "network.public_exposure", "credentials.access",
-    "enforcement.modify", "interactive.process_write",
+    "enforcement.modify", "interactive.process_write", "filesystem.broad_search",
 }
 PATH_NAMES = ("path", "file_path", "target_file")
 ROOT = Path(__file__).resolve().parents[1]

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import shlex
 from typing import Any, Literal
 
+from engine import broad_search
 from engine.consequences_v2 import ConsequenceKernel
 
 
@@ -29,8 +31,9 @@ class DenyOnlyKernel(ConsequenceKernel):
 
     def __init__(self, *, observation_dir: str | Path | None = None,
                  observation_harness: str = "unknown", customizations_path: Path | None = None,
-                 **options: Any) -> None:
+                 user_home: str | Path | None = None, **options: Any) -> None:
         super().__init__(**options)
+        self.user_home = os.path.normpath(Path(user_home).expanduser() if user_home else Path.home())
         self.observation_dir = observation_dir
         self.observation_harness = observation_harness
         self.customization_error = False
@@ -91,11 +94,16 @@ class DenyOnlyKernel(ConsequenceKernel):
             and recognized.outcome == "approval_required"
         ):
             return Decision("allow")
-        return Decision(
-            "allow" if recognized.outcome == "allow" else "deny",
-            recognized.consequence,
-            recognized.display,
-        )
+        if recognized.outcome != "allow":
+            return Decision("deny", recognized.consequence, recognized.display)
+        search = broad_search.inspect(payload, self.user_home)
+        if search:
+            return Decision(
+                "deny",
+                "filesystem.broad_search",
+                f"recursive {search.tool} search of the whole storage root {search.root}",
+            )
+        return Decision("allow")
 
     @staticmethod
     def _direct_help_request(payload: dict[str, Any]) -> bool:

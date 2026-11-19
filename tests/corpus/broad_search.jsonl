@@ -1,0 +1,151 @@
+{"id": "deny-evidence-1", "command": "grep -rl \"5e6d3bdf\" ~/.local/state", "expected": "deny", "root": "/home/test/.local/state"}
+{"id": "deny-evidence-2", "command": "grep -rl \"58e5\" ~/.local/state ~/.cache/ci-logs /tmp", "expected": "deny", "root": "/home/test/.local/state"}
+{"id": "deny-evidence-3", "command": "find / -path /proc -prune -o -type d -name rag -print", "expected": "deny", "root": "/"}
+{"id": "deny-evidence-4", "command": "find / -name approved-merge-admission.md", "expected": "deny", "root": "/"}
+{"id": "deny-evidence-5", "command": "grep -rl \"5e6d3bdf\" ~/.local/state 2>/dev/null | head", "expected": "deny", "root": "/home/test/.local/state"}
+{"id": "deny-evidence-6", "command": "grep -rl \"58e5\" ~/.local/state ~/.cache/ci-logs /tmp 2>/dev/null | head; workspace jobs", "expected": "deny", "root": "/home/test/.local/state"}
+{"id": "deny-evidence-7", "command": "ls node_modules | head -3; find / -path /proc -prune -o -type d -name rag -print 2>/dev/null | head", "expected": "deny", "root": "/"}
+{"id": "deny-evidence-8", "command": "sed -n 205,230p scripts/x.ts; ls ~/.local/state/some-app; grep -rl \"5e6d3bdf\" ~/.local/state | head", "expected": "deny", "root": "/home/test/.local/state"}
+{"id": "deny-roots-1", "command": "grep -rl \"doccount.json\" ~/.codex ~/.claude 2>/dev/null | head -3", "expected": "deny", "root": "/home/test/.codex"}
+{"id": "deny-roots-2", "command": "for f in $(/usr/bin/grep -rl \"x\" $HOME/.local/share); do echo $f; done", "expected": "deny", "root": "/home/test/.local/share"}
+{"id": "deny-roots-3", "command": "rg -l foo /home/test", "expected": "deny", "root": "/home/test"}
+{"id": "deny-roots-4", "command": "rg -g \"*.py\" -A 3 foo ${HOME}/.claude", "expected": "deny", "root": "/home/test/.claude"}
+{"id": "deny-roots-5", "command": "rg foo /Users", "expected": "deny", "root": "/Users"}
+{"id": "deny-roots-6", "command": "grep -r foo /var/tmp", "expected": "deny", "root": "/var/tmp"}
+{"id": "deny-roots-7", "command": "fgrep -r foo ~/.local", "expected": "deny", "root": "/home/test/.local"}
+{"id": "deny-roots-8", "command": "egrep -rl foo /home", "expected": "deny", "root": "/home"}
+{"id": "deny-roots-9", "command": "/usr/local/bin/rg foo ~/.cache", "expected": "deny", "root": "/home/test/.cache"}
+{"id": "deny-roots-10", "command": "find ~ -name \"*.log\" -mmin -60", "expected": "deny", "root": "/home/test"}
+{"id": "deny-roots-11", "command": "find ~ -maxdepth 6 -name x", "expected": "deny", "root": "/home/test"}
+{"id": "deny-roots-12", "command": "find /home -type f -name x", "expected": "deny", "root": "/home"}
+{"id": "deny-roots-13", "command": "find /Users -name x", "expected": "deny", "root": "/Users"}
+{"id": "deny-roots-14", "command": "/usr/bin/find $HOME -name x", "expected": "deny", "root": "/home/test"}
+{"id": "deny-spelling-1", "command": "grep -rn foo /home/test/.local/state/", "expected": "deny", "root": "/home/test/.local/state"}
+{"id": "deny-spelling-2", "command": "grep -rn foo /tmp/../tmp", "expected": "deny", "root": "/tmp"}
+{"id": "deny-spelling-3", "command": "grep -rl foo '/tmp'", "expected": "deny", "root": "/tmp"}
+{"id": "deny-spelling-4", "command": "LC_ALL=C grep -rIl foo \"$HOME/.cache\"", "expected": "deny", "root": "/home/test/.cache"}
+{"id": "deny-grep-recursive-1", "command": "grep -R foo /tmp", "expected": "deny", "root": "/tmp"}
+{"id": "deny-grep-recursive-2", "command": "grep -r -e foo /tmp", "expected": "deny", "root": "/tmp"}
+{"id": "deny-grep-recursive-3", "command": "grep --recursive --include '*.py' foo /tmp", "expected": "deny", "root": "/tmp"}
+{"id": "deny-grep-recursive-4", "command": "grep --dereference-recursive foo /var", "expected": "deny", "root": "/var"}
+{"id": "deny-grep-recursive-5", "command": "grep --directories=recurse -l needle ~/.local/state", "expected": "deny", "root": "/home/test/.local/state"}
+{"id": "deny-grep-recursive-6", "command": "grep -d recurse needle /tmp", "expected": "deny", "root": "/tmp"}
+{"id": "deny-grep-recursive-7", "command": "grep -r --color needle /tmp", "expected": "deny", "root": "/tmp"}
+{"id": "deny-shell-position-1", "command": "if grep -rq foo ~/.cache; then echo yes; fi", "expected": "deny", "root": "/home/test/.cache"}
+{"id": "deny-shell-position-2", "command": "false || grep -r foo /tmp", "expected": "deny", "root": "/tmp"}
+{"id": "deny-shell-position-3", "command": "x=$(grep -rl a /tmp)", "expected": "deny", "root": "/tmp"}
+{"id": "deny-shell-position-4", "command": "ls; (grep -r a /tmp)", "expected": "deny", "root": "/tmp"}
+{"id": "deny-shell-position-5", "command": "diff <(grep -rl a /tmp) b.txt", "expected": "deny", "root": "/tmp"}
+{"id": "deny-shell-position-6", "command": "cat <<<\"abc\"\ngrep -r foo /tmp", "expected": "deny", "root": "/tmp"}
+{"id": "deny-shell-position-7", "command": "echo '<<EXAMPLE'\ngrep -r foo /tmp", "expected": "deny", "root": "/tmp"}
+{"id": "deny-shell-position-8", "command": "false && grep -rl x ~/.local/state", "expected": "deny", "root": "/home/test/.local/state"}
+{"id": "deny-no-waiver-1", "command": "grep -rl x /tmp  # broad-search-guard: allow", "expected": "deny", "root": "/tmp"}
+{"id": "allow-narrow-1", "command": "grep -rl \"x\" ~/.local/state/some-app", "expected": "allow"}
+{"id": "allow-narrow-2", "command": "grep -rn \"foo\" src/ convex/", "expected": "allow"}
+{"id": "allow-narrow-3", "command": "grep -n foo ~/.codex/AGENTS.md", "expected": "allow"}
+{"id": "allow-narrow-4", "command": "grep foo /tmp/a.log", "expected": "allow"}
+{"id": "allow-narrow-5", "command": "grep foo /tmp", "expected": "allow"}
+{"id": "allow-narrow-6", "command": "grep -r foo /tmp/*.log", "expected": "allow"}
+{"id": "allow-narrow-7", "command": "grep -rhoE \"x\" ~/.local/state/coord4*/ -r", "expected": "allow"}
+{"id": "allow-narrow-8", "command": "grep -c . /tmp/x.txt; grep -r foo ./node_modules/pkg", "expected": "allow"}
+{"id": "allow-narrow-9", "command": "rg foo", "expected": "allow"}
+{"id": "allow-narrow-10", "command": "rg -n foo .", "expected": "allow"}
+{"id": "allow-narrow-11", "command": "cd /x && grep -rn foo --include=*.go .", "expected": "allow"}
+{"id": "allow-narrow-12", "command": "find ~ -maxdepth 2 -name \"*.log\"", "expected": "allow"}
+{"id": "allow-narrow-13", "command": "find / -maxdepth 3 -name x", "expected": "allow"}
+{"id": "allow-narrow-14", "command": "find . -name \"*.ts\"", "expected": "allow"}
+{"id": "allow-narrow-15", "command": "find /tmp/claude-x -type f", "expected": "allow"}
+{"id": "allow-narrow-16", "command": "find ~/.local/state -name x", "expected": "allow"}
+{"id": "allow-narrow-17", "command": "find /tmp -name x", "expected": "allow"}
+{"id": "allow-narrow-18", "command": "find /var -name x", "expected": "allow"}
+{"id": "allow-narrow-19", "command": "find --help", "expected": "allow"}
+{"id": "allow-narrow-20", "command": "du -sh ~/.local/state", "expected": "allow"}
+{"id": "allow-narrow-21", "command": "ls /tmp | grep foo", "expected": "allow"}
+{"id": "allow-narrow-22", "command": "ps aux | rg foo", "expected": "allow"}
+{"id": "allow-narrow-23", "command": "journalctl --user -n 50 |\n  rg foo", "expected": "allow"}
+{"id": "allow-narrow-24", "command": "grep -rl \"doccount.json\" ~/.codex/sessions ~/.claude/projects 2>/dev/null | head -3", "expected": "allow"}
+{"id": "allow-narrow-25", "command": "grep -rl x ~/projects", "expected": "allow"}
+{"id": "allow-narrow-26", "command": "rg foo /opt", "expected": "allow"}
+{"id": "allow-narrow-27", "command": "rg foo /home/other", "expected": "allow"}
+{"id": "allow-root-is-not-the-place-1", "command": "grep -rn \"/tmp\" bin/ docs/", "expected": "allow"}
+{"id": "allow-root-is-not-the-place-2", "command": "rg \"/home/test\" docs", "expected": "allow"}
+{"id": "allow-root-is-not-the-place-3", "command": "grep -rn -e /tmp bin", "expected": "allow"}
+{"id": "allow-root-is-not-the-place-4", "command": "grep -r -A 3 /tmp bin", "expected": "allow"}
+{"id": "allow-root-is-not-the-place-5", "command": "grep -r --exclude-dir /tmp foo src", "expected": "allow"}
+{"id": "allow-root-is-not-the-place-6", "command": "rg -g /tmp foo src", "expected": "allow"}
+{"id": "allow-mention-only-1", "command": "git commit -m \"stop grep -r ~/.local/state\"", "expected": "allow"}
+{"id": "allow-mention-only-2", "command": "echo \"grep -r foo /tmp\"", "expected": "allow"}
+{"id": "allow-mention-only-3", "command": "echo \"a; grep -r x /tmp\"", "expected": "allow"}
+{"id": "allow-mention-only-4", "command": "echo grep -r foo /tmp", "expected": "allow"}
+{"id": "allow-mention-only-5", "command": "echo hi # ; grep -r foo /tmp", "expected": "allow"}
+{"id": "allow-mention-only-6", "command": "cat > x.sh <<'EOF'\ngrep -r foo /tmp\nEOF", "expected": "allow"}
+{"id": "allow-mention-only-7", "command": "python3 -c \"import re; print('find / -name x')\"", "expected": "allow"}
+{"id": "allow-mention-only-8", "command": "git log --grep=foo -- /", "expected": "allow"}
+{"id": "allow-mention-only-9", "command": "docker run --rm img sh -c 'ls /; find / -xdev -name x'", "expected": "allow"}
+{"id": "allow-mention-only-10", "command": "ssh host \"grep -r foo /\"", "expected": "allow"}
+{"id": "allow-relative-1", "command": "cd ~ && rg foo", "expected": "allow"}
+{"id": "allow-relative-2", "command": "cd ~ && grep -rn foo .", "expected": "allow"}
+{"id": "allow-relative-3", "command": "cd ~/.local && grep -rl foo state", "expected": "allow"}
+{"id": "allow-relative-4", "command": "find -name '*.rag'", "expected": "allow"}
+{"id": "allow-relative-5", "command": "grep -r foo *", "expected": "allow"}
+{"id": "allow-relative-6", "command": "(cd /tmp && ls); grep -r foo .", "expected": "allow"}
+{"id": "allow-not-a-search-1", "command": "rg --help", "expected": "allow"}
+{"id": "allow-not-a-search-2", "command": "rg -h", "expected": "allow"}
+{"id": "allow-not-a-search-3", "command": "rg --type-list", "expected": "allow"}
+{"id": "allow-not-a-search-4", "command": "rg -V", "expected": "allow"}
+{"id": "allow-not-a-search-5", "command": "grep -r --version", "expected": "allow"}
+{"id": "allow-not-a-search-6", "command": "grep -r foo /tmp --help", "expected": "allow"}
+{"id": "allow-not-a-search-7", "command": "rg --max-depth 0 needle /tmp", "expected": "allow"}
+{"id": "allow-not-a-search-8", "command": "rg -d 1 needle /tmp", "expected": "allow"}
+{"id": "allow-not-a-search-9", "command": "cd /tmp | cat; rg needle .", "expected": "allow"}
+{"id": "allow-not-a-search-10", "command": "cat a.log | grep -r foo", "expected": "allow"}
+{"id": "allow-not-a-search-11", "command": "command -v rg", "expected": "allow"}
+{"id": "allow-not-a-search-12", "command": "command -V grep", "expected": "allow"}
+{"id": "allow-not-a-search-13", "command": "rg needle < input.txt", "expected": "allow"}
+{"id": "allow-not-a-search-14", "command": "rg needle <<< 'needle'", "expected": "allow"}
+{"id": "allow-not-a-search-15", "command": "printf x | rg --files", "expected": "allow"}
+{"id": "allow-not-a-search-16", "command": "rg --files ~", "expected": "allow"}
+{"id": "allow-not-a-search-17", "command": "find / --help", "expected": "allow"}
+{"id": "allow-not-a-search-18", "command": "find /home --version", "expected": "allow"}
+{"id": "allow-heredoc-1", "command": "cat <<'EOF'\n  EOF\ngrep -r foo /tmp\nEOF", "expected": "allow"}
+{"id": "allow-heredoc-2", "command": "cat <<-EOF\n\tgrep -r foo /tmp\n\tEOF", "expected": "allow"}
+{"id": "allow-heredoc-3", "command": "cat <<EOF | tee x.txt\ngrep -r foo /tmp\nEOF", "expected": "allow"}
+{"id": "allow-heredoc-4", "command": "cat <<EOF\nline \\\nEOF\ngrep -r foo /tmp\nEOF", "expected": "allow"}
+{"id": "allow-heredoc-5", "command": "cat <\\\n<'EOF'\ngrep -r needle /tmp\nEOF", "expected": "allow"}
+{"id": "allow-uncertain-options-1", "command": "true || cd /tmp; rg needle .", "expected": "allow"}
+{"id": "allow-uncertain-options-2", "command": "cd /no/such/folder; rg needle .", "expected": "allow"}
+{"id": "allow-uncertain-options-3", "command": "rg needle \"~/.cache\"", "expected": "allow"}
+{"id": "allow-uncertain-options-4", "command": "rg needle '~'", "expected": "allow"}
+{"id": "allow-uncertain-options-5", "command": "grep -r --color needle ./child", "expected": "allow"}
+{"id": "allow-uncertain-options-6", "command": "grep -r --directories=skip needle /tmp", "expected": "allow"}
+{"id": "allow-uncertain-options-7", "command": "grep -r -d skip needle /tmp", "expected": "allow"}
+{"id": "allow-uncertain-options-8", "command": "args=(rg needle /tmp)", "expected": "allow"}
+{"id": "allow-uncertain-options-9", "command": "grep --recurs foo /tmp", "expected": "allow"}
+{"id": "allow-uncertain-options-10", "command": "POSIXLY_CORRECT=1 grep needle -r /tmp", "expected": "allow"}
+{"id": "allow-uncertain-options-11", "command": "find / -made-up-option", "expected": "allow"}
+{"id": "allow-uncertain-options-12", "command": "find / -name x -exec ls {} +", "expected": "allow"}
+{"id": "allow-home-reassigned-1", "command": "HOME=/tmp/review-fixture; rg needle \"$HOME/.cache\"", "expected": "allow"}
+{"id": "allow-home-reassigned-2", "command": "export HOME=/x; grep -r foo ~/.cache", "expected": "allow"}
+{"id": "allow-unreadable-word-1", "command": "grep -rl \"$sha\" ~/.local/state", "expected": "allow"}
+{"id": "allow-unreadable-word-2", "command": "grep -r $OPTS /tmp", "expected": "allow"}
+{"id": "allow-unreadable-word-3", "command": "grep -r foo \"$(pwd)\" /tmp", "expected": "allow"}
+{"id": "allow-unreadable-word-4", "command": "grep -rl x $(cat list) ~/.cache", "expected": "allow"}
+{"id": "allow-unreadable-word-5", "command": "echo $(date) grep -r foo /tmp", "expected": "allow"}
+{"id": "allow-unreadable-word-6", "command": "find ~ -name \"$(basename x)\" -maxdepth 1", "expected": "allow"}
+{"id": "allow-unreadable-word-7", "command": "find / -newer $(mktemp) -maxdepth 1", "expected": "allow"}
+{"id": "allow-unreadable-word-8", "command": "rg foo $XDG_CACHE_HOME", "expected": "allow"}
+{"id": "allow-reading-stops-1", "command": "echo \"$(grep -rl a ~/.cache)\"", "expected": "allow"}
+{"id": "allow-reading-stops-2", "command": "echo \"found: `grep -rl a ~/.cache`\"", "expected": "allow"}
+{"id": "allow-reading-stops-3", "command": "f() { grep -r foo /tmp; }", "expected": "allow"}
+{"id": "allow-reading-stops-4", "command": "f () {\n  grep -r foo /tmp\n}", "expected": "allow"}
+{"id": "allow-reading-stops-5", "command": "[[ $x =~ (a|b) ]] && grep -r foo /tmp", "expected": "allow"}
+{"id": "allow-reading-stops-6", "command": "echo 'unclosed; grep -r foo /tmp", "expected": "allow"}
+{"id": "allow-reading-stops-7", "command": "case $x in a) grep -r foo /tmp;; esac", "expected": "allow"}
+{"id": "allow-behind-another-program-1", "command": "timeout 60 grep -rIl foo ~/.cache", "expected": "allow"}
+{"id": "allow-behind-another-program-2", "command": "bash -lc 'grep -r foo ~/.cache | head'", "expected": "allow"}
+{"id": "allow-behind-another-program-3", "command": "xargs grep -r foo /tmp", "expected": "allow"}
+{"id": "allow-behind-another-program-4", "command": "nice rg foo /tmp", "expected": "allow"}
+{"id": "allow-outside-the-contract-1", "command": "rgrep foo /tmp", "expected": "allow"}
+{"id": "allow-outside-the-contract-2", "command": "./grep -r foo /tmp", "expected": "allow"}
+{"id": "allow-outside-the-contract-3", "command": "/home/test/project/bin/grep -r needle /tmp", "expected": "allow"}
+{"id": "allow-outside-the-contract-4", "command": "ag foo /tmp", "expected": "allow"}
