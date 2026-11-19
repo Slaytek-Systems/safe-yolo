@@ -55,9 +55,9 @@ def inspect_codex_wiring(
     except (OSError, json.JSONDecodeError) as error:
         return {"healthy": False, "problems": [*problems, f"hooks unreadable: {type(error).__name__}"]}
     hooks = document.get("hooks", {}) if isinstance(document, dict) else {}
-    pretool = _safe_yolo_hooks(hooks, "PreToolUse")
+    pretool = _command_hooks(hooks, "PreToolUse")
     if len(pretool) != 1:
-        problems.append("exactly one Safe YOLO PreToolUse command hook is required")
+        problems.append("exactly one PreToolUse command hook is required")
     elif pretool[0][0] != "*" or not _command_is_pinned(
         pretool[0][1],
         bootstrap_path=bootstrap_path,

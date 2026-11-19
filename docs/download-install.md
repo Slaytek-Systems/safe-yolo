@@ -52,9 +52,10 @@ python3 safe-yolo doctor --all
 ```
 
 Run only the relevant install commands. The installer applies to the selected
-user's global harness configuration across projects. In Codex and Claude Code
-other tools' `PreToolUse` hooks stay beside Safe YOLO's, and a non-empty
-`PostToolUse` list is refused; Cursor must have no other `preToolUse` hook. Codex currently requires these existing settings in its
+user's global harness configuration across projects. In Claude Code other
+tools' `PreToolUse` hooks stay beside Safe YOLO's. Codex and Cursor must have
+no other `PreToolUse` (`preToolUse`) hook. Codex and Claude Code must have no
+`PostToolUse` hook. Codex currently requires these existing settings in its
 `config.toml`; the installer checks them and does not change native permissions:
 
 ```toml
@@ -127,8 +128,7 @@ Both refuse to overwrite configuration changed since the last installation;
 a successful update to a different version takes such an edit as its rollback
 snapshot. Nothing locks the file, so do not save harness settings while one of
 these commands runs. Installations whose first-found configuration already held a
-Safe YOLO hook (or, in Cursor, any `preToolUse` hook) require operator review
-for complete removal. Restart the affected harness afterward.
+Safe YOLO hook require operator review for complete removal. Restart the affected harness afterward.
 
 Inactive releases, management commands, customizations, and recovery evidence
 are retained on disk. Uninstall stops enforcement; it does not erase your files.

@@ -101,7 +101,7 @@ class PrivateBetaCliTests(unittest.TestCase):
         self.assertIn(str(receipt["bootstrap"]), command)
 
     @patch("scripts.distribute.verify_source", return_value="b" * 40)
-    def test_install_preserves_unrelated_events_and_refuses_malformed_pretool(self, _verify):
+    def test_install_preserves_unrelated_events_and_refuses_conflicting_pretool(self, _verify):
         original = {
             "hooks": {
                 "SessionStart": [
@@ -121,7 +121,14 @@ class PrivateBetaCliTests(unittest.TestCase):
         self.assertTrue(receipt["previous_hooks_existed"])
 
         deactivate_codex(safe_yolo_home=self.safe_yolo_home, codex_home=self.codex_home)
-        self.hooks.write_text(json.dumps({"hooks": {"PreToolUse": {"command": "echo malformed"}}}))
+        conflict = {
+            "hooks": {
+                "PreToolUse": [
+                    {"matcher": "*", "hooks": [{"type": "command", "command": "echo foreign"}]}
+                ]
+            }
+        }
+        self.hooks.write_text(json.dumps(conflict) + "\n")
         with self.assertRaisesRegex(RuntimeError, "existing PreToolUse"):
             install_codex(
                 source=self.source,
@@ -130,186 +137,14 @@ class PrivateBetaCliTests(unittest.TestCase):
                 expected_commit="b" * 40,
             )
 
-    def install(self, version=None):
-        if version:
-            (self.source / "VERSION").write_text(version + "\n")
-        return install_codex(
-            source=self.source,
-            safe_yolo_home=self.safe_yolo_home,
-            codex_home=self.codex_home,
-            expected_commit="b" * 40,
-        )
-
-    def pretool(self):
-        return json.loads(self.hooks.read_text())["hooks"]["PreToolUse"]
-
-    def uninstall(self):
-        return restore(self.safe_yolo_home, self.user_home, "codex", uninstall=True)
-
-    @patch("scripts.distribute.verify_source", return_value="b" * 40)
-    def test_install_appends_its_hook_and_uninstall_restores_the_other_owners_groups(self, _verify):
-        other = {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo other"}]}
-        unrelated_bootstraps = {
-            "matcher": "*",
-            "hooks": [
-                {"type": "command", "command": "python3 /opt/tool/bootstrap.py --entry web --manifest-sha256 x"},
-                {
-                    "type": "command",
-                    "command": "python3 /opt/tool/releases/1/scripts/bootstrap.py --release /opt/tool/releases/1 "
-                    "--manifest-sha256 x --entry audit",
-                },
-            ],
-        }
-        empty = {"matcher": "Bash", "hooks": []}
-        before = [other, unrelated_bootstraps, empty]
-        self.hooks.write_text(json.dumps({"hooks": {"PreToolUse": before}}) + "\n")
-        original_bytes = self.hooks.read_bytes()
-        self.install()
-        groups = self.pretool()
-        self.assertEqual(before, groups[:3])
-        self.assertEqual("*", groups[3]["matcher"])
-        self.assertIn("--entry codex_v3", groups[3]["hooks"][0]["command"])
-        report = doctor_codex(safe_yolo_home=self.safe_yolo_home, codex_home=self.codex_home)
-        self.assertTrue(report["healthy"], report)
-        self.uninstall()
-        self.assertEqual(before, self.pretool())
-        self.install("3.0.0-beta.3")
-        deactivate_codex(safe_yolo_home=self.safe_yolo_home, codex_home=self.codex_home)
-        self.assertEqual(before, self.pretool())
-        self.assertNotEqual(b"", original_bytes)
-
-    @patch("scripts.distribute.verify_source", return_value="b" * 40)
-    def test_update_replaces_its_hook_in_place_beside_a_hook_sharing_its_group(self, _verify):
-        self.install()
-        document = json.loads(self.hooks.read_text())
-        sibling = {"type": "command", "command": "echo sibling"}
-        later = {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo later"}]}
-        document["hooks"]["PreToolUse"][0]["hooks"].append(sibling)
-        document["hooks"]["PreToolUse"].append(later)
-        document["description"] = "mine"
-        self.hooks.write_text(json.dumps(document))
-
-        self.install("3.0.0-beta.3")
-
-        groups = self.pretool()
-        self.assertEqual(2, len(groups))
-        self.assertIn("/releases/3.0.0-beta.3/", groups[0]["hooks"][0]["command"])
-        self.assertEqual(sibling, groups[0]["hooks"][1])
-        self.assertEqual(later, groups[1])
-        self.assertEqual("mine", json.loads(self.hooks.read_text())["description"])
-        report = doctor_codex(safe_yolo_home=self.safe_yolo_home, codex_home=self.codex_home)
-        self.assertTrue(report["healthy"], report)
-
-        updated_bytes = self.hooks.read_bytes()
-        with self.assertRaisesRegex(RuntimeError, "would move it"):
-            self.uninstall()
-        self.assertEqual(updated_bytes, self.hooks.read_bytes())
-
-    @patch("scripts.distribute.verify_source", return_value="b" * 40)
-    def test_uninstall_moves_no_later_hook_and_keeps_tightened_permissions(self, _verify):
-        self.hooks.write_text('{"hooks": {}, "description": "mine"}\n')
-        self.hooks.chmod(0o644)
-        self.install()
-        later = {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo later"}]}
-        document = json.loads(self.hooks.read_text())
-        document["hooks"]["PreToolUse"].append(later)
-        self.hooks.write_text(json.dumps(document))
-        self.hooks.chmod(0o600)
-        self.install("3.0.0-beta.3")
-        self.uninstall()
-        self.assertEqual(
-            {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": []}, later]}, "description": "mine"},
-            json.loads(self.hooks.read_text()),
-        )
-        self.assertEqual(0o600, self.hooks.stat().st_mode & 0o777)
-
-    @patch("scripts.distribute.verify_source", return_value="b" * 40)
-    def test_uninstall_refuses_when_the_file_is_saved_while_it_stages_the_new_one(self, _verify):
-        self.hooks.write_text('{"hooks": {}, "mine": true}\n')
-        self.install()
-        newer = b'{"hooks": {"PreToolUse": [], "SessionStart": []}}\n'
-        real_fsync = os.fsync
-        saved = []
-
-        def save_once(descriptor):
-            if not saved:
-                saved.append(True)
-                self.hooks.write_bytes(newer)
-            real_fsync(descriptor)
-
-        with patch("scripts.global_cli.os.fsync", side_effect=save_once):
-            with self.assertRaisesRegex(RuntimeError, "refusing to overwrite newer work"):
-                self.uninstall()
-        self.assertEqual(newer, self.hooks.read_bytes())
-        self.assertEqual([self.hooks.name], [path.name for path in self.codex_home.iterdir() if "hooks" in path.name])
-
-    @patch("scripts.distribute.verify_source", return_value="b" * 40)
-    def test_install_refuses_a_safe_yolo_hook_it_did_not_write(self, _verify):
-        elsewhere = (
-            "/usr/bin/python3 /srv/other/.safe-yolo/releases/9/scripts/bootstrap.py --release "
-            "/srv/other/.safe-yolo/releases/9 --manifest-sha256 abc --entry codex_v3 --state-dir /srv/other/state"
-        )
-        legacy_elsewhere = elsewhere.replace("/releases/9/scripts/bootstrap.py", "/bootstrap.py")
-        for hook in (
-            {"type": "command", "command": elsewhere},
-            {"type": "command", "command": legacy_elsewhere},
-            {"type": "command", "command": "/usr/bin/python3", "args": elsewhere.split()[1:]},
-            {"type": "command", "command": "/opt/my tools/python3", "args": elsewhere.split()[1:]},
-        ):
-            with self.subTest(hook=hook):
-                self.hooks.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [hook]}]}}))
-                original_bytes = self.hooks.read_bytes()
-                with self.assertRaisesRegex(RuntimeError, "existing PreToolUse"):
-                    self.install()
-                self.assertEqual(original_bytes, self.hooks.read_bytes())
-
-    @patch("scripts.distribute.verify_source", return_value="b" * 40)
-    def test_install_refuses_a_hook_declaration_the_harness_cannot_load(self, _verify):
-        for hook in ({"type": "command", "cmd": "echo other"}, {"command": "echo other"}, "echo other"):
-            with self.subTest(hook=hook):
-                self.hooks.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [hook]}]}}))
-                original_bytes = self.hooks.read_bytes()
-                with self.assertRaisesRegex(RuntimeError, "existing PreToolUse"):
-                    self.install()
-                self.assertEqual(original_bytes, self.hooks.read_bytes())
-
-    @patch("scripts.distribute.verify_source", return_value="b" * 40)
-    def test_doctor_reports_a_second_safe_yolo_pretool_hook(self, _verify):
-        self.install()
-        own = self.pretool()[0]["hooks"][0]
-        arguments = shlex.split(own["command"])[1:]
-        for extra in (
-            dict(own),
-            {"type": "command", "command": "/usr/bin/python3", "args": arguments},
-            {"type": "command", "command": "/opt/my tools/python3", "args": arguments},
-        ):
-            with self.subTest(extra=extra):
-                document = json.loads(self.hooks.read_text())
-                document["hooks"]["PreToolUse"] = [{"matcher": "*", "hooks": [own]}, {"matcher": "*", "hooks": [extra]}]
-                self.hooks.write_text(json.dumps(document))
-                report = doctor_codex(safe_yolo_home=self.safe_yolo_home, codex_home=self.codex_home)
-                self.assertIn("exactly one Safe YOLO PreToolUse command hook is required", report["problems"])
-
-    @patch("scripts.distribute.verify_source", return_value="b" * 40)
-    def test_update_accepts_a_receipt_older_than_the_release_bootstrap(self, _verify):
-        self.install()
-        receipt_path = self.safe_yolo_home / "state" / "installations" / "codex.json"
-        receipt = json.loads(receipt_path.read_text())
-        legacy = (
-            f"/usr/bin/python3 {self.safe_yolo_home / 'bootstrap.py'} --release {receipt['release']} "
-            f"--manifest-sha256 {receipt['manifest_sha256']} --entry codex_v3 "
-            f"--state-dir {self.safe_yolo_home / 'state'}"
-        )
-        document = json.loads(self.hooks.read_text())
-        document["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = legacy
-        self.hooks.write_text(json.dumps(document))
-        for key in ("bootstrap", "user_home", "harness_home"):
-            receipt.pop(key)
-        receipt_path.write_text(json.dumps(receipt))
-
-        self.install("3.0.0-beta.3")
-
-        self.assertIn("/releases/3.0.0-beta.3/scripts/bootstrap.py", self.pretool()[0]["hooks"][0]["command"])
+        self.hooks.write_text(json.dumps({"hooks": {"PreToolUse": {"command": "echo malformed"}}}))
+        with self.assertRaisesRegex(RuntimeError, "existing PreToolUse"):
+            install_codex(
+                source=self.source,
+                safe_yolo_home=self.safe_yolo_home,
+                codex_home=self.codex_home,
+                expected_commit="b" * 40,
+            )
 
     @patch("scripts.distribute.verify_source", return_value="c" * 40)
     def test_doctor_and_deactivate_restore_exact_previous_hooks(self, _verify):
@@ -468,6 +303,180 @@ class PrivateBetaCliTests(unittest.TestCase):
         )
         self.assertEqual("inactive", result["status"])
         self.assertEqual(original_bytes, settings.read_bytes())
+
+    def claude(self, version=None):
+        if version:
+            (self.source / "VERSION").write_text(version + "\n")
+        return install_harness(
+            harness="claude-code",
+            source=self.source,
+            safe_yolo_home=self.safe_yolo_home,
+            user_home=self.user_home,
+            expected_commit="f" * 40,
+        )
+
+    def claude_settings(self, document=None, mode=None):
+        settings = self.user_home / ".claude" / "settings.json"
+        settings.parent.mkdir(exist_ok=True)
+        if document is not None:
+            settings.write_text(json.dumps(document) + "\n")
+        if mode is not None:
+            settings.chmod(mode)
+        return settings
+
+    def claude_doctor(self):
+        return doctor_harness(harness="claude-code", safe_yolo_home=self.safe_yolo_home, user_home=self.user_home)
+
+    def claude_uninstall(self):
+        return restore(self.safe_yolo_home, self.user_home, "claude-code", uninstall=True)
+
+    @patch("scripts.distribute.verify_source", return_value="f" * 40)
+    def test_claude_code_install_appends_its_hook_and_uninstall_restores_the_others(self, _verify):
+        before = [
+            {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo other"}]},
+            {"matcher": "*", "hooks": [
+                {"type": "command", "command": "python3 /opt/tool/bin/bootstrap.py --release /opt/tool/releases/1 "
+                                               "--manifest-sha256 x --entry codex"},
+                {"type": "http", "url": "https://example.invalid/hook"},
+            ]},
+            {"matcher": "Bash", "hooks": []},
+        ]
+        settings = self.claude_settings({"model": "kept", "hooks": {"PreToolUse": before}}, mode=0o644)
+        original_bytes = settings.read_bytes()
+
+        self.claude()
+
+        groups = json.loads(settings.read_text())["hooks"]["PreToolUse"]
+        self.assertEqual(before, groups[:3])
+        self.assertEqual("*", groups[3]["matcher"])
+        self.assertIn("--entry claude_code_v3", groups[3]["hooks"][0]["command"])
+        self.assertTrue(self.claude_doctor()["healthy"])
+        settings.chmod(0o600)
+        self.claude_uninstall()
+        self.assertEqual(original_bytes, settings.read_bytes())
+        self.assertEqual(0o600, settings.stat().st_mode & 0o777)
+
+    @patch("scripts.distribute.verify_source", return_value="f" * 40)
+    def test_claude_code_update_replaces_its_hook_in_place_beside_hooks_added_since(self, _verify):
+        settings = self.claude_settings({"model": "kept"})
+        self.claude()
+        document = json.loads(settings.read_text())
+        sibling = {"type": "command", "command": "echo sibling"}
+        later = {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo later"}]}
+        document["hooks"]["PreToolUse"][0]["hooks"].append(sibling)
+        document["hooks"]["PreToolUse"].append(later)
+        settings.write_text(json.dumps(document))
+
+        self.claude("3.0.0-beta.3")
+
+        groups = json.loads(settings.read_text())["hooks"]["PreToolUse"]
+        self.assertEqual(2, len(groups))
+        self.assertIn("/releases/3.0.0-beta.3/", groups[0]["hooks"][0]["command"])
+        self.assertEqual(sibling, groups[0]["hooks"][1])
+        self.assertEqual(later, groups[1])
+        report = self.claude_doctor()
+        self.assertTrue(report["healthy"], report)
+        self.assertEqual("3.0.0-beta.3", report["version"])
+
+        self.claude_uninstall()
+
+        self.assertEqual(
+            {"model": "kept", "hooks": {"PreToolUse": [{"matcher": "*", "hooks": [sibling]}, later]}},
+            json.loads(settings.read_text()),
+        )
+
+    @patch("scripts.distribute.verify_source", return_value="f" * 40)
+    def test_claude_code_uninstall_refuses_when_the_file_is_saved_while_it_stages_the_new_one(self, _verify):
+        settings = self.claude_settings({"model": "kept"})
+        self.claude()
+        newer = b'{"model": "changed"}\n'
+        real_fsync = os.fsync
+        saved = []
+
+        def save_once(descriptor):
+            if not saved:
+                saved.append(True)
+                settings.write_bytes(newer)
+            real_fsync(descriptor)
+
+        with patch("scripts.global_cli.os.fsync", side_effect=save_once):
+            with self.assertRaisesRegex(RuntimeError, "refusing to overwrite newer work"):
+                self.claude_uninstall()
+        self.assertEqual(newer, settings.read_bytes())
+        self.assertEqual(["settings.json"], [path.name for path in settings.parent.iterdir()])
+
+    @patch("scripts.distribute.verify_source", return_value="f" * 40)
+    def test_claude_code_install_refuses_a_safe_yolo_hook_it_did_not_write(self, _verify):
+        elsewhere = (
+            "/usr/bin/python3 /srv/other/.safe-yolo/releases/9/scripts/bootstrap.py --release "
+            "/srv/other/.safe-yolo/releases/9 --manifest-sha256 abc --entry claude_code_v3 "
+            "--state-dir /srv/other/state"
+        )
+        legacy_elsewhere = elsewhere.replace("/releases/9/scripts/bootstrap.py", "/bootstrap.py")
+        for hook in (
+            {"type": "command", "command": elsewhere},
+            {"type": "command", "command": legacy_elsewhere},
+            {"type": "command", "command": "/usr/bin/python3", "args": elsewhere.split()[1:]},
+            {"type": "command", "command": "/opt/my tools/python3", "args": elsewhere.split()[1:]},
+        ):
+            with self.subTest(hook=hook):
+                settings = self.claude_settings({"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [hook]}]}})
+                original_bytes = settings.read_bytes()
+                with self.assertRaisesRegex(RuntimeError, "existing PreToolUse"):
+                    self.claude()
+                self.assertEqual(original_bytes, settings.read_bytes())
+
+    @patch("scripts.distribute.verify_source", return_value="f" * 40)
+    def test_claude_code_doctor_reports_a_second_safe_yolo_pretool_hook(self, _verify):
+        settings = self.claude_settings({"model": "kept"})
+        self.claude()
+        own = json.loads(settings.read_text())["hooks"]["PreToolUse"][0]["hooks"][0]
+        arguments = shlex.split(own["command"])[1:]
+        for extra in (
+            dict(own),
+            {"type": "command", "command": "/usr/bin/python3", "args": arguments},
+            {"type": "command", "command": "/opt/my tools/python3", "args": arguments},
+        ):
+            with self.subTest(extra=extra):
+                document = json.loads(settings.read_text())
+                document["hooks"]["PreToolUse"] = [{"matcher": "*", "hooks": [own]}, {"matcher": "*", "hooks": [extra]}]
+                settings.write_text(json.dumps(document))
+                self.assertIn(
+                    "exactly one Safe YOLO PreToolUse command hook is required", self.claude_doctor()["problems"]
+                )
+
+    @patch("scripts.distribute.verify_source", return_value="b" * 40)
+    def test_codex_update_accepts_a_receipt_older_than_the_release_bootstrap(self, _verify):
+        def install():
+            return install_codex(
+                source=self.source,
+                safe_yolo_home=self.safe_yolo_home,
+                codex_home=self.codex_home,
+                expected_commit="b" * 40,
+            )
+
+        install()
+        receipt_path = self.safe_yolo_home / "state" / "installations" / "codex.json"
+        receipt = json.loads(receipt_path.read_text())
+        legacy = (
+            f"/usr/bin/python3 {self.safe_yolo_home / 'bootstrap.py'} --release {receipt['release']} "
+            f"--manifest-sha256 {receipt['manifest_sha256']} --entry codex_v3 "
+            f"--state-dir {self.safe_yolo_home / 'state'}"
+        )
+        document = json.loads(self.hooks.read_text())
+        document["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = legacy
+        document["description"] = "mine"
+        self.hooks.write_text(json.dumps(document))
+        for key in ("bootstrap", "user_home", "harness_home"):
+            receipt.pop(key)
+        receipt_path.write_text(json.dumps(receipt))
+        (self.source / "VERSION").write_text("3.0.0-beta.3\n")
+
+        install()
+
+        updated = json.loads(self.hooks.read_text())
+        self.assertIn("/releases/3.0.0-beta.3/scripts/bootstrap.py", updated["hooks"]["PreToolUse"][0]["hooks"][0]["command"])
+        self.assertEqual("mine", updated["description"])
 
     @patch("scripts.distribute.verify_source", return_value="1" * 40)
     def test_cursor_install_doctor_and_deactivate_use_native_permission_hook(self, _verify):
