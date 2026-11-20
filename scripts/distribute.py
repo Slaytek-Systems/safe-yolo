@@ -32,11 +32,13 @@ from scripts.doctor import (
 from scripts.harness_specs import HARNESS_BY_ID, HARNESS_HOME_ENV, HARNESSES, HarnessSpec
 from scripts.package import MANIFEST as DISTRIBUTION_MANIFEST, verify_bundle
 from scripts.harness_wiring import (
+    ANTIGRAVITY_GROUP as _ANTIGRAVITY_GROUP,
     inspect_cursor_wiring as _inspect_cursor_wiring,
     inspect_opencode_wiring as _inspect_opencode_wiring,
     is_hand_wired_antigravity_group as _is_hand_wired_antigravity_group,
     config_path_problem as _config_path_problem,
     pinned_command as _pinned_command,
+    read_antigravity_hooks as _read_antigravity_hooks,
     prepare_antigravity_hooks as _prepare_antigravity_hooks,
     prepare_command_hooks as _prepare_hooks,
     prepare_cursor_hooks as _prepare_cursor_hooks,
@@ -123,9 +125,18 @@ def _run_canaries(
     entry: str = "codex_v3",
     user_home: Path | None = None,
     harness_home: Path | None = None,
+    config_path: Path | None = None,
 ) -> dict[str, bool]:
-    command = shlex.split(
-        _pinned_command(
+    """Allow and deny replies of the hook command; for Antigravity, the command its hooks file runs.
+
+    The Antigravity hooks file must already have passed the wiring check.
+    """
+    timeout = None
+    if harness == "antigravity":
+        hook = _read_antigravity_hooks(config_path)[_ANTIGRAVITY_GROUP]["PreToolUse"][0]["hooks"][0]
+        command_text, timeout = hook["command"], hook["timeout"]
+    else:
+        command_text = _pinned_command(
             home,
             release,
             manifest_sha256,
@@ -133,7 +144,7 @@ def _run_canaries(
             user_home=user_home,
             harness_home=harness_home,
         )
-    )
+    command = shlex.split(command_text)
     base = {"hook_event_name": "PreToolUse", "cwd": str(Path.cwd())}
     if harness == "codex":
         allowed_payload = {**base, "tool_name": "exec_command", "tool_input": {"cmd": "git status --short"}}
@@ -155,6 +166,18 @@ def _run_canaries(
         cursor_base = {"hook_event_name": "preToolUse", "cwd": str(Path.cwd()), "tool_name": "Shell"}
         allowed_payload = {**cursor_base, "tool_input": {"command": "git status --short"}}
         denied_payload = {**cursor_base, "tool_input": {"command": "git push --force-with-lease"}}
+    if harness == "antigravity":
+        def reply(payload: dict[str, Any]) -> str | None:
+            try:
+                completed = subprocess.run(command, input=json.dumps(payload), text=True, capture_output=True,
+                                           check=False, timeout=timeout)
+            except OSError as error:
+                raise RuntimeError(f"Antigravity hook command cannot start: {command_text} ({error})") from error
+            except subprocess.TimeoutExpired:
+                return None
+            return _reply_decision(completed.stdout) if completed.returncode == 0 else None
+
+        return {"allow": reply(allowed_payload) == "allow", "deny": reply(denied_payload) == "deny"}
     allowed = subprocess.run(
         command,
         input=json.dumps(allowed_payload),
@@ -169,7 +192,7 @@ def _run_canaries(
         capture_output=True,
         check=False,
     )
-    if harness in ("opencode", "antigravity"):
+    if harness == "opencode":
         return {
             outcome: completed.returncode == 0 and _reply_decision(completed.stdout) == outcome
             for outcome, completed in (("allow", allowed), ("deny", denied))
@@ -533,14 +556,19 @@ def install_harness(
             harness_home=harness_home,
             bootstrap=release / "scripts" / "bootstrap.py",
         )
-        canaries = _run_canaries(
-            home,
-            release,
-            digest,
-            harness=spec.id,
-            entry=spec.entry,
-            user_home=user,
-            harness_home=harness_home,
+        canaries = (
+            _run_canaries(
+                home,
+                release,
+                digest,
+                harness=spec.id,
+                entry=spec.entry,
+                user_home=user,
+                harness_home=harness_home,
+                config_path=target,
+            )
+            if wiring["healthy"] or spec.id != "antigravity"
+            else {"allow": False, "deny": False}
         )
         if not wiring["healthy"] or not all(canaries.values()):
             raise RuntimeError(
@@ -638,19 +666,21 @@ def doctor_harness(
         bootstrap=bootstrap,
     )
     problems.extend(wiring["problems"])
-    canaries = (
-        _run_canaries(
-            home,
-            release,
-            digest,
-            harness=spec.id,
-            entry=spec.entry,
-            user_home=user,
-            harness_home=harness_home,
-        )
-        if release_report["healthy"]
-        else {"allow": False, "deny": False}
-    )
+    canaries = {"allow": False, "deny": False}
+    if release_report["healthy"] and (wiring["healthy"] or spec.id != "antigravity"):
+        try:
+            canaries = _run_canaries(
+                home,
+                release,
+                digest,
+                harness=spec.id,
+                entry=spec.entry,
+                user_home=user,
+                harness_home=harness_home,
+                config_path=config_path,
+            )
+        except RuntimeError as error:
+            problems.append(str(error))
     if not all(canaries.values()):
         problems.append("allow/deny runtime canaries failed")
     return {
