@@ -1,106 +1,56 @@
-# Safe YOLO 3.0.0-beta.14
+# Safe YOLO 3.0.0-beta.15
 
-OpenCode V2 is now a beta lifecycle harness. OpenCode V2 skips V1 plugins,
-including the hand-installed Safe YOLO V1 copy. The new plugin uses the
-same policy engine as beta.12.
-
-- `safe-yolo install --harness opencode` writes one V2 plugin,
-  `plugins/safe-yolo.js`, in the folder OpenCode reads: a non-empty
-  `OPENCODE_CONFIG_DIR`, otherwise `$XDG_CONFIG_HOME/opencode`, otherwise
-  `~/.config/opencode`. It adds no `opencode.json` entry and leaves other
-  plugins alone. `install` with no `--harness` detects OpenCode from that
-  folder even when `opencode` is not on `PATH`.
-- Install refuses when the `opencode` on `PATH` is 1.x or prints anything
-  other than one OpenCode version line, and when an active OpenCode
-  installation is wired to a different folder. The version check is a sanity
-  check, not proof of which program answered. Without `--harness`, a V1
-  OpenCode is skipped with a reason and the other harnesses still install.
-  Update stays in the folder its receipt records.
-- The plugin sends each tool call to the pinned release and stops the call on a
-  deny. It also stops the call when the adapter fails, exits non-zero, returns
-  no decision, hits a pipe error, or takes more than 10 seconds; on a pipe
-  error or timeout it stops the bootstrap and the adapter it started.
-- Install replaces a file at that path only when it is byte-identical to a
-  plugin rendered from an installed release, or is the retired V1 plugin with
-  only its pin constants changed. The V1 copy is backed up. Any other file is
-  refused and left unchanged.
-- The plugin must be a regular file in a `plugins` folder that is not a
-  symlink, for every lifecycle command.
-- Doctor, update, rollback, uninstall and deactivate cover OpenCode. Doctor
-  checks that the plugin is byte-identical to the one rendered from the pinned
-  release, and runs allow and deny canaries. Uninstall copies the plugin to
-  `~/.safe-yolo/backups/` under a name derived from its digest, checks both
-  files, then deletes the plugin, so it works across filesystems and a rerun
-  finishes an interrupted uninstall. A failed fresh install removes its plugin
-  the same way, into that attempt's own `backups/pre-opencode-…` folder. Deactivate restores the exact previous file.
-- The OpenCode adapter now protects the V2 credential database
-  (`opencode.db` in OpenCode's data folder, or `OPENCODE_DB`) and its `-wal`,
-  `-shm` and `-journal` files, as well as the V1 `auth.json`.
-- The OpenCode adapter now keeps a shell call's `workdir` for both `bash` and
-  `shell`, so a relative path is judged where the command runs.
-- `scripts/publish.py --check` now exercises four harnesses with a temporary
-  `HOME` and XDG folders and a fixture `opencode` that prints a V2 version, so
-  it never runs or touches the host's OpenCode.
-
-Limits. If OpenCode cannot load the plugin, it logs `failed to load plugin`
-and runs without Safe YOLO; doctor cannot detect that. After install, run
-`opencode service restart` if the OpenCode background service is running,
-then check, against the server and location your sessions use, that
-`opencode api plugin.list` shows the `safe-yolo` entry with status `active`,
-not `failed`, from the plugin file Safe YOLO installed, and try a harmless allowed and a denied command
-in a session. Another plugin's `execute.before` hook can change a tool's input
-after Safe YOLO has read it.
-
-## Also in this release: Claude Code update beside other hooks
-
-In Claude Code, `safe-yolo update` now works when another tool's `PreToolUse`
-hook sits beside Safe YOLO's. No decision changes: the policy is the one in
+Antigravity (the `agy` CLI) is now a beta lifecycle harness. `install`,
+`doctor`, `update`, `rollback`, `uninstall` and `deactivate` cover it, as they
+cover Codex, Claude Code, Cursor and OpenCode. The policy is the one in
 beta.12.
 
-Before this release, update and doctor required Safe YOLO's hook to be the
-only `PreToolUse` hook. A second hook added to Claude Code settings after
-install made `safe-yolo update` stop with "Existing Safe YOLO hook changed;
-refusing to overwrite it", although Safe YOLO's own hook was intact.
+- `safe-yolo install --harness antigravity` writes one named group,
+  `safe-yolo`, into `config/hooks.json` under the Gemini root: the
+  `--config-home` folder if given, otherwise a non-empty `GEMINI_HOME`,
+  otherwise `~/.gemini`. The group is enabled and holds one `PreToolUse`
+  entry with matcher `*` and one command hook, timeout 10 seconds, that runs
+  the pinned bootstrap with `--entry antigravity_v3`. Every other named group
+  in the file is kept as it was and is never read or judged.
+- Safe YOLO's group is the `safe-yolo` group that is, field for field, what
+  the installer writes for the pin the receipt records. Only the `python3`
+  interpreter path may differ. The command must keep the installer's spelling
+  and flag order, and `timeout` must be an integer.
+- First install refuses, and changes nothing, when a `safe-yolo` group already
+  exists, with one exception: a group of the installer's shape whose command
+  runs a release that already exists under this Safe YOLO home's `releases/`
+  folder, with entry `antigravity_v3`. That is how Antigravity was wired by
+  hand before. Install backs the file up, then replaces only that group.
+- The Antigravity adapter now replies `{"decision":"allow"}` on allow, as
+  Antigravity's hook contract requires. Deny is unchanged.
+- For the `antigravity_v3` entry only, the bootstrap turns its own failures
+  into a deny reply with exit 0 that names the failure: a release that fails
+  verification or is missing, or an adapter that exits non-zero or prints no
+  decision. Antigravity ignores a hook that exits non-zero, so the exit code
+  alone would let the call run. Other entries still exit 2.
+- Uninstall removes only the `safe-yolo` group. When install created the file
+  and nothing else was added, the file is moved to `~/.safe-yolo/backups/`. Deactivate
+  restores the exact previous file, including a hand-wired group it replaced.
+- `scripts/publish.py --check` now exercises five harnesses. It removes
+  `GEMINI_HOME`, uses a temporary `HOME`, and never runs or touches the host's
+  `agy`.
 
-Claude Code:
+Limits.
 
-- Safe YOLO's hook is the one entry that is, field for field, what the
-  installer writes for the pin the installation receipt records: same
-  bootstrap, release, manifest digest, entry, state folder and home folders,
-  the same `type`, integer `timeout` and `statusMessage`, no other field,
-  and the command spelled and ordered as the installer writes it. Only the
-  path of the `python3` interpreter may differ. An entry edited in any
-  way is no longer Safe YOLO's: doctor reports it and update refuses. Every other hook belongs to someone else. It is
-  not read, judged, moved or changed.
-- Update replaces that one hook where it stands.
-- Doctor and update require that hook exactly once, in a group whose matcher
-  is `*`, the empty string or absent.
-- Uninstall removes that hook, and its group when that leaves the group
-  empty, and keeps the rest of the list.
-- First install is unchanged: it refuses when any `PreToolUse` hook from
-  another owner already exists. Add other tools' hooks after installing
-  Safe YOLO.
-
-Codex and Cursor are unchanged: Safe YOLO must be the only `PreToolUse`
-(`preToolUse`) hook at install, update and doctor.
-
-Limits. Safe YOLO does not check other owners' hooks. Claude Code can drop
-the hooks in a settings file when one entry in it is malformed, for example
-a `timeout` written as a string, and doctor does not detect that; check
-`/hooks` in Claude Code after editing settings by hand. Claude Code runs
-matching hooks concurrently and documents that a deny outranks every other
-decision. Another hook can still rewrite a tool input that Safe YOLO
-allowed, and Safe YOLO does not read the rewritten input. Doctor still
-reports any later edit to the harness file as "configuration changed after
-activation", and deactivate, rollback and uninstall refuse after such an
-edit. A successful update to a different version keeps the edited file as
-its rollback snapshot and records the file it then writes as the installed
-file, which deactivate, rollback and uninstall check against. Uninstall restores toward the file as first
-found, keeping other owners' hooks. Those checks read the file
-once at the start of the command. Nothing locks it, so a save by another
-program while uninstall or rollback runs is overwritten.
-
-Linux/Python 3.12+ is the proven platform. Codex, Claude Code, Cursor, and OpenCode V2 have
-installation lifecycles. Native hook trust or restart remains harness-specific.
-Local customizations are preserved. The custom distribution permission remains
-in effect; publication is not a change to an OSI-approved license.
+- Antigravity fails open. A hook that crashes before replying, runs past its
+  timeout or prints something that is not a decision is ignored and the tool
+  call runs. Antigravity has no fail-closed setting, and Safe YOLO cannot
+  change that. The bootstrap's deny reply covers only the failures it can
+  catch while it is running.
+- Doctor checks the hooks file, the release and allow and deny canaries
+  through the pinned command. It cannot prove Antigravity loaded the hook.
+  After install, start a new Antigravity session and confirm the `safe-yolo`
+  `PreToolUse` hook in `/hooks`.
+- One Safe YOLO home holds one Antigravity receipt, so it wires one Gemini
+  root. T3 Code runs Antigravity with `GEMINI_HOME` set to a per-profile root;
+  that root's `config/hooks.json` is not covered unless it is the one root this
+  home installed to. See the support matrix.
+- Like Claude Code, doctor, uninstall and deactivate compare the whole hooks
+  file with what install wrote. An edit to another named group after install
+  makes doctor report the file changed and makes uninstall refuse, until an
+  update to a newer release records the new file.

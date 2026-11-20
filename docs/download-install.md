@@ -25,7 +25,7 @@ python3 /tmp/safe-yolo-install.py
 ```
 
 Inspect the downloaded installer first if desired. To select one tool explicitly,
-use `python3 /tmp/safe-yolo-install.py --harness cursor` (or `codex`, `claude-code`, `opencode`).
+use `python3 /tmp/safe-yolo-install.py --harness cursor` (or `codex`, `claude-code`, `opencode`, `antigravity`).
 No administrator access is needed. Without `--harness`, an OpenCode V1 on
 `PATH` is reported under `skipped` and the other tools still install.
 
@@ -33,9 +33,9 @@ For a manual or offline installation, download the ZIP and its `.zip.sha256`
 from Releases, verify before extraction, then run:
 
 ```sh
-sha256sum -c safe-yolo-3.0.0-beta.14.zip.sha256
-unzip safe-yolo-3.0.0-beta.14.zip
-cd safe-yolo-3.0.0-beta.14
+sha256sum -c safe-yolo-3.0.0-beta.15.zip.sha256
+unzip safe-yolo-3.0.0-beta.15.zip
+cd safe-yolo-3.0.0-beta.15
 python3 safe-yolo harnesses
 python3 safe-yolo install
 ```
@@ -50,6 +50,7 @@ python3 safe-yolo install --harness cursor
 python3 safe-yolo install --harness claude-code
 python3 safe-yolo install --harness codex
 python3 safe-yolo install --harness opencode
+python3 safe-yolo install --harness antigravity
 python3 safe-yolo doctor --all
 ```
 
@@ -61,6 +62,10 @@ OpenCode loads Safe YOLO from `plugins/safe-yolo.js` in its
 config folder (`OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`, else
 `~/.config/opencode`), keeps other plugins, and must be V2; see the
 [support matrix](harness-support.md) for how to confirm OpenCode loaded it.
+Antigravity gets one `safe-yolo` named group in `config/hooks.json` under its
+Gemini root (`GEMINI_HOME`, else `~/.gemini`), beside any other groups; confirm
+it in `/hooks` in a new session. Antigravity ignores a hook that crashes, times
+out or prints garbage, so it fails open in those cases.
 Codex currently requires these existing settings in its
 `config.toml`; the installer checks them and does not change native permissions:
 
@@ -174,8 +179,8 @@ checks `Slaytek-Systems/safe-yolo` for future versions. Old downloads remain ava
 
 ## Limits
 
-The beta provides installation lifecycles for Codex, Claude Code, Cursor, and
-OpenCode V2.
+The beta provides installation lifecycles for Codex, Claude Code, Cursor,
+OpenCode V2 and Antigravity.
 Other included adapters are experimental and have no supported installer yet.
 Linux is verified; macOS and Windows acceptance is pending. No mobile app is
 required because enforcement runs on the machine running the coding harness.
