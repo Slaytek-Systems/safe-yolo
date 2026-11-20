@@ -210,7 +210,7 @@ def owns_antigravity_group(group: Any, **pin: Any) -> bool:
 
 
 def inspect_antigravity_wiring(path: str | Path, **pin: Any) -> dict[str, Any]:
-    """Read-only check of Safe YOLO's named group in Antigravity's hooks.json; other groups are not read."""
+    """Read-only check of Safe YOLO's named group in Antigravity's hooks.json; other groups are not judged."""
     try:
         document = read_antigravity_hooks(Path(path))
     except RuntimeError as error:

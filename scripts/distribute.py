@@ -512,7 +512,7 @@ def install_harness(
             candidate, original_bytes, original_mode = _prepare_hooks(
                 target, home, command, entry=spec.entry, label=spec.name, own_slots=own_slots
             )
-        payload = (json.dumps(candidate, indent=2) + "\n").encode()
+        payload = (json.dumps(candidate, indent=2, allow_nan=spec.id != "antigravity") + "\n").encode()
     backup_root = home / "backups" / (
         f"pre-{spec.id}-{version}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
     )

@@ -138,12 +138,13 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
         baseline = receipt.get('original_install', receipt)
         original_bytes = None
         original = {}
+        from scripts.harness_wiring import ANTIGRAVITY_GROUP, read_antigravity_hooks
         if baseline['previous_config_existed']:
             original_bytes = Path(baseline['previous_config_backup']).read_bytes()
-            original = json.loads(original_bytes)
-        document = json.loads(config.read_text())
+            original = (read_antigravity_hooks(Path(baseline['previous_config_backup'])) if harness == 'antigravity'
+                        else json.loads(original_bytes))
+        document = read_antigravity_hooks(config) if harness == 'antigravity' else json.loads(config.read_text())
         if harness == 'antigravity':
-            from scripts.harness_wiring import ANTIGRAVITY_GROUP
             document.pop(ANTIGRAVITY_GROUP)
         else:
             event = 'preToolUse' if harness == 'cursor' else 'PreToolUse'
@@ -170,7 +171,7 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
             retained = home / 'backups' / ('uninstalled-' + harness + '-' + datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ'))
             os.replace(config, retained)
         else:
-            payload = original_bytes if document == original and original_bytes is not None else (json.dumps(document, indent=2) + '\n').encode()
+            payload = original_bytes if document == original and original_bytes is not None else (json.dumps(document, indent=2, allow_nan=harness != 'antigravity') + '\n').encode()
             _atomic_write(config, payload, baseline['previous_config_mode'])
         receipt['status'] = 'inactive'
         _atomic_write(path, (json.dumps(receipt, indent=2) + '\n').encode())

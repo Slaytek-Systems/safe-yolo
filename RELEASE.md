@@ -10,8 +10,11 @@ beta.12.
   `--config-home` folder if given, otherwise `~/.gemini`. Install ignores
   `GEMINI_HOME`, which `agy` 1.5.12 does not read. The group is enabled and
   holds one `PreToolUse` entry with matcher `*` and one command hook, timeout
-  10 seconds, that runs the pinned bootstrap with `--entry antigravity_v3`. Every other named group
-  in the file is kept as it was and is never read or judged.
+  10 seconds, that runs the pinned bootstrap with `--entry antigravity_v3`.
+  Every other named group in the file is kept as it was and is not judged.
+  Install, update, uninstall and deactivate refuse, and change nothing, when
+  the file holds a duplicate key anywhere or a number Safe YOLO cannot write
+  back unchanged, such as `1e400`; doctor reports it.
 - Safe YOLO's group is the `safe-yolo` group that is, field for field, what
   the installer writes for the pin the receipt records. Only the `python3`
   interpreter path may differ. The command must keep the installer's spelling

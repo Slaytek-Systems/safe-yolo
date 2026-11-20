@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -353,15 +354,35 @@ def antigravity_group_command(group: Any) -> str | None:
 
 
 def read_antigravity_hooks(path: Path) -> dict[str, Any]:
-    def unique_owner(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        if [key for key, _ in pairs].count(ANTIGRAVITY_GROUP) > 1:
-            raise ValueError(f"the {ANTIGRAVITY_GROUP!r} group appears more than once")
+    """Antigravity's hooks document, refused when writing it back could change a value or break the file."""
+    def unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        seen: set[str] = set()
+        for key, _ in pairs:
+            if key in seen:
+                raise ValueError(f"duplicate key {key!r}")
+            seen.add(key)
         return dict(pairs)
 
+    def finite_number(text: str) -> float:
+        value = float(text)
+        if not math.isfinite(value):
+            raise ValueError(f"number {text} is out of range")
+        return value
+
+    def not_json(name: str) -> Any:
+        raise ValueError(f"{name} is not valid JSON")
+
     try:
-        document = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_owner)
+        document = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=unique_keys,
+            parse_float=finite_number,
+            parse_constant=not_json,
+        )
     except (OSError, ValueError) as error:
-        raise RuntimeError(f"Antigravity hooks file is unreadable: {path} ({error})") from error
+        raise RuntimeError(
+            f"Antigravity hooks file is unreadable or cannot be rewritten unchanged: {path} ({error})"
+        ) from error
     if not isinstance(document, dict):
         raise RuntimeError(f"Antigravity hooks file must be a JSON object: {path}")
     return document

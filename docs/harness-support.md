@@ -102,7 +102,8 @@ Antigravity support targets the `agy` CLI and its
 [hooks contract](https://antigravity.google/docs/hooks). Safe YOLO owns one
 named group, `safe-yolo`, in `config/hooks.json` under the Gemini root. It
 finds the root this way: the `--config-home` folder if given, otherwise
-`~/.gemini`. `agy` 1.5.12 does not read `GEMINI_HOME`, so install ignores it. The group install writes is:
+`~/.gemini`. `agy` 1.5.12 does not read `GEMINI_HOME`, so install ignores
+it. The group install writes is:
 
 ```json
 {
@@ -116,8 +117,10 @@ finds the root this way: the `--config-home` folder if given, otherwise
 ```
 
 The pinned bootstrap runs `--entry antigravity_v3` and passes the root as
-`--harness-home`. Other named groups in the file are kept and never read or
-judged. A group is Safe YOLO's only when it equals, field for field, what the
+`--harness-home`. Other named groups in the file are kept as they are and not
+judged. Install, update, uninstall and deactivate refuse, and change nothing,
+when the file holds a duplicate key anywhere or a number Safe YOLO cannot
+write back unchanged, such as `1e400`; doctor reports it. A group is Safe YOLO's only when it equals, field for field, what the
 installer writes for the pin the receipt records; only the `python3`
 interpreter path may differ, the command must keep the installer's spelling
 and flag order, and `timeout` must be an integer. Doctor requires that group
