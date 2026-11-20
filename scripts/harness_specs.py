@@ -61,5 +61,4 @@ HARNESS_BY_ID = {spec.id: spec for spec in HARNESSES}
 HARNESS_HOME_ENV = {
     "codex": "CODEX_HOME",
     "claude-code": "CLAUDE_CONFIG_DIR",
-    "antigravity": "GEMINI_HOME",
 }

@@ -26,7 +26,7 @@ python3 safe-yolo harnesses
 Each installation records the configuration folder it wired. For every
 supported harness, install refuses a different folder while that installation
 is active, for example after `CODEX_HOME`, `CLAUDE_CONFIG_DIR`,
-`OPENCODE_CONFIG_DIR`, `XDG_CONFIG_HOME`, `GEMINI_HOME` or `--config-home` changes. To move or
+`OPENCODE_CONFIG_DIR`, `XDG_CONFIG_HOME` or `--config-home` changes. To move or
 repoint a harness's configuration, run `safe-yolo uninstall --harness <id>`
 first, then install against the new folder. To reinstall in place, use the
 recorded folder.
@@ -101,8 +101,8 @@ folder (`$XDG_DATA_HOME/opencode`, otherwise `~/.local/share/opencode`, or
 Antigravity support targets the `agy` CLI and its
 [hooks contract](https://antigravity.google/docs/hooks). Safe YOLO owns one
 named group, `safe-yolo`, in `config/hooks.json` under the Gemini root. It
-finds the root this way: the `--config-home` folder if given, otherwise a
-non-empty `GEMINI_HOME`, otherwise `~/.gemini`. The group install writes is:
+finds the root this way: the `--config-home` folder if given, otherwise
+`~/.gemini`. `agy` 1.5.12 does not read `GEMINI_HOME`, so install ignores it. The group install writes is:
 
 ```json
 {
@@ -144,14 +144,12 @@ pinned command. It cannot prove Antigravity loaded the hook. Start a new
 Antigravity session, run `/hooks` and confirm the `safe-yolo` `PreToolUse`
 hook is listed.
 
-One Safe YOLO home keeps one Antigravity receipt, so it wires one Gemini root.
-T3 Code launches Antigravity with `GEMINI_HOME` set to a per-profile root, so
-that profile reads `<profile>/config/hooks.json`, not `~/.gemini`. Install
-refuses a second root while the first is active, and a second Safe YOLO home
-for the same user is refused because the global `safe-yolo` command belongs
-to the first. To protect a T3 profile instead of `~/.gemini`, install with
-`--config-home <profile>` (or with `GEMINI_HOME` set to it). Covering both
-roots at once is not supported in this release.
+One Safe YOLO home keeps one Antigravity receipt, so it covers one Gemini
+root. Install refuses a second root while the first is active, and a second
+Safe YOLO home for the same user is refused because the global `safe-yolo`
+command belongs to the first. A T3 Code profile root is covered only when you
+choose it with `--config-home <profile>`, and then `~/.gemini` is not covered.
+Covering both roots at once is not supported in this release.
 
 Current native contract references:
 

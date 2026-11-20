@@ -63,7 +63,7 @@ config folder (`OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`, else
 `~/.config/opencode`), keeps other plugins, and must be V2; see the
 [support matrix](harness-support.md) for how to confirm OpenCode loaded it.
 Antigravity gets one `safe-yolo` named group in `config/hooks.json` under its
-Gemini root (`GEMINI_HOME`, else `~/.gemini`), beside any other groups; confirm
+Gemini root (`--config-home`, else `~/.gemini`), beside any other groups; confirm
 it in `/hooks` in a new session. Antigravity ignores a hook that crashes, times
 out or prints garbage, so it fails open in those cases.
 Codex currently requires these existing settings in its

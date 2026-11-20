@@ -7,10 +7,10 @@ beta.12.
 
 - `safe-yolo install --harness antigravity` writes one named group,
   `safe-yolo`, into `config/hooks.json` under the Gemini root: the
-  `--config-home` folder if given, otherwise a non-empty `GEMINI_HOME`,
-  otherwise `~/.gemini`. The group is enabled and holds one `PreToolUse`
-  entry with matcher `*` and one command hook, timeout 10 seconds, that runs
-  the pinned bootstrap with `--entry antigravity_v3`. Every other named group
+  `--config-home` folder if given, otherwise `~/.gemini`. Install ignores
+  `GEMINI_HOME`, which `agy` 1.5.12 does not read. The group is enabled and
+  holds one `PreToolUse` entry with matcher `*` and one command hook, timeout
+  10 seconds, that runs the pinned bootstrap with `--entry antigravity_v3`. Every other named group
   in the file is kept as it was and is never read or judged.
 - Safe YOLO's group is the `safe-yolo` group that is, field for field, what
   the installer writes for the pin the receipt records. Only the `python3`
@@ -46,10 +46,10 @@ Limits.
   through the pinned command. It cannot prove Antigravity loaded the hook.
   After install, start a new Antigravity session and confirm the `safe-yolo`
   `PreToolUse` hook in `/hooks`.
-- One Safe YOLO home holds one Antigravity receipt, so it wires one Gemini
-  root. T3 Code runs Antigravity with `GEMINI_HOME` set to a per-profile root;
-  that root's `config/hooks.json` is not covered unless it is the one root this
-  home installed to. See the support matrix.
+- One Safe YOLO home holds one Antigravity receipt, so it covers one Gemini
+  root. A T3 Code profile root is covered only when you choose it with
+  `--config-home <profile>`, and then `~/.gemini` is not covered. See the
+  support matrix.
 - Like Claude Code, doctor, uninstall and deactivate compare the whole hooks
   file with what install wrote. An edit to another named group after install
   makes doctor report the file changed and makes uninstall refuse, until an
