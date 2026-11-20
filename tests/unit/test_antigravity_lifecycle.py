@@ -12,6 +12,7 @@ import zipfile
 
 from scripts.distribute import deactivate_harness, doctor_harness, install_harness
 from scripts.global_cli import restore
+from scripts.install import install_release
 from scripts.package import MANIFEST, build_bundle, digest
 
 
@@ -80,15 +81,22 @@ class AntigravityLifecycleTests(unittest.TestCase):
             "--harness-home", str(root or self.gemini),
         ])
 
-    def hand_wired(self, release_name: str = "3.0.0-alpha.8", bootstrap: Path | None = None) -> dict:
+    def hand_wired(self, release_name: str = "3.0.0-alpha.8", bootstrap: Path | None = None,
+                   manifest: str = "f" * 64) -> dict:
         release = self.safe_yolo_home / "releases" / release_name
         return owned_group(shlex.join([
             "/usr/bin/python3", str(bootstrap or release / "scripts" / "bootstrap.py"),
             "--release", str(release),
-            "--manifest-sha256", "f" * 64,
+            "--manifest-sha256", manifest,
             "--entry", "antigravity_v3",
             "--state-dir", str(self.safe_yolo_home / "state"),
         ]))
+
+    def legacy_release(self) -> dict:
+        legacy = self.root / "legacy-source"
+        shutil.copytree(self.source, legacy)
+        (legacy / "VERSION").write_text("3.0.0-alpha.8\n")
+        return install_release(legacy, self.safe_yolo_home)
 
     def reply(self, command: str, tool: str, args: dict) -> tuple[int, dict | None, str]:
         payload = {"toolCall": {"name": tool, "args": args}, "stepIdx": 0, "conversationId": "c",
@@ -248,9 +256,31 @@ class AntigravityLifecycleTests(unittest.TestCase):
                     step()
                 self.assertEqual(text, self.hooks.read_text())
 
+    def test_a_hand_wired_group_whose_release_does_not_verify_is_refused_untouched(self):
+        cases = {
+            "empty release, missing bootstrap, bad pin": lambda: (
+                (self.safe_yolo_home / "releases" / "3.0.0-alpha.8").mkdir(parents=True),
+                self.hand_wired(manifest="bad"))[1],
+            "pin does not match the release": lambda: self.hand_wired(
+                manifest="0" * 64, bootstrap=Path(self.legacy_release()["bootstrap"])),
+            "named bootstrap is missing": lambda: (
+                legacy := self.legacy_release(), (self.safe_yolo_home / "bootstrap.py").unlink(),
+                self.hand_wired(manifest=legacy["manifest_sha256"], bootstrap=self.safe_yolo_home / "bootstrap.py"))[2],
+        }
+        for name, group in cases.items():
+            with self.subTest(name):
+                shutil.rmtree(self.safe_yolo_home, ignore_errors=True)
+                shutil.rmtree(self.root / "legacy-source", ignore_errors=True)
+                original = json.dumps({"herdr": HERDR, "safe-yolo": group()}) + "\n"
+                self.hooks.write_text(original)
+                with self.assertRaisesRegex(RuntimeError, "safe-yolo"):
+                    self.install()
+                self.assertEqual(original, self.hooks.read_text())
+                self.assertFalse(self.receipt_path().exists())
+
     def test_hand_wired_group_through_the_shared_bootstrap_is_replaced(self):
-        (self.safe_yolo_home / "releases" / "3.0.0-alpha.8").mkdir(parents=True)
-        hand_wired = self.hand_wired(bootstrap=self.safe_yolo_home / "bootstrap.py")
+        legacy = self.legacy_release()
+        hand_wired = self.hand_wired(bootstrap=self.safe_yolo_home / "bootstrap.py", manifest=legacy["manifest_sha256"])
         self.hooks.write_text(json.dumps({"herdr": HERDR, "safe-yolo": hand_wired}))
 
         receipt = self.install()
@@ -258,8 +288,9 @@ class AntigravityLifecycleTests(unittest.TestCase):
         self.assertEqual(owned_group(self.installed_command(receipt)), json.loads(self.hooks.read_text())["safe-yolo"])
 
     def test_hand_wired_group_of_an_installed_release_is_backed_up_and_replaced(self):
-        (self.safe_yolo_home / "releases" / "3.0.0-alpha.8").mkdir(parents=True)
-        original = json.dumps({"safe-yolo": self.hand_wired(), "herdr": HERDR}, indent=2) + "\n"
+        legacy = self.legacy_release()
+        hand_wired = self.hand_wired(manifest=legacy["manifest_sha256"])
+        original = json.dumps({"safe-yolo": hand_wired, "herdr": HERDR}, indent=2) + "\n"
         self.hooks.write_text(original)
 
         receipt = self.install()
