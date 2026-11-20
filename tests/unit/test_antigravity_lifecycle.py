@@ -99,6 +99,12 @@ class AntigravityLifecycleTests(unittest.TestCase):
         (legacy / "VERSION").write_text("3.0.0-alpha.8\n")
         return install_release(legacy, self.safe_yolo_home)
 
+    def legacy_without_antigravity(self, entrypoints: dict) -> str:
+        manifest = Path(self.legacy_release()["release"]) / "manifest.json"
+        manifest.chmod(0o600)
+        manifest.write_text(json.dumps({**json.loads(manifest.read_text()), "entrypoints": entrypoints}))
+        return hashlib.sha256(manifest.read_bytes()).hexdigest()
+
     def reply(self, command: str, tool: str, args: dict) -> tuple[int, dict | None, str]:
         payload = {"toolCall": {"name": tool, "args": args}, "stepIdx": 0, "conversationId": "c",
                    "workspacePaths": [str(self.root)]}
@@ -191,6 +197,30 @@ class AntigravityLifecycleTests(unittest.TestCase):
                 self.assertEqual(0, completed.returncode, completed.stderr)
                 self.assertEqual("deny", json.loads(completed.stdout)["decision"])
 
+    def test_antigravity_help_writes_only_a_deny_to_stdout(self):
+        release = Path(self.install()["release"])
+        for args in (["--entry", "antigravity_v3", "--help"], ["--entry=antigravity_v3", "-h"]):
+            with self.subTest(args):
+                completed = self.bootstrap(release, *args)
+                self.assertEqual(0, completed.returncode)
+                self.assertEqual("deny", json.loads(completed.stdout)["decision"])
+                self.assertIn("usage:", completed.stderr)
+
+    def test_another_flag_valued_antigravity_v3_keeps_the_base_contract(self):
+        release = Path(self.install()["release"])
+        for entry in ("codex_v3", "claude_code_v3", "cursor_v3", "opencode_v3"):
+            with self.subTest(entry):
+                missing_pin = self.bootstrap(release, "--release", str(release), "--entry", entry,
+                                             "--state-dir", "antigravity_v3")
+                self.assertEqual((2, ""), (missing_pin.returncode, missing_pin.stdout))
+                self.assertTrue(missing_pin.stderr.startswith("usage: bootstrap.py"), missing_pin.stderr)
+                self.assertTrue(missing_pin.stderr.endswith(
+                    "bootstrap.py: error: the following arguments are required: --manifest-sha256\n"))
+                mismatch = self.bootstrap(release, "--release", "antigravity_v3", "--manifest-sha256", "abc",
+                                          "--entry", entry, "--state-dir", str(self.root / "s"))
+                self.assertEqual((2, "", "Safe YOLO fail-closed: manifest hash mismatch\n"),
+                                 (mismatch.returncode, mismatch.stdout, mismatch.stderr))
+
     def test_other_entries_keep_their_exit_codes(self):
         receipt = self.install()
         release = Path(receipt["release"])
@@ -269,34 +299,144 @@ class AntigravityLifecycleTests(unittest.TestCase):
             "NaN": '{"herdr": {"metadata": NaN}}\n',
             "duplicate group": '{"herdr": {"a": 1}, "herdr": {"b": 2}}\n',
             "duplicate field in another group": '{"herdr": {"a": 1, "a": 2}}\n',
+            "underflowing number": '{"herdr": {"metadata": 1e-400}}\n',
+            "more digits than a float keeps": '{"herdr": {"metadata": 0.1234567890123456789}}\n',
+            "negative zero integer": '{"herdr": {"metadata": -0}}\n',
+            "exponent spelling": '{"herdr": {"metadata": 1E5}}\n',
+            "redundant exponent": '{"herdr": {"metadata": 1.0e2}}\n',
+            "trailing zero": '{"herdr": {"metadata": 1.50}}\n',
+            "-Infinity": '{"herdr": {"metadata": -Infinity}}\n',
         }
         for name, text in cases.items():
             with self.subTest(name):
+                shutil.rmtree(self.safe_yolo_home, ignore_errors=True)
                 self.hooks.write_text(text)
                 with self.assertRaisesRegex(RuntimeError, "hooks file"):
                     self.install()
                 self.assertEqual(text, self.hooks.read_text())
                 self.assertFalse(self.receipt_path().exists())
 
-    def test_duplicate_fields_in_the_owned_group_are_reported_and_refused(self):
-        self.install()
-        text = self.hooks.read_text().replace('"enabled": true', '"enabled": false, "enabled": true')
+    def test_numbers_that_write_back_exactly_are_kept(self):
+        text = '{"herdr": {"a": 0.1, "b": -0.0, "c": 12345678901234567890123, "d": 1e+300, "e": 7}}'
         self.hooks.write_text(text)
+        self.install()
+        restore(self.safe_yolo_home, self.user_home, "antigravity", uninstall=True)
+        self.assertEqual(text, self.hooks.read_text())
 
+    def test_a_hooks_file_that_cannot_be_rewritten_exactly_after_install_is_reported_and_refused(self):
+        edits = {
+            "duplicate key": lambda text: text.replace('"enabled": true', '"enabled": false, "enabled": true'),
+            "1e-400": lambda text: text.replace('"PreInvocation"', '"metadata": 1e-400, "PreInvocation"'),
+        }
+        for problem, edit in edits.items():
+            with self.subTest(problem):
+                shutil.rmtree(self.safe_yolo_home, ignore_errors=True)
+                self.hooks.write_text(OTHER_FILE)
+                self.install()
+                text = edit(self.hooks.read_text())
+                self.hooks.write_text(text)
+
+                report = self.doctor()
+                self.assertFalse(report["healthy"])
+                self.assertTrue(any(problem in line for line in report["problems"]), report)
+                steps = {
+                    "update": self.install,
+                    "uninstall": lambda: restore(self.safe_yolo_home, self.user_home, "antigravity", uninstall=True),
+                    "deactivate": lambda: deactivate_harness(harness="antigravity",
+                                                             safe_yolo_home=self.safe_yolo_home,
+                                                             user_home=self.user_home),
+                }
+                for step in steps.values():
+                    with self.assertRaises(RuntimeError):
+                        step()
+                    self.assertEqual(text, self.hooks.read_text())
+
+    def test_a_linked_or_irregular_hooks_path_is_refused_by_every_command(self):
+        elsewhere = self.root / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "hooks.json").write_text(OTHER_FILE)
+        config = self.hooks.parent
+
+        def linked_config():
+            shutil.rmtree(config)
+            config.symlink_to(elsewhere)
+
+        def linked_file():
+            self.hooks.unlink()
+            self.hooks.symlink_to(elsewhere / "hooks.json")
+
+        def directory():
+            self.hooks.unlink()
+            self.hooks.mkdir()
+
+        def linked_into_root():
+            shutil.rmtree(config)
+            (self.gemini / "real-config").mkdir()
+            (self.gemini / "real-config" / "hooks.json").write_text(OTHER_FILE)
+            config.symlink_to(self.gemini / "real-config")
+
+        cases = {"linked config folder": linked_config, "linked hooks file": linked_file,
+                 "hooks path is a folder": directory, "config folder linked inside the root": linked_into_root}
+        for name, change in cases.items():
+            with self.subTest(name):
+                for path in (self.safe_yolo_home, self.gemini):
+                    if path.is_symlink():
+                        path.unlink()
+                    shutil.rmtree(path, ignore_errors=True)
+                config.mkdir(parents=True)
+                self.hooks.write_text(OTHER_FILE)
+                change()
+                with self.assertRaisesRegex(RuntimeError, "symlink|regular file"):
+                    self.install()
+                self.assertFalse(self.receipt_path().exists())
+                self.assertEqual(OTHER_FILE, (elsewhere / "hooks.json").read_text())
+
+                if config.is_symlink():
+                    config.unlink()
+                elif self.hooks.is_symlink():
+                    self.hooks.unlink()
+                else:
+                    self.hooks.rmdir()
+                config.mkdir(exist_ok=True)
+                self.hooks.write_text(OTHER_FILE)
+                self.install()
+                installed = self.hooks.read_bytes()
+                (elsewhere / "hooks.json").write_bytes(installed)
+                change()
+                report = self.doctor()
+                self.assertFalse(report["healthy"])
+                self.assertTrue(any("symlink" in line or "regular file" in line for line in report["problems"]),
+                                report)
+                for step in (
+                    lambda: restore(self.safe_yolo_home, self.user_home, "antigravity", uninstall=True),
+                    lambda: deactivate_harness(harness="antigravity", safe_yolo_home=self.safe_yolo_home,
+                                               user_home=self.user_home),
+                    self.install,
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "symlink|regular file|changed"):
+                        step()
+                    self.assertEqual(installed, (elsewhere / "hooks.json").read_bytes())
+                self.assertEqual("active", json.loads(self.receipt_path().read_text())["status"])
+
+    def test_doctor_runs_the_configured_command_and_fails_when_it_cannot(self):
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        interpreter = bin_dir / "python3"
+        interpreter.symlink_to(sys.executable)
+        with patch.object(sys, "executable", str(interpreter)):
+            self.install()
+        self.assertTrue(self.doctor()["healthy"], self.doctor())
+
+        interpreter.rename(bin_dir / "python3.moved")
         report = self.doctor()
         self.assertFalse(report["healthy"])
-        self.assertTrue(any("duplicate key" in problem for problem in report["problems"]), report)
-        steps = {
-            "update": self.install,
-            "uninstall": lambda: restore(self.safe_yolo_home, self.user_home, "antigravity", uninstall=True),
-            "deactivate": lambda: deactivate_harness(harness="antigravity", safe_yolo_home=self.safe_yolo_home,
-                                                     user_home=self.user_home),
-        }
-        for name, step in steps.items():
-            with self.subTest(name):
-                with self.assertRaises(RuntimeError):
-                    step()
-                self.assertEqual(text, self.hooks.read_text())
+        self.assertEqual({"allow": False, "deny": False}, report["canaries"])
+        self.assertTrue(any(str(interpreter) in line for line in report["problems"]), report)
+
+        interpreter.symlink_to(shutil.which("true"))
+        report = self.doctor()
+        self.assertFalse(report["healthy"])
+        self.assertEqual({"allow": False, "deny": False}, report["canaries"])
 
     def test_a_hand_wired_group_whose_release_does_not_verify_is_refused_untouched(self):
         cases = {
@@ -305,6 +445,10 @@ class AntigravityLifecycleTests(unittest.TestCase):
                 self.hand_wired(manifest="bad"))[1],
             "pin does not match the release": lambda: self.hand_wired(
                 manifest="0" * 64, bootstrap=Path(self.legacy_release()["bootstrap"])),
+            "empty pin": lambda: (self.legacy_release(), self.hand_wired(manifest=""))[1],
+            "release without entrypoints": lambda: self.hand_wired(manifest=self.legacy_without_antigravity({})),
+            "release exposing only codex": lambda: self.hand_wired(
+                manifest=self.legacy_without_antigravity({"codex_v3": "adapters/codex_v3.py"})),
         }
         for name, group in cases.items():
             with self.subTest(name):
