@@ -32,7 +32,7 @@ repository. Existing installations migrate through a bridge release.
 `python3.14`. `3.0.0-beta.5` added a public download, global management commands,
 and persistent local customizations. Installed releases remain separate. One
 immutable consequence-policy kernel is exposed through native harness adapters.
-Codex is supported; Claude Code and Cursor have beta lifecycle support. Other
+Codex is supported; Claude Code, Cursor, and OpenCode V2 have beta lifecycle support. Other
 included adapters remain adapter-only until their install, doctor, and rollback
 journeys receive equivalent proof. See the [support matrix](docs/harness-support.md).
 
@@ -57,7 +57,7 @@ python3 safe-yolo install --harness codex
 python3 safe-yolo doctor --harness codex
 ```
 
-Use `claude-code` or `cursor` instead of `codex` for those beta integrations.
+Use `claude-code`, `cursor`, or `opencode` instead of `codex` for those beta integrations.
 Installation requires a clean Git checkout. Each harness receives an independent
 receipt, backup, doctor report, and deactivation path. The shared runtime is
 installed only once under `~/.safe-yolo/releases/`.
@@ -74,7 +74,9 @@ hooks = true
 
 The installer reports the native activation step for the selected harness.
 Codex and Claude Code require their own hook review/reload flow. Cursor watches
-its user hook file and reloads it automatically. These native observations are
+its user hook file and reloads it automatically. OpenCode loads its plugin when
+its server starts; doctor cannot prove it loaded, so check
+`opencode api plugin.list` as the support matrix describes. These native observations are
 kept separate from direct adapter canaries.
 
 To verify the immutable release, hook pin, configuration, and direct runtime
@@ -100,7 +102,7 @@ distribution, upgrades, rollback, and limitations.
 For development, use this repository for code, installer, tests, docs, and
 releases. Make changes on a branch, run `python3 -m unittest discover -s tests/unit`,
 and open a PR. After committing, `python3 scripts/publish.py --check` builds the
-package and exercises an isolated three-harness installation. See
+package and exercises an isolated four-harness installation. See
 [PUBLISHING.md](PUBLISHING.md) for the single-repository release workflow.
 
 The previous `safe-yolo-releases` repo remains a compatibility archive. Its final
@@ -115,7 +117,8 @@ manual artifact copying belongs there.
 - `adapters/claude_code_v3.py` — stateless Claude Code `PreToolUse` transport over the same kernel; wired from `~/.claude/settings.json` (see `hosts/linux/devbox.claude-code-candidate.settings.json`).
 - `adapters/grok_v3.py` — stateless Grok CLI `PreToolUse` transport over the same kernel (see `hosts/linux/devbox.grok-candidate.hooks.json`).
 - `adapters/cursor_v3.py` — stateless Cursor Agent transport over the same kernel (see `hosts/linux/devbox.cursor-candidate.hooks.json`).
-- `adapters/opencode_v3.py` — stateless OpenCode `tool.execute.before` transport over the same kernel (see `hosts/linux/devbox.opencode-candidate.plugin.js`).
+- `adapters/opencode_v3.py` — stateless OpenCode transport over the same kernel, called by the V2 plugin `adapters/opencode_v2_plugin.js` from its `execute.before` tool hook.
+- `adapters/opencode_v1_retired_plugin.js` — the retired hand-placed V1 plugin. Install replaces a file of this shape, with only its pin constants changed, or a plugin rendered from an installed release, and nothing else.
 - `adapters/antigravity_v3.py` — stateless Antigravity ACP `PreToolUse` transport over the same kernel (see `hosts/linux/devbox.antigravity-candidate.hooks.json`).
 - `tests/unit/test_v3_*`, `tests/unit/test_devin_adapter.py`, `tests/unit/test_claude_code_adapter.py`, `tests/unit/test_grok_adapter.py`, `tests/unit/test_cursor_v3_adapter.py`, and `tests/unit/test_opencode_v3_adapter.py` — allow, deny, release, and executable-hook journeys.
 - `hosts/linux/devbox.v3-candidate.hooks.json` — non-active cutover example.

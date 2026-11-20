@@ -255,8 +255,10 @@ class PrivateBetaCliTests(unittest.TestCase):
         self.assertEqual("supported", catalog["codex"]["status"])
         self.assertEqual("beta", catalog["claude-code"]["status"])
         self.assertEqual("beta", catalog["cursor"]["status"])
-        self.assertEqual("adapter-only", catalog["opencode"]["status"])
-        self.assertFalse(catalog["opencode"]["lifecycle_supported"])
+        self.assertEqual("beta", catalog["opencode"]["status"])
+        self.assertTrue(catalog["opencode"]["lifecycle_supported"])
+        self.assertEqual("adapter-only", catalog["grok"]["status"])
+        self.assertFalse(catalog["grok"]["lifecycle_supported"])
         self.assertEqual(
             {"codex", "claude-code", "cursor", "grok", "opencode", "antigravity", "devin"},
             set(catalog),
@@ -510,7 +512,7 @@ class PrivateBetaCliTests(unittest.TestCase):
     def test_adapter_only_harness_refuses_lifecycle_commands_honestly(self):
         with self.assertRaisesRegex(RuntimeError, "adapter-only"):
             doctor_harness(
-                harness="opencode",
+                harness="grok",
                 safe_yolo_home=self.safe_yolo_home,
                 user_home=self.user_home,
             )

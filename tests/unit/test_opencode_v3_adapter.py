@@ -1,9 +1,11 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from adapters.opencode_v3 import build_kernel, handle, normalize_payload
 from scripts.install import install_release
@@ -18,6 +20,9 @@ class OpenCodeV3AdapterTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.project = self.root / "project"
         self.project.mkdir()
+        environment = patch.dict(os.environ, {"HOME": str(self.root / "home")})
+        environment.start()
+        self.addCleanup(environment.stop)
         self.kernel = build_kernel(
             safe_yolo_home=self.root / "safe-yolo",
             opencode_config=self.root / "config" / "opencode",
@@ -63,6 +68,30 @@ class OpenCodeV3AdapterTests(unittest.TestCase):
                 self.assertEqual("deny", denied["decision"])
                 self.assertEqual(consequence, denied["policy_id"])
 
+    def test_shell_tools_are_judged_in_their_own_workdir(self):
+        for command, consequence in (
+            ("git push --force origin main", "git.history_mutation"),
+            ("sudo apt install jq", "privilege.modify"),
+        ):
+            with self.subTest(command=command):
+                denied = handle(self.payload("shell", {"command": command}), self.kernel)
+                self.assertEqual(consequence, denied["policy_id"])
+        self.assertEqual("allow", handle(self.payload("shell", {"command": "echo hello"}), self.kernel)["decision"])
+
+        for tool in ("shell", "bash"):
+            with self.subTest(tool=tool):
+                in_scratch = handle(
+                    self.payload(tool, {"command": "rm stale.json", "workdir": "/tmp"}, cwd="/workspace/app"),
+                    self.kernel,
+                )
+                in_project = handle(
+                    self.payload(tool, {"command": "rm stale.json", "workdir": "/workspace/app"}, cwd="/tmp"),
+                    self.kernel,
+                )
+
+                self.assertEqual("allow", in_scratch["decision"])
+                self.assertEqual("filesystem.delete", in_project["policy_id"])
+
     def test_structured_edits_to_enforcement_are_denied(self):
         for tool, path in (
             ("edit", self.root / "config" / "opencode" / "opencode.json"),
@@ -87,6 +116,72 @@ class OpenCodeV3AdapterTests(unittest.TestCase):
                 denied = handle(self.payload("read", {"filePath": str(path)}), self.kernel)
                 self.assertEqual("deny", denied["decision"])
                 self.assertEqual("credentials.access", denied["policy_id"])
+
+    def test_v2_credential_database_and_its_sidecars_are_denied(self):
+        default_data = self.root / "home" / ".local" / "share" / "opencode"
+        xdg_data = self.root / "xdg-data" / "opencode"
+        cases = (
+            ({}, default_data / "opencode.db"),
+            ({"XDG_DATA_HOME": str(self.root / "xdg-data")}, xdg_data / "opencode.db"),
+            ({"XDG_DATA_HOME": str(self.root / "xdg-data"), "OPENCODE_DB": "custom.db"}, xdg_data / "custom.db"),
+            ({"OPENCODE_DB": str(self.root / "elsewhere" / "chosen.db")}, self.root / "elsewhere" / "chosen.db"),
+        )
+        for environment, database in cases:
+            with self.subTest(environment=environment), patch.dict(os.environ, environment):
+                for name in ("XDG_DATA_HOME", "OPENCODE_DB"):
+                    if name not in environment:
+                        os.environ.pop(name, None)
+                kernel = build_kernel(
+                    safe_yolo_home=self.root / "safe-yolo",
+                    opencode_config=self.root / "config" / "opencode",
+                    user_home=self.root / "home",
+                    cwd=self.project,
+                )
+                for suffix in ("", "-wal", "-shm", "-journal"):
+                    path = Path(f"{database}{suffix}")
+                    denied = handle(self.payload("read", {"filePath": str(path)}), kernel)
+                    self.assertEqual("credentials.access", denied["policy_id"], path)
+                    shell = handle(self.payload("bash", {"command": f"sqlite3 {path} .dump"}), kernel)
+                    self.assertEqual("deny", shell["decision"], path)
+                nearby = database.parent / "log" / "opencode.log"
+                allowed = handle(self.payload("read", {"filePath": str(nearby)}), kernel)
+                self.assertEqual("allow", allowed["decision"], nearby)
+
+    def test_credential_paths_follow_the_runtime_environment_like_opencode(self):
+        launch_data = self.root / "launch-home" / ".local" / "share" / "opencode"
+        xdg_data = self.root / "xdg-data" / "opencode"
+        (self.root / "far" / "deep").mkdir(parents=True)
+        xdg_data.mkdir(parents=True)
+        (xdg_data / "link").symlink_to(self.root / "far" / "deep")
+        cases = (
+            ({"HOME": str(self.root / "launch-home")}, (launch_data / "opencode.db", launch_data / "auth.json")),
+            (
+                {"HOME": str(self.root / "launch-home"), "XDG_DATA_HOME": str(self.root / "xdg-data")},
+                (xdg_data / "opencode.db", xdg_data / "auth.json"),
+            ),
+            (
+                {"XDG_DATA_HOME": str(self.root / "xdg-data"), "OPENCODE_DB": "link/../custom.db"},
+                (xdg_data / "custom.db",),
+            ),
+            (
+                {"XDG_DATA_HOME": str(xdg_data / "link" / ".." / ".." / ".." / "xdg-data")},
+                (xdg_data / "opencode.db", xdg_data / "auth.json"),
+            ),
+        )
+        for environment, protected in cases:
+            with self.subTest(environment=environment), patch.dict(os.environ, environment):
+                for name in ("XDG_DATA_HOME", "OPENCODE_DB"):
+                    if name not in environment:
+                        os.environ.pop(name, None)
+                kernel = build_kernel(
+                    safe_yolo_home=self.root / "safe-yolo",
+                    opencode_config=self.root / "config" / "opencode",
+                    user_home=self.root / "home",
+                    cwd=self.project,
+                )
+                for path in protected:
+                    denied = handle(self.payload("read", {"filePath": str(path)}), kernel)
+                    self.assertEqual("credentials.access", denied["policy_id"], path)
 
     def test_normalization_maps_opencode_tools(self):
         bash = normalize_payload(self.payload("bash", {"command": "npm test"}))

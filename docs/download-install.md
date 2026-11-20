@@ -25,16 +25,17 @@ python3 /tmp/safe-yolo-install.py
 ```
 
 Inspect the downloaded installer first if desired. To select one tool explicitly,
-use `python3 /tmp/safe-yolo-install.py --harness cursor` (or `codex`, `claude-code`).
-No administrator access is needed.
+use `python3 /tmp/safe-yolo-install.py --harness cursor` (or `codex`, `claude-code`, `opencode`).
+No administrator access is needed. Without `--harness`, an OpenCode V1 on
+`PATH` is reported under `skipped` and the other tools still install.
 
 For a manual or offline installation, download the ZIP and its `.zip.sha256`
 from Releases, verify before extraction, then run:
 
 ```sh
-sha256sum -c safe-yolo-3.0.0-beta.7.zip.sha256
-unzip safe-yolo-3.0.0-beta.7.zip
-cd safe-yolo-3.0.0-beta.7
+sha256sum -c safe-yolo-3.0.0-beta.14.zip.sha256
+unzip safe-yolo-3.0.0-beta.14.zip
+cd safe-yolo-3.0.0-beta.14
 python3 safe-yolo harnesses
 python3 safe-yolo install
 ```
@@ -48,6 +49,7 @@ Install each harness you use:
 python3 safe-yolo install --harness cursor
 python3 safe-yolo install --harness claude-code
 python3 safe-yolo install --harness codex
+python3 safe-yolo install --harness opencode
 python3 safe-yolo doctor --all
 ```
 
@@ -55,6 +57,10 @@ Run only the relevant install commands. The installer applies to the selected
 user's global harness configuration across projects. It refuses conflicting
 enforcement hooks at first install. In Claude Code, a `PreToolUse` hook
 another tool adds afterwards stays in place through update and uninstall.
+OpenCode loads Safe YOLO from `plugins/safe-yolo.js` in its
+config folder (`OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`, else
+`~/.config/opencode`), keeps other plugins, and must be V2; see the
+[support matrix](harness-support.md) for how to confirm OpenCode loaded it.
 Codex currently requires these existing settings in its
 `config.toml`; the installer checks them and does not change native permissions:
 
@@ -88,6 +94,12 @@ safe-yolo doctor
 
 Update downloads a verified release and updates active installations. For an
 offline update use `safe-yolo update --source /path/to/extracted-release`.
+Each installation records the configuration folder it wired, and install
+refuses a different folder for that harness while it is active. Before moving
+a tool's configuration or pointing `CODEX_HOME`, `CLAUDE_CONFIG_DIR`,
+`OPENCODE_CONFIG_DIR` or `XDG_CONFIG_HOME` elsewhere, run
+`safe-yolo uninstall --harness <id>`, then install again. To reinstall in
+place, use the recorded folder.
 Each harness is updated independently; if one fails, completed installations
 remain usable. Run doctor to inspect the state before retrying.
 
@@ -126,7 +138,12 @@ the integrations installed by this lifecycle, retaining unrelated settings.
 Use `--harness cursor` (or another supported ID) to act on just one integration.
 Both refuse to overwrite configuration changed since the last installation.
 Legacy installations whose baseline already contains an enforcement hook require
-operator review for complete removal. Restart the affected harness afterward.
+operator review for complete removal. OpenCode differs:
+update refuses an edited plugin rather than snapshotting it, and uninstall
+copies Safe YOLO's plugin to `~/.safe-yolo/backups/` and then deletes it, even
+when install replaced a V1 copy. Restart the affected harness afterward; for
+OpenCode, restart each server that loaded Safe YOLO and confirm the plugin is
+absent.
 
 Inactive releases, management commands, customizations, and recovery evidence
 are retained on disk. Uninstall stops enforcement; it does not erase your files.
@@ -157,7 +174,8 @@ checks `Slaytek-Systems/safe-yolo` for future versions. Old downloads remain ava
 
 ## Limits
 
-The beta provides installation lifecycles for Codex, Claude Code, and Cursor.
+The beta provides installation lifecycles for Codex, Claude Code, Cursor, and
+OpenCode V2.
 Other included adapters are experimental and have no supported installer yet.
 Linux is verified; macOS and Windows acceptance is pending. No mobile app is
 required because enforcement runs on the machine running the coding harness.

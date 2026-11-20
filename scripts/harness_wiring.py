@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 import shlex
@@ -239,3 +240,85 @@ def inspect_cursor_wiring(
         ):
             problems.append("Cursor preToolUse hook is not pinned to the expected release")
     return {"healthy": not problems, "problems": problems}
+
+
+OPENCODE_PLUGIN_TEMPLATE = Path("adapters") / "opencode_v2_plugin.js"
+_OPENCODE_COMMAND_SLOT = "/* SAFE_YOLO_COMMAND */ []"
+
+
+def render_opencode_plugin(release: Path, command: str) -> bytes:
+    """The OpenCode plugin of this release, calling exactly this pinned command."""
+    template = (release / OPENCODE_PLUGIN_TEMPLATE).read_text(encoding="utf-8")
+    if template.count(_OPENCODE_COMMAND_SLOT) != 1:
+        raise RuntimeError("OpenCode plugin template has no single command slot.")
+    return template.replace(_OPENCODE_COMMAND_SLOT, json.dumps(shlex.split(command))).encode()
+
+
+OPENCODE_V1_TEMPLATE = Path("adapters") / "opencode_v1_retired_plugin.js"
+_OPENCODE_V1_PINS = re.compile(
+    rb'^(const (?:PYTHON|BOOTSTRAP|RELEASE|MANIFEST_SHA256|STATE_DIR) = )"[^"\\\n]*";$', re.MULTILINE
+)
+
+
+def _without_v1_pins(payload: bytes) -> bytes:
+    return _OPENCODE_V1_PINS.sub(rb'\1"";', payload)
+
+
+def opencode_plugin_path_problem(path: Path) -> str | None:
+    """Safe YOLO manages only a regular plugin file whose folder is inside the selected config root."""
+    if path.is_symlink():
+        return f"{path} is a symlink; Safe YOLO manages only a regular plugin file."
+    if Path(os.path.realpath(path.parent)) != path.parent:
+        return f"{path.parent} is a symlink; Safe YOLO writes only inside the selected OpenCode config folder."
+    return None
+
+
+def prepare_opencode_plugin(path: Path, release: Path, owned: list[bytes]) -> tuple[bytes | None, int]:
+    """Previous bytes and mode of the plugin file Safe YOLO is about to own.
+
+    The file is Safe YOLO's only when it is byte-identical to a plugin rendered from an
+    installed release (`owned`) or is the retired V1 template with only its pins changed.
+    """
+    problem = opencode_plugin_path_problem(path)
+    if problem:
+        raise RuntimeError(problem)
+    if not path.exists():
+        return None, 0o600
+    if not path.is_file():
+        raise RuntimeError("OpenCode plugin path is unavailable or unsafe.")
+    original = path.read_bytes()
+    retired_v1 = _without_v1_pins((release / OPENCODE_V1_TEMPLATE).read_bytes())
+    if original not in owned and _without_v1_pins(original) != retired_v1:
+        raise RuntimeError(
+            f"{path} is not a Safe YOLO plugin. Safe YOLO will not overwrite another plugin; "
+            "move it aside through operator review first."
+        )
+    return original, path.stat().st_mode & 0o777
+
+
+def inspect_opencode_wiring(
+    path: Path,
+    home: Path,
+    release: Path,
+    digest: str,
+    *,
+    user_home: Path | None = None,
+    harness_home: Path | None = None,
+) -> dict[str, Any]:
+    problem = opencode_plugin_path_problem(path)
+    if problem:
+        return {"healthy": False, "problems": [problem]}
+    command = pinned_command(
+        home, release, digest, "opencode_v3", user_home=user_home, harness_home=harness_home
+    )
+    try:
+        actual = path.read_bytes()
+        expected = render_opencode_plugin(release, command)
+    except (OSError, RuntimeError) as error:
+        return {"healthy": False, "problems": [f"OpenCode plugin unreadable: {type(error).__name__}"]}
+    if actual != expected:
+        return {
+            "healthy": False,
+            "problems": ["OpenCode plugin is not the Safe YOLO plugin pinned to the expected release"],
+        }
+    return {"healthy": True, "problems": []}

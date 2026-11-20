@@ -36,12 +36,12 @@ HARNESSES = (
     HarnessSpec(
         "opencode",
         "OpenCode",
-        "adapter-only",
+        "beta",
         "opencode_v3",
         "opencode",
         ".config/opencode",
         "plugins/safe-yolo.js",
-        False,
+        True,
     ),
     HarnessSpec(
         "antigravity",

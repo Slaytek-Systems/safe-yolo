@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any
@@ -15,6 +16,7 @@ from adapters.hook_payload import normalize_hook_payload
 from engine.consequences_v3 import DenyOnlyKernel
 
 
+SHELL_NAMES = {"bash", "shell"}
 EDIT_NAMES = {"edit", "write"}
 READ_NAMES = {"read"}
 PATCH_NAMES = {"patch", "apply_patch"}
@@ -64,12 +66,29 @@ def build_kernel(
         user_home=home,
         enforcement_paths=tuple(enforcement),
         credential_paths=(
-            str(home / ".local" / "share" / "opencode" / "auth.json"),
+            *_opencode_credential_paths(),
             str(home / ".ssh"),
             str(home / ".gnupg"),
         ),
         scratch_paths=expand_scratch_paths(scratch_paths, home),
     )
+
+
+def _opencode_credential_paths() -> tuple[str, ...]:
+    """Resolved like OpenCode v2.3.2 from the server's own environment, which the plugin passes on.
+
+    Data root: packages/util/src/global-roots.ts. Database: packages/cli/src/database-path.ts, whose
+    path.resolve normalizes lexically. auth.json: the legacy file its credential migration reads.
+    """
+    data = os.path.abspath(
+        os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "opencode")
+    )
+    legacy = os.path.join(data, "auth.json")
+    database = os.environ.get("OPENCODE_DB") or "opencode.db"
+    if database == ":memory:":
+        return (legacy,)
+    path = os.path.abspath(os.path.join(data, database))
+    return (legacy, *(f"{path}{suffix}" for suffix in ("", "-wal", "-shm", "-journal")))
 
 
 def _first(values: dict[str, Any], keys: tuple[str, ...]) -> str:
@@ -88,9 +107,12 @@ def normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
     tool = str(normalized.get("tool") or normalized.get("tool_name") or "")
     lower = tool.lower()
     tool_input = dict(args)
-    if lower == "bash":
+    if lower in SHELL_NAMES:
         command = args.get("command", args.get("cmd", ""))
         tool_input = {"command": command if isinstance(command, str) else ""}
+        workdir = args.get("workdir")
+        if isinstance(workdir, str) and workdir:
+            tool_input["workdir"] = workdir
         mapped = "bash"
     elif lower in EDIT_NAMES:
         path = _first(args, PATH_KEYS)

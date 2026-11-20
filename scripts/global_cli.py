@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -112,10 +113,26 @@ def _without_own_hook(groups: Any, receipt: dict[str, Any], home: Path) -> list[
 
 
 def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[str, Any]:
-    from scripts.distribute import _atomic_write, _read_harness_receipt, _sha256, _spec
+    from scripts.distribute import _atomic_write, _read_harness_receipt, _retire, _sha256, _spec
     receipt, path = _read_harness_receipt(home, _spec(harness))
     config = Path(receipt['config_path'])
-    if config.is_symlink() or not config.is_file() or _sha256(config) != receipt['installed_config_sha256']:
+    if uninstall and harness == 'opencode':
+        # Safe YOLO owns the whole plugin file. A replaced V1 copy never ran on OpenCode V2,
+        # so uninstall retains the file as evidence rather than restoring it.
+        retained = _retire('opencode', config, receipt['installed_config_sha256'], home)
+        receipt['status'] = 'inactive'
+        receipt['uninstalled_config_backup'] = str(retained)
+        _atomic_write(path, (json.dumps(receipt, indent=2) + '\n').encode())
+        return {'status': 'inactive', 'harness': 'opencode', 'next_action': (
+            'Restart every OpenCode server that loaded Safe YOLO (`opencode service restart` for the background '
+            f'service, and any `opencode serve` you started), then confirm safe-yolo.js is absent from {config.parent} '
+            'and `opencode api plugin.list` against that server no longer lists safe-yolo.')}
+    current_bytes = None if config.is_symlink() or not config.is_file() else config.read_bytes()
+    if harness == 'opencode':
+        from scripts.harness_wiring import opencode_plugin_path_problem
+        if opencode_plugin_path_problem(config):
+            current_bytes = None
+    if current_bytes is None or hashlib.sha256(current_bytes).hexdigest() != receipt['installed_config_sha256']:
         raise RuntimeError('Harness configuration changed; refusing to overwrite newer work.')
     if uninstall:
         baseline = receipt.get('original_install', receipt)
