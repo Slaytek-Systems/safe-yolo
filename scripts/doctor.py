@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from scripts.harness_wiring import command_hook
 from scripts.release_manifest import ENTRYPOINTS, verify_manifest
 
 
@@ -101,6 +102,7 @@ def inspect_claude_code_wiring(
     safe_yolo_home: str | Path | None = None,
     user_home: str | Path | None = None,
     harness_home: str | Path | None = None,
+    state_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Read-only check that Claude Code user settings pin one Safe YOLO PreToolUse hook."""
     problems: list[str] = []
@@ -113,11 +115,9 @@ def inspect_claude_code_wiring(
     if document.get("disableAllHooks"):
         problems.append("disableAllHooks must not be set")
     hooks = document.get("hooks", {})
-    pretool = _command_hooks(hooks, "PreToolUse")
-    if len(pretool) != 1:
-        problems.append("exactly one PreToolUse command hook is required")
-    elif pretool[0][0] not in {"*", ""} or not _command_is_pinned(
-        pretool[0][1],
+    groups = hooks.get("PreToolUse") if isinstance(hooks, dict) else None
+    slots = pinned_hook_slots(
+        groups,
         bootstrap_path=bootstrap_path,
         release_path=release_path,
         manifest_sha256=manifest_sha256,
@@ -125,7 +125,11 @@ def inspect_claude_code_wiring(
         safe_yolo_home=safe_yolo_home,
         user_home=user_home,
         harness_home=harness_home,
-    ):
+        state_dir=state_dir,
+    )
+    if len(slots) > 1:
+        problems.append("exactly one Safe YOLO PreToolUse command hook is required")
+    elif not slots or groups[slots[0][0]].get("matcher", "") not in ("*", ""):
         problems.append("PreToolUse hook is not pinned to the expected Safe YOLO bootstrap release")
     if not _release_exposes_entry(release_path, entry):
         problems.append(f"release does not expose the expected entrypoint: {entry}")
@@ -172,6 +176,44 @@ def _command_hooks(hooks: Any, event: str) -> list[tuple[str, str]]:
     return found
 
 
+def pinned_hook_slots(groups: Any, **pin: Any) -> list[tuple[int, int]]:
+    """Positions, as (group, hook), of each hook that is, field for field, the entry Safe YOLO writes for this pin.
+
+    Claude Code install, doctor and uninstall all find Safe YOLO's hook here.
+    Every other hook belongs to someone else and is neither read nor judged.
+    """
+    if not isinstance(groups, list):
+        return []
+    return [
+        (group_index, hook_index)
+        for group_index, group in enumerate(groups)
+        if isinstance(group, dict) and isinstance(group.get("hooks"), list)
+        for hook_index, hook in enumerate(group["hooks"])
+        if isinstance(hook, dict)
+        and isinstance(hook.get("command"), str)
+        and hook == command_hook(hook["command"])
+        and type(hook["timeout"]) is int
+        and _is_installer_spelling(hook["command"])
+        and _command_is_pinned(hook["command"], **pin)
+    ]
+
+
+INSTALLER_FLAG_ORDER = (
+    "--release", "--manifest-sha256", "--entry", "--state-dir", "--safe-yolo-home", "--user-home", "--harness-home",
+)
+
+
+def _is_installer_spelling(command: str) -> bool:
+    # The installer writes shlex.join output with its flags in one order. Any other
+    # spelling may parse alike and run differently, so it is not the installed entry.
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    flags = tuple(tokens[2::2])
+    return shlex.join(tokens) == command and flags == INSTALLER_FLAG_ORDER[: len(flags)]
+
+
 def _command_is_pinned(
     command: str,
     *,
@@ -182,6 +224,7 @@ def _command_is_pinned(
     safe_yolo_home: str | Path | None = None,
     user_home: str | Path | None = None,
     harness_home: str | Path | None = None,
+    state_dir: str | Path | None = None,
 ) -> bool:
     try:
         tokens = shlex.split(command, posix=True)
@@ -241,6 +284,7 @@ def _command_is_pinned(
         values.get("--release") == str(release_path)
         and values.get("--manifest-sha256") == manifest_sha256
         and values.get("--entry") == entry
+        and (state_dir is None or values.get("--state-dir") == str(state_dir))
     )
 
 

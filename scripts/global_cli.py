@@ -86,6 +86,31 @@ def active_receipts(home: Path) -> list[dict[str, Any]]:
             for receipt, _ in [_read_harness_receipt(home, spec)] if receipt.get('status') == 'active']
 
 
+def _without_own_hook(groups: Any, receipt: dict[str, Any], home: Path) -> list[Any]:
+    """Claude Code's PreToolUse groups minus the hook this installation pinned, and any group that empties."""
+    from scripts.doctor import pinned_hook_slots
+    slots = set(pinned_hook_slots(
+        groups,
+        bootstrap_path=receipt.get('bootstrap') or home / 'bootstrap.py',
+        release_path=receipt['release'],
+        manifest_sha256=receipt['manifest_sha256'],
+        entry='claude_code_v3',
+        safe_yolo_home=home if receipt.get('user_home') else None,
+        user_home=receipt.get('user_home'),
+        harness_home=receipt.get('harness_home'),
+        state_dir=home / 'state',
+    ))
+    kept = []
+    for group_index, group in enumerate(groups if isinstance(groups, list) else []):
+        if not any(index == group_index for index, _ in slots):
+            kept.append(group)
+            continue
+        hooks = [hook for hook_index, hook in enumerate(group['hooks']) if (group_index, hook_index) not in slots]
+        if hooks:
+            kept.append({**group, 'hooks': hooks})
+    return kept
+
+
 def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[str, Any]:
     from scripts.distribute import _atomic_write, _read_harness_receipt, _sha256, _spec
     receipt, path = _read_harness_receipt(home, _spec(harness))
@@ -104,7 +129,10 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
         original_hooks = original.get('hooks', {})
         if original_hooks.get(event):
             raise RuntimeError('The legacy baseline already contains an enforcement hook; a complete uninstall needs operator review.')
-        if event in original_hooks:
+        others = _without_own_hook(document['hooks'].get(event), receipt, home) if harness == 'claude-code' else []
+        if others:
+            document['hooks'][event] = others
+        elif event in original_hooks:
             document['hooks'][event] = original_hooks[event]
         else:
             document['hooks'].pop(event, None)

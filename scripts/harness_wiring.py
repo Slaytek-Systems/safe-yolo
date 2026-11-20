@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 import shlex
 import sys
-from typing import Any
+from typing import Any, Callable
 
 
 def read_json_object(path: Path) -> dict[str, Any]:
@@ -51,6 +51,16 @@ def is_safe_yolo_command(command: Any, home: Path, entry: str = "codex_v3") -> b
     return required_flags <= set(values) <= value_flags and values["--entry"] == entry
 
 
+def command_hook(command: str) -> dict[str, Any]:
+    """The whole hook entry Safe YOLO writes for Codex and Claude Code."""
+    return {
+        "type": "command",
+        "command": command,
+        "timeout": 10,
+        "statusMessage": "Checking explicit Safe YOLO restrictions",
+    }
+
+
 def prepare_command_hooks(
     path: Path,
     home: Path,
@@ -58,7 +68,13 @@ def prepare_command_hooks(
     *,
     entry: str = "codex_v3",
     label: str = "Codex",
+    own_slots: Callable[[Any], list[tuple[int, int]]] | None = None,
 ) -> tuple[dict[str, Any], bytes | None, int]:
+    """Write Safe YOLO's PreToolUse hook into a harness hooks document.
+
+    Without `own_slots` Safe YOLO must be the only PreToolUse hook. With it, an
+    update replaces the one hook `own_slots` finds and leaves every other hook alone.
+    """
     original_bytes: bytes | None = None
     mode = 0o600
     if path.exists():
@@ -90,26 +106,22 @@ def prepare_command_hooks(
             for group in existing_pretool
         )
     )
-    if existing_pretool and not recognized_pretool:
+    if own_slots is None and existing_pretool and not recognized_pretool:
         raise RuntimeError(
             f"{label} already has an existing PreToolUse command hook. "
             "Safe YOLO will not replace a foreign enforcement surface."
         )
     if hooks.get("PostToolUse", []):
         raise RuntimeError(f"{label} has a non-empty PostToolUse lifecycle; Safe YOLO will not replace it.")
-    hooks["PreToolUse"] = [
-        {
-            "matcher": "*",
-            "hooks": [
-                {
-                    "type": "command",
-                    "command": command,
-                    "timeout": 10,
-                    "statusMessage": "Checking explicit Safe YOLO restrictions",
-                }
-            ],
-        }
-    ]
+    own_hook = command_hook(command)
+    if own_slots is None:
+        hooks["PreToolUse"] = [{"matcher": "*", "hooks": [own_hook]}]
+    else:
+        slots = own_slots(existing_pretool)
+        if len(slots) != 1:
+            raise RuntimeError(f"{label} does not hold exactly one hook from the installed Safe YOLO release.")
+        group_index, hook_index = slots[0]
+        existing_pretool[group_index]["hooks"][hook_index] = own_hook
     if entry == "codex_v3":
         document["description"] = (
             "Safe YOLO v3 default-open policy with explicit hard denials and no approval path."

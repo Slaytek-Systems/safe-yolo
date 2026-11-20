@@ -1,6 +1,6 @@
 # Private beta operations
 
-Safe YOLO 3.0.0-beta.3 is a harness-agnostic beta available from a source
+Safe YOLO is a harness-agnostic beta available from a source
 checkout or a verified distribution ZIP.
 The distribution contains one immutable policy kernel and multiple native
 adapters. Lifecycle support is promoted per harness according to the
@@ -23,8 +23,10 @@ adapters. Lifecycle support is promoted per harness according to the
 7. records an independent receipt under
    `~/.safe-yolo/state/installations/<harness>.json`.
 
-It refuses to replace a foreign enforcement hook. Deactivation refuses to
-overwrite configuration changed after installation.
+It refuses to replace a foreign enforcement hook. In Claude Code, an update
+replaces only the hook the receipt pins and leaves `PreToolUse` hooks added
+since install in place. Deactivation refuses to overwrite configuration
+changed after installation.
 
 ## First install
 

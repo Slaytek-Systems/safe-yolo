@@ -105,6 +105,48 @@ class GlobalLifecycleTests(unittest.TestCase):
             self.assertEqual(original, config.read_bytes())
 
     @patch('scripts.package.verify_source', return_value='a' * 40)
+    def test_update_and_uninstall_leave_another_owners_pretool_hook_alone(self, _verify):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = build_bundle(ROOT, root / 'downloads', 'a' * 40)
+            with zipfile.ZipFile(archive) as bundle:
+                bundle.extractall(root / 'first')
+                bundle.extractall(root / 'second')
+            first = next((root / 'first').iterdir())
+            second = next((root / 'second').iterdir())
+            (second / 'VERSION').write_text('3.0.0-beta.999\n')
+            manifest = json.loads((second / MANIFEST).read_text())
+            manifest['version'] = '3.0.0-beta.999'
+            manifest['files']['VERSION'] = digest((second / 'VERSION').read_bytes())
+            (second / MANIFEST).write_text(json.dumps(manifest))
+            user = root / 'user'
+            home = root / 'runtime'
+            config = user / '.claude/settings.json'
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps({'model': 'kept'}))
+            def run(command, *args):
+                result = subprocess.run([*command, *args], capture_output=True, text=True)
+                self.assertEqual(0, result.returncode, result.stderr)
+                return json.loads(result.stdout)
+            run([sys.executable, str(first / 'safe-yolo'), '--home', str(home), '--user-home', str(user)],
+                'install', '--harness', 'claude-code')
+            other = {'matcher': 'Bash', 'hooks': [{'type': 'command', 'command': '/usr/bin/python3 /opt/other/guard.py'}]}
+            document = json.loads(config.read_text())
+            document['hooks']['PreToolUse'].append(other)
+            config.write_text(json.dumps(document))
+            launcher = [str(user / '.local/bin/safe-yolo')]
+            run(launcher, 'update', '--source', str(second))
+            report = run(launcher, 'doctor')
+            self.assertTrue(report['healthy'], report)
+            self.assertEqual('3.0.0-beta.999', report['reports'][0]['version'])
+            groups = json.loads(config.read_text())['hooks']['PreToolUse']
+            self.assertEqual(2, len(groups))
+            self.assertIn(other, groups)
+            self.assertEqual(1, sum('3.0.0-beta.999' in hook['command'] for group in groups for hook in group['hooks']))
+            run(launcher, 'uninstall')
+            self.assertEqual({'model': 'kept', 'hooks': {'PreToolUse': [other]}}, json.loads(config.read_text()))
+
+    @patch('scripts.package.verify_source', return_value='a' * 40)
     def test_versioned_interpreter_name_installs_and_updates_codex(self, _verify):
         # Homebrew and python.org report sys.executable as e.g. .../python3.14.
         with tempfile.TemporaryDirectory() as temporary:

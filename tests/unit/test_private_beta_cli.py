@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 import shlex
 import shutil
@@ -9,6 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from scripts.global_cli import restore
 from scripts.distribute import (
     deactivate_codex,
     deactivate_harness,
@@ -301,6 +303,153 @@ class PrivateBetaCliTests(unittest.TestCase):
         )
         self.assertEqual("inactive", result["status"])
         self.assertEqual(original_bytes, settings.read_bytes())
+
+    def claude(self, version=None):
+        if version:
+            (self.source / "VERSION").write_text(version + "\n")
+        return install_harness(
+            harness="claude-code",
+            source=self.source,
+            safe_yolo_home=self.safe_yolo_home,
+            user_home=self.user_home,
+            expected_commit="f" * 40,
+        )
+
+    def claude_settings(self, document=None, mode=None):
+        settings = self.user_home / ".claude" / "settings.json"
+        settings.parent.mkdir(exist_ok=True)
+        if document is not None:
+            settings.write_text(json.dumps(document) + "\n")
+        if mode is not None:
+            settings.chmod(mode)
+        return settings
+
+    def claude_doctor(self):
+        return doctor_harness(harness="claude-code", safe_yolo_home=self.safe_yolo_home, user_home=self.user_home)
+
+    def claude_uninstall(self):
+        return restore(self.safe_yolo_home, self.user_home, "claude-code", uninstall=True)
+
+    @patch("scripts.distribute.verify_source", return_value="f" * 40)
+    def test_claude_code_update_replaces_its_hook_in_place_beside_hooks_added_since(self, _verify):
+        settings = self.claude_settings({"model": "kept"})
+        self.claude()
+        document = json.loads(settings.read_text())
+        own = document["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        other_state = {"type": "command", "command": own.replace(str(self.safe_yolo_home / "state"), "/srv/other/state")}
+        sibling = {"type": "command", "command": "echo sibling"}
+        elsewhere = (
+            "/usr/bin/python3 /srv/other/.safe-yolo/releases/9/scripts/bootstrap.py --release "
+            "/srv/other/.safe-yolo/releases/9 --manifest-sha256 abc --entry claude_code_v3"
+        )
+        later = {"matcher": "Bash", "hooks": [
+            {"type": "command", "command": "echo later"},
+            other_state,
+            {"type": "command", "command": elsewhere},
+            {"type": "command", "command": "/usr/bin/python3", "args": elsewhere.split()[1:], "timeout": "10"},
+        ]}
+        document["hooks"]["PreToolUse"][0]["hooks"].append(sibling)
+        document["hooks"]["PreToolUse"].append(later)
+        settings.write_text(json.dumps(document))
+
+        self.claude("3.0.0-beta.3")
+
+        groups = json.loads(settings.read_text())["hooks"]["PreToolUse"]
+        self.assertEqual(2, len(groups))
+        self.assertIn("/releases/3.0.0-beta.3/", groups[0]["hooks"][0]["command"])
+        self.assertEqual(sibling, groups[0]["hooks"][1])
+        self.assertEqual(later, groups[1])
+        report = self.claude_doctor()
+        self.assertTrue(report["healthy"], report)
+        self.assertEqual("3.0.0-beta.3", report["version"])
+
+        self.claude_uninstall()
+
+        self.assertEqual(
+            {"model": "kept", "hooks": {"PreToolUse": [{"matcher": "*", "hooks": [sibling]}, later]}},
+            json.loads(settings.read_text()),
+        )
+
+    @patch("scripts.distribute.verify_source", return_value="f" * 40)
+    def test_claude_code_first_install_refuses_any_existing_pretool_hook(self, _verify):
+        elsewhere = (
+            "/usr/bin/python3 /srv/other/.safe-yolo/releases/9/scripts/bootstrap.py --release "
+            "/srv/other/.safe-yolo/releases/9 --manifest-sha256 abc --entry claude_code_v3 "
+            "--state-dir /srv/other/state"
+        )
+        legacy_elsewhere = elsewhere.replace("/releases/9/scripts/bootstrap.py", "/bootstrap.py")
+        for hook in (
+            {"type": "command", "command": "echo other"},
+            {"type": "command", "command": elsewhere},
+            {"type": "command", "command": legacy_elsewhere},
+            {"type": "command", "command": "/usr/bin/python3", "args": elsewhere.split()[1:]},
+            {"type": "command", "command": "/opt/my tools/python3", "args": elsewhere.split()[1:]},
+        ):
+            with self.subTest(hook=hook):
+                settings = self.claude_settings({"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [hook]}]}})
+                original_bytes = settings.read_bytes()
+                with self.assertRaisesRegex(RuntimeError, "existing PreToolUse"):
+                    self.claude()
+                self.assertEqual(original_bytes, settings.read_bytes())
+
+    @patch("scripts.distribute.verify_source", return_value="f" * 40)
+    def test_claude_code_refuses_its_hook_in_a_group_claude_code_would_not_load(self, _verify):
+        settings = self.claude_settings({"model": "kept"})
+        self.claude()
+        document = json.loads(settings.read_text())
+        for matcher in (0, None, "Bash"):
+            with self.subTest(matcher=matcher):
+                document["hooks"]["PreToolUse"][0]["matcher"] = matcher
+                settings.write_text(json.dumps(document))
+                edited = settings.read_bytes()
+                self.assertIn(
+                    "PreToolUse hook is not pinned to the expected Safe YOLO bootstrap release",
+                    self.claude_doctor()["problems"],
+                )
+                (self.source / "VERSION").write_text("3.0.0-beta.3\n")
+                with self.assertRaisesRegex(RuntimeError, "Existing Safe YOLO hook changed"):
+                    self.claude()
+                self.assertEqual(edited, settings.read_bytes())
+
+    @patch("scripts.distribute.verify_source", return_value="f" * 40)
+    def test_claude_code_refuses_its_hook_once_any_field_of_the_entry_is_edited(self, _verify):
+        settings = self.claude_settings({"model": "kept"})
+        self.claude()
+        installed = json.loads(settings.read_text())
+        own = installed["hooks"]["PreToolUse"][0]["hooks"][0]
+        (self.source / "VERSION").write_text("3.0.0-beta.3\n")
+        for edit in (
+            {"if": "Bash(printf *)"},
+            {"timeout": "10"},
+            {"command": own["command"].replace(" --state-dir", "\n--state-dir")},
+            {"command": own["command"] + " "},
+            {"async": True},
+            {"timeout": 10.0},
+            {"command": own["command"].replace(" --entry claude_code_v3", "") + " --entry claude_code_v3"},
+        ):
+            with self.subTest(edit=edit):
+                document = json.loads(json.dumps(installed))
+                document["hooks"]["PreToolUse"][0]["hooks"][0] = {**own, **edit}
+                settings.write_text(json.dumps(document))
+                edited = settings.read_bytes()
+                self.assertIn(
+                    "PreToolUse hook is not pinned to the expected Safe YOLO bootstrap release",
+                    self.claude_doctor()["problems"],
+                )
+                with self.assertRaisesRegex(RuntimeError, "Existing Safe YOLO hook changed"):
+                    self.claude()
+                self.assertEqual(edited, settings.read_bytes())
+
+    @patch("scripts.distribute.verify_source", return_value="f" * 40)
+    def test_claude_code_doctor_reports_a_second_copy_of_its_own_hook(self, _verify):
+        settings = self.claude_settings({"model": "kept"})
+        self.claude()
+        document = json.loads(settings.read_text())
+        own = document["hooks"]["PreToolUse"][0]["hooks"][0]
+        document["hooks"]["PreToolUse"].append({"matcher": "*", "hooks": [dict(own)]})
+        settings.write_text(json.dumps(document))
+
+        self.assertIn("exactly one Safe YOLO PreToolUse command hook is required", self.claude_doctor()["problems"])
 
     @patch("scripts.distribute.verify_source", return_value="1" * 40)
     def test_cursor_install_doctor_and_deactivate_use_native_permission_hook(self, _verify):

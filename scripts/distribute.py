@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.activate_v3 import _ensure_release, verify_source
-from scripts.doctor import inspect_claude_code_wiring, inspect_codex_wiring, inspect_release
+from scripts.doctor import inspect_claude_code_wiring, inspect_codex_wiring, inspect_release, pinned_hook_slots
 from scripts.harness_specs import HARNESS_BY_ID, HARNESS_HOME_ENV, HARNESSES, HarnessSpec
 from scripts.package import MANIFEST as DISTRIBUTION_MANIFEST, verify_bundle
 from scripts.harness_wiring import (
@@ -239,6 +239,7 @@ def _inspect_wiring(
             safe_yolo_home=home if user_home is not None else None,
             user_home=user_home,
             harness_home=harness_home,
+            state_dir=home / "state",
         )
     return _inspect_cursor_wiring(
         config_path,
@@ -300,8 +301,25 @@ def install_harness(
     if spec.id == "cursor":
         candidate, original_bytes, original_mode = _prepare_cursor_hooks(target, home, command)
     else:
+        own_slots = None
+        if previous_receipt and spec.id == "claude-code":
+            # Claude Code runs every matching hook and a deny from any of them wins, so other
+            # owners' hooks may stand beside this one. An update swaps only the hook pinned
+            # to the installed release, which the wiring check above found exactly once.
+            def own_slots(groups: Any) -> list[tuple[int, int]]:
+                return pinned_hook_slots(
+                    groups,
+                    bootstrap_path=Path(previous_receipt['bootstrap']),
+                    release_path=Path(previous_receipt['release']),
+                    manifest_sha256=previous_receipt['manifest_sha256'],
+                    entry=spec.entry,
+                    safe_yolo_home=home,
+                    user_home=user,
+                    harness_home=target.parent,
+                    state_dir=home / "state",
+                )
         candidate, original_bytes, original_mode = _prepare_hooks(
-            target, home, command, entry=spec.entry, label=spec.name
+            target, home, command, entry=spec.entry, label=spec.name, own_slots=own_slots
         )
     backup_root = home / "backups" / (
         f"pre-{spec.id}-{version}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"

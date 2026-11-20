@@ -7,6 +7,7 @@ import unittest
 
 from adapters.claude_code_v3 import build_kernel, handle_pre_tool, normalize_payload
 from scripts.doctor import inspect_claude_code_wiring
+from scripts.harness_wiring import command_hook
 from scripts.install import install_release
 
 
@@ -305,7 +306,7 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
             "skipDangerousModePermissionPrompt": True,
             "hooks": {
                 "PreToolUse": [
-                    {"matcher": "*", "hooks": [{"type": "command", "command": command, "timeout": 10}]}
+                    {"matcher": "*", "hooks": [command_hook(command)]}
                 ]
             },
         }
