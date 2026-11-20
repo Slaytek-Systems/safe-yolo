@@ -58,6 +58,15 @@ def verified_entry(release_dir: str | Path, entry: str, *, expected_manifest_has
     return release / ENTRYPOINTS[entry]
 
 
+def _fail(entry: str, message: str) -> int:
+    if entry == "antigravity_v3":
+        # Antigravity ignores a hook that exits non-zero, so a failure must be a deny reply.
+        print(json.dumps({"decision": "deny", "reason": f"Safe YOLO fail-closed: {message}"}))
+        return 0
+    print(f"Safe YOLO fail-closed: {message}", file=sys.stderr)
+    return 2
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify a Safe YOLO release before dispatching a Codex hook.")
     parser.add_argument("--release", type=Path, required=True)
@@ -72,9 +81,8 @@ def main() -> int:
     args = parser.parse_args()
     try:
         entry = verified_entry(args.release, args.entry, expected_manifest_hash=args.manifest_sha256)
-    except ValueError as error:
-        print(f"Safe YOLO fail-closed: {error}", file=sys.stderr)
-        return 2
+    except (ValueError, OSError) as error:
+        return _fail(args.entry, str(error))
     command = [sys.executable, str(entry), "--state-dir", str(args.state_dir)]
     if args.safe_yolo_home is not None:
         command.extend(["--safe-yolo-home", str(args.safe_yolo_home)])
@@ -85,15 +93,12 @@ def main() -> int:
         "claude_code_v3": "--claude-home",
         "cursor_v3": "--cursor-home",
         "opencode_v3": "--opencode-config",
+        "antigravity_v3": "--gemini-home",
     }
     if args.harness_home is not None:
         harness_flag = harness_home_flags.get(args.entry)
         if harness_flag is None:
-            print(
-                f"Safe YOLO fail-closed: harness home is unsupported for {args.entry}",
-                file=sys.stderr,
-            )
-            return 2
+            return _fail(args.entry, f"harness home is unsupported for {args.entry}")
         command.extend([harness_flag, str(args.harness_home)])
     if args.host_contract is not None:
         command.extend(["--host-contract", str(args.host_contract)])
@@ -102,7 +107,17 @@ def main() -> int:
     environment = os.environ.copy()
     existing_pythonpath = environment.get("PYTHONPATH")
     environment["PYTHONPATH"] = str(args.release) if not existing_pythonpath else f"{args.release}{os.pathsep}{existing_pythonpath}"
-    return subprocess.run(command, check=False, env=environment).returncode
+    if args.entry != "antigravity_v3":
+        return subprocess.run(command, check=False, env=environment).returncode
+    try:
+        completed = subprocess.run(command, check=False, env=environment, stdout=subprocess.PIPE, text=True)
+        reply = json.loads(completed.stdout)
+    except (OSError, ValueError):
+        return _fail(args.entry, "the Antigravity adapter did not run or gave no decision")
+    if completed.returncode != 0 or not isinstance(reply, dict) or reply.get("decision") not in ("allow", "deny"):
+        return _fail(args.entry, f"the Antigravity adapter exited {completed.returncode} without a decision")
+    sys.stdout.write(completed.stdout)
+    return 0
 
 
 if __name__ == "__main__":

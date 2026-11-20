@@ -61,7 +61,7 @@ class PublicationTests(unittest.TestCase):
 
 class AcceptanceIsolationTests(unittest.TestCase):
     @patch('scripts.package.verify_source', return_value='a' * 40)
-    def test_check_never_touches_the_callers_home_or_runs_their_opencode(self, _verify):
+    def test_check_never_touches_the_callers_home_or_runs_their_opencode_or_agy(self, _verify):
         revision = 'a' * 40
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -72,9 +72,13 @@ class AcceptanceIsolationTests(unittest.TestCase):
             host_opencode = host_bin / 'opencode'
             host_opencode.write_text('#!/bin/sh\nmkdir -p "$HOME/.local/share/opencode"\necho 1.19.6\n')
             host_opencode.chmod(0o755)
+            host_agy = host_bin / 'agy'
+            host_agy.write_text('#!/bin/sh\nmkdir -p "$HOME/.gemini/antigravity-cli"\n')
+            host_agy.chmod(0o755)
             archive = build_bundle(ROOT, root / 'bundle', revision)
             caller = {'HOME': str(home), 'PATH': os.pathsep.join([str(host_bin), '/usr/bin', '/bin']),
-                      'XDG_CONFIG_HOME': str(home / '.config'), 'OPENCODE_CONFIG_DIR': str(home / 'oc')}
+                      'XDG_CONFIG_HOME': str(home / '.config'), 'OPENCODE_CONFIG_DIR': str(home / 'oc'),
+                      'GEMINI_HOME': str(home / 'gemini')}
             with patch.dict('os.environ', caller):
                 acceptance(archive, revision)
 

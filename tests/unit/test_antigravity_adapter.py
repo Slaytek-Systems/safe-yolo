@@ -215,7 +215,7 @@ class AntigravityAdapterTests(unittest.TestCase):
             env=env,
         )
         self.assertEqual(0, allowed.returncode, allowed.stderr)
-        self.assertEqual("", allowed.stdout)
+        self.assertEqual({"decision": "allow"}, json.loads(allowed.stdout))
 
 
 if __name__ == "__main__":

@@ -21,14 +21,23 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.activate_v3 import _ensure_release, verify_source
-from scripts.doctor import inspect_claude_code_wiring, inspect_codex_wiring, inspect_release, pinned_hook_slots
+from scripts.doctor import (
+    inspect_antigravity_wiring,
+    inspect_claude_code_wiring,
+    inspect_codex_wiring,
+    inspect_release,
+    owns_antigravity_group,
+    pinned_hook_slots,
+)
 from scripts.harness_specs import HARNESS_BY_ID, HARNESS_HOME_ENV, HARNESSES, HarnessSpec
 from scripts.package import MANIFEST as DISTRIBUTION_MANIFEST, verify_bundle
 from scripts.harness_wiring import (
     inspect_cursor_wiring as _inspect_cursor_wiring,
     inspect_opencode_wiring as _inspect_opencode_wiring,
+    is_hand_wired_antigravity_group as _is_hand_wired_antigravity_group,
     opencode_plugin_path_problem as _opencode_plugin_path_problem,
     pinned_command as _pinned_command,
+    prepare_antigravity_hooks as _prepare_antigravity_hooks,
     prepare_command_hooks as _prepare_hooks,
     prepare_cursor_hooks as _prepare_cursor_hooks,
     prepare_opencode_plugin as _prepare_opencode_plugin,
@@ -136,6 +145,12 @@ def _run_canaries(
         opencode_base = {"tool": "shell", "sessionID": "canary", "callID": "canary", "cwd": str(Path.cwd())}
         allowed_payload = {**opencode_base, "args": {"command": "git status --short"}}
         denied_payload = {**opencode_base, "args": {"command": "git push --force-with-lease"}}
+    elif harness == "antigravity":
+        antigravity_base = {"stepIdx": 0, "conversationId": "canary", "workspacePaths": [str(Path.cwd())]}
+        allowed_payload = {**antigravity_base, "toolCall": {"name": "run_command",
+                                                            "args": {"CommandLine": "git status --short"}}}
+        denied_payload = {**antigravity_base, "toolCall": {"name": "run_command",
+                                                           "args": {"CommandLine": "git push --force-with-lease"}}}
     else:
         cursor_base = {"hook_event_name": "preToolUse", "cwd": str(Path.cwd()), "tool_name": "Shell"}
         allowed_payload = {**cursor_base, "tool_input": {"command": "git status --short"}}
@@ -154,9 +169,9 @@ def _run_canaries(
         capture_output=True,
         check=False,
     )
-    if harness == "opencode":
+    if harness in ("opencode", "antigravity"):
         return {
-            outcome: completed.returncode == 0 and _opencode_decision(completed.stdout) == outcome
+            outcome: completed.returncode == 0 and _reply_decision(completed.stdout) == outcome
             for outcome, completed in (("allow", allowed), ("deny", denied))
         }
     allow_ok = allowed.returncode == 0 and not allowed.stdout.strip()
@@ -180,7 +195,7 @@ def _run_canaries(
     return {"allow": allow_ok, "deny": deny_ok}
 
 
-def _opencode_decision(stdout: str) -> str | None:
+def _reply_decision(stdout: str) -> str | None:
     try:
         decision = json.loads(stdout)
     except json.JSONDecodeError:
@@ -354,6 +369,18 @@ def _inspect_wiring(
             user_home=user_home,
             harness_home=harness_home,
         )
+    if spec.id == "antigravity":
+        return inspect_antigravity_wiring(
+            config_path,
+            bootstrap_path=bootstrap_path,
+            release_path=release,
+            manifest_sha256=digest,
+            entry=spec.entry,
+            safe_yolo_home=home if user_home is not None else None,
+            user_home=user_home,
+            harness_home=harness_home,
+            state_dir=home / "state",
+        )
     if spec.id == "claude-code":
         return inspect_claude_code_wiring(
             config_path,
@@ -448,6 +475,22 @@ def install_harness(
     else:
         if spec.id == "cursor":
             candidate, original_bytes, original_mode = _prepare_cursor_hooks(target, home, command)
+        elif spec.id == "antigravity":
+            def owns(group: Any) -> bool:
+                if not previous_receipt:
+                    return _is_hand_wired_antigravity_group(group, home)
+                return owns_antigravity_group(
+                    group,
+                    bootstrap_path=Path(previous_receipt['bootstrap']),
+                    release_path=Path(previous_receipt['release']),
+                    manifest_sha256=previous_receipt['manifest_sha256'],
+                    entry=spec.entry,
+                    safe_yolo_home=home,
+                    user_home=user,
+                    harness_home=harness_home,
+                    state_dir=home / "state",
+                )
+            candidate, original_bytes, original_mode = _prepare_antigravity_hooks(target, command, owns)
         else:
             own_slots = None
             if previous_receipt and spec.id == "claude-code":
@@ -539,6 +582,11 @@ def install_harness(
                 "safe-yolo entry has state status `active`, not `failed`, with this plugin file as its source "
                 "(repeat it if the list is empty while plugins load), then in a session check that "
                 "`echo hello` runs and `git push --force origin main` in a scratch repository is denied."
+            ),
+            "antigravity": (
+                "Start a new Antigravity session, run /hooks and confirm the safe-yolo PreToolUse hook is listed. "
+                "Doctor checks the hooks file, release and pinned command but cannot prove Antigravity loaded the "
+                "hook. Antigravity ignores a hook that crashes, times out or prints invalid output."
             ),
         }[spec.id],
     }

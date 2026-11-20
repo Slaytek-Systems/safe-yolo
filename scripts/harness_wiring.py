@@ -322,3 +322,85 @@ def inspect_opencode_wiring(
             "problems": ["OpenCode plugin is not the Safe YOLO plugin pinned to the expected release"],
         }
     return {"healthy": True, "problems": []}
+
+
+ANTIGRAVITY_GROUP = "safe-yolo"
+
+
+def antigravity_group(command: str) -> dict[str, Any]:
+    """The whole named group Safe YOLO writes into Antigravity's hooks.json."""
+    return {
+        "enabled": True,
+        "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": command, "timeout": 10}]}],
+    }
+
+
+def antigravity_group_command(group: Any) -> str | None:
+    """The command of a group shaped field for field like `antigravity_group`, else None."""
+    try:
+        hook = group["PreToolUse"][0]["hooks"][0]
+        command = hook["command"]
+    except (KeyError, IndexError, TypeError):
+        return None
+    if (
+        not isinstance(command, str)
+        or group != antigravity_group(command)
+        or group["enabled"] is not True
+        or type(hook["timeout"]) is not int
+    ):
+        return None
+    return command
+
+
+def read_antigravity_hooks(path: Path) -> dict[str, Any]:
+    def unique_owner(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        if [key for key, _ in pairs].count(ANTIGRAVITY_GROUP) > 1:
+            raise ValueError(f"the {ANTIGRAVITY_GROUP!r} group appears more than once")
+        return dict(pairs)
+
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_owner)
+    except (OSError, ValueError) as error:
+        raise RuntimeError(f"Antigravity hooks file is unreadable: {path} ({error})") from error
+    if not isinstance(document, dict):
+        raise RuntimeError(f"Antigravity hooks file must be a JSON object: {path}")
+    return document
+
+
+def is_hand_wired_antigravity_group(group: Any, home: Path) -> bool:
+    """A group shaped like the installer's that runs a release already under this Safe YOLO home.
+
+    This is how Antigravity was wired by hand before it had an install lifecycle.
+    """
+    command = antigravity_group_command(group)
+    if command is None or not is_safe_yolo_command(command, home, "antigravity_v3"):
+        return False
+    tokens = shlex.split(command)
+    release = Path(dict(zip(tokens[2::2], tokens[3::2]))["--release"])
+    return (
+        release.parent == home / "releases"
+        and release.is_dir()
+        and Path(tokens[1]) in (release / "scripts" / "bootstrap.py", home / "bootstrap.py")
+    )
+
+
+def prepare_antigravity_hooks(
+    path: Path, command: str, owns: Callable[[Any], bool]
+) -> tuple[dict[str, Any], bytes | None, int]:
+    """Antigravity's hooks document with Safe YOLO's named group set; every other group is left as found."""
+    original_bytes: bytes | None = None
+    mode = 0o600
+    document: dict[str, Any] = {}
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError("Antigravity hooks path is unavailable or unsafe.")
+        original_bytes = path.read_bytes()
+        mode = path.stat().st_mode & 0o777
+        document = read_antigravity_hooks(path)
+    if ANTIGRAVITY_GROUP in document and not owns(document[ANTIGRAVITY_GROUP]):
+        raise RuntimeError(
+            f"{path} already has a {ANTIGRAVITY_GROUP!r} hook group that this Safe YOLO installation did not "
+            "write. Safe YOLO will not replace it; move it aside through operator review first."
+        )
+    document[ANTIGRAVITY_GROUP] = antigravity_group(command)
+    return document, original_bytes, mode

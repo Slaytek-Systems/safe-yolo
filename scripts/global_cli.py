@@ -142,19 +142,23 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
             original_bytes = Path(baseline['previous_config_backup']).read_bytes()
             original = json.loads(original_bytes)
         document = json.loads(config.read_text())
-        event = 'preToolUse' if harness == 'cursor' else 'PreToolUse'
-        original_hooks = original.get('hooks', {})
-        if original_hooks.get(event):
-            raise RuntimeError('The legacy baseline already contains an enforcement hook; a complete uninstall needs operator review.')
-        others = _without_own_hook(document['hooks'].get(event), receipt, home) if harness == 'claude-code' else []
-        if others:
-            document['hooks'][event] = others
-        elif event in original_hooks:
-            document['hooks'][event] = original_hooks[event]
+        if harness == 'antigravity':
+            from scripts.harness_wiring import ANTIGRAVITY_GROUP
+            document.pop(ANTIGRAVITY_GROUP)
         else:
-            document['hooks'].pop(event, None)
-        if not document['hooks'] and 'hooks' not in original:
-            document.pop('hooks')
+            event = 'preToolUse' if harness == 'cursor' else 'PreToolUse'
+            original_hooks = original.get('hooks', {})
+            if original_hooks.get(event):
+                raise RuntimeError('The legacy baseline already contains an enforcement hook; a complete uninstall needs operator review.')
+            others = _without_own_hook(document['hooks'].get(event), receipt, home) if harness == 'claude-code' else []
+            if others:
+                document['hooks'][event] = others
+            elif event in original_hooks:
+                document['hooks'][event] = original_hooks[event]
+            else:
+                document['hooks'].pop(event, None)
+            if not document['hooks'] and 'hooks' not in original:
+                document.pop('hooks')
         owned_key = 'version' if harness == 'cursor' else 'description' if harness == 'codex' else None
         if owned_key:
             if owned_key in original:

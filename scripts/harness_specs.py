@@ -46,12 +46,12 @@ HARNESSES = (
     HarnessSpec(
         "antigravity",
         "Antigravity",
-        "adapter-only",
+        "beta",
         "antigravity_v3",
         "agy",
         ".gemini",
         "config/hooks.json",
-        False,
+        True,
     ),
     HarnessSpec("devin", "Devin", "adapter-only", "devin_v3", "devin", ".devin", "", False),
 )
@@ -61,4 +61,5 @@ HARNESS_BY_ID = {spec.id: spec for spec in HARNESSES}
 HARNESS_HOME_ENV = {
     "codex": "CODEX_HOME",
     "claude-code": "CLAUDE_CONFIG_DIR",
+    "antigravity": "GEMINI_HOME",
 }
