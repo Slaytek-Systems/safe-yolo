@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -66,19 +67,34 @@ def _fail(entry: str, message: str) -> int:
     return 2
 
 
+def _requested_entry(argv: list[str]) -> str | None:
+    entry = None
+    index = 0
+    while index < len(argv):
+        if argv[index] == "--entry" and index + 1 < len(argv):
+            entry = argv[index + 1]
+            index += 1
+        elif argv[index].startswith("--entry="):
+            entry = argv[index].removeprefix("--entry=")
+        index += 1
+    return entry
+
+
 def main() -> int:
-    if not any(arg in ("antigravity_v3", "--entry=antigravity_v3") for arg in sys.argv[1:]):
-        return _dispatch()
-    # Antigravity ignores a hook that exits non-zero or prints nothing, so every failure must be a deny reply.
+    if _requested_entry(sys.argv[1:]) != "antigravity_v3":
+        return _dispatch(_parser().parse_args())
+    # Antigravity ignores a hook that exits non-zero or prints nothing, so stdout carries one decision and nothing else.
     try:
-        return _dispatch()
+        with contextlib.redirect_stdout(sys.stderr):
+            args = _parser().parse_args()
+        return _dispatch(args)
     except SystemExit:
         return _fail("antigravity_v3", "the hook command's arguments are invalid")
     except Exception as error:
         return _fail("antigravity_v3", f"{type(error).__name__}: {error}")
 
 
-def _dispatch() -> int:
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Verify a Safe YOLO release before dispatching a Codex hook.")
     parser.add_argument("--release", type=Path, required=True)
     parser.add_argument("--manifest-sha256", required=True)
@@ -89,7 +105,10 @@ def _dispatch() -> int:
     parser.add_argument("--safe-yolo-home", type=Path)
     parser.add_argument("--user-home", type=Path)
     parser.add_argument("--harness-home", type=Path)
-    args = parser.parse_args()
+    return parser
+
+
+def _dispatch(args: argparse.Namespace) -> int:
     try:
         entry = verified_entry(args.release, args.entry, expected_manifest_hash=args.manifest_sha256)
     except ValueError as error:
