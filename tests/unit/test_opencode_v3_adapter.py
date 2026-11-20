@@ -144,6 +144,38 @@ class OpenCodeV3AdapterTests(unittest.TestCase):
                 allowed = handle(self.payload("read", {"filePath": str(nearby)}), kernel)
                 self.assertEqual("allow", allowed["decision"], nearby)
 
+    def test_credential_paths_follow_the_runtime_environment_like_opencode(self):
+        launch_data = self.root / "launch-home" / ".local" / "share" / "opencode"
+        xdg_data = self.root / "xdg-data" / "opencode"
+        (self.root / "far" / "deep").mkdir(parents=True)
+        xdg_data.mkdir(parents=True)
+        (xdg_data / "link").symlink_to(self.root / "far" / "deep")
+        cases = (
+            ({"HOME": str(self.root / "launch-home")}, (launch_data / "opencode.db", launch_data / "auth.json")),
+            (
+                {"HOME": str(self.root / "launch-home"), "XDG_DATA_HOME": str(self.root / "xdg-data")},
+                (xdg_data / "opencode.db", xdg_data / "auth.json"),
+            ),
+            (
+                {"XDG_DATA_HOME": str(self.root / "xdg-data"), "OPENCODE_DB": "link/../custom.db"},
+                (xdg_data / "custom.db",),
+            ),
+        )
+        for environment, protected in cases:
+            with self.subTest(environment=environment), patch.dict(os.environ, environment):
+                for name in ("XDG_DATA_HOME", "OPENCODE_DB"):
+                    if name not in environment:
+                        os.environ.pop(name, None)
+                kernel = build_kernel(
+                    safe_yolo_home=self.root / "safe-yolo",
+                    opencode_config=self.root / "config" / "opencode",
+                    user_home=self.root / "home",
+                    cwd=self.project,
+                )
+                for path in protected:
+                    denied = handle(self.payload("read", {"filePath": str(path)}), kernel)
+                    self.assertEqual("credentials.access", denied["policy_id"], path)
+
     def test_normalization_maps_opencode_tools(self):
         bash = normalize_payload(self.payload("bash", {"command": "npm test"}))
         self.assertEqual("bash", bash["tool_name"])
