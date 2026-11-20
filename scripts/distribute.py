@@ -364,6 +364,7 @@ def _inspect_wiring(
             safe_yolo_home=home if user_home is not None else None,
             user_home=user_home,
             harness_home=harness_home,
+            state_dir=home / "state",
         )
     if spec.id == "opencode":
         return _inspect_opencode_wiring(
@@ -463,6 +464,7 @@ def install_harness(
                         safe_yolo_home=home,
                         user_home=user,
                         harness_home=harness_home,
+                        state_dir=home / "state",
                     )
             candidate, original_bytes, original_mode = _prepare_hooks(
                 target, home, command, entry=spec.entry, label=spec.name, own_slots=own_slots

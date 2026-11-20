@@ -337,6 +337,8 @@ class PrivateBetaCliTests(unittest.TestCase):
         settings = self.claude_settings({"model": "kept"})
         self.claude()
         document = json.loads(settings.read_text())
+        own = document["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        other_state = {"type": "command", "command": own.replace(str(self.safe_yolo_home / "state"), "/srv/other/state")}
         sibling = {"type": "command", "command": "echo sibling"}
         elsewhere = (
             "/usr/bin/python3 /srv/other/.safe-yolo/releases/9/scripts/bootstrap.py --release "
@@ -344,6 +346,7 @@ class PrivateBetaCliTests(unittest.TestCase):
         )
         later = {"matcher": "Bash", "hooks": [
             {"type": "command", "command": "echo later"},
+            other_state,
             {"type": "command", "command": elsewhere},
             {"type": "command", "command": "/usr/bin/python3", "args": elsewhere.split()[1:], "timeout": "10"},
         ]}
@@ -390,6 +393,25 @@ class PrivateBetaCliTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "existing PreToolUse"):
                     self.claude()
                 self.assertEqual(original_bytes, settings.read_bytes())
+
+    @patch("scripts.distribute.verify_source", return_value="f" * 40)
+    def test_claude_code_refuses_its_hook_in_a_group_claude_code_would_not_load(self, _verify):
+        settings = self.claude_settings({"model": "kept"})
+        self.claude()
+        document = json.loads(settings.read_text())
+        for matcher in (0, None, "Bash"):
+            with self.subTest(matcher=matcher):
+                document["hooks"]["PreToolUse"][0]["matcher"] = matcher
+                settings.write_text(json.dumps(document))
+                edited = settings.read_bytes()
+                self.assertIn(
+                    "PreToolUse hook is not pinned to the expected Safe YOLO bootstrap release",
+                    self.claude_doctor()["problems"],
+                )
+                (self.source / "VERSION").write_text("3.0.0-beta.3\n")
+                with self.assertRaisesRegex(RuntimeError, "Existing Safe YOLO hook changed"):
+                    self.claude()
+                self.assertEqual(edited, settings.read_bytes())
 
     @patch("scripts.distribute.verify_source", return_value="f" * 40)
     def test_claude_code_doctor_reports_a_second_copy_of_its_own_hook(self, _verify):
