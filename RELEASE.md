@@ -27,11 +27,12 @@ beta.12.
   hand before. Install backs the file up, then replaces only that group.
 - The Antigravity adapter now replies `{"decision":"allow"}` on allow, as
   Antigravity's hook contract requires. Deny is unchanged.
-- For the `antigravity_v3` entry only, the bootstrap turns its own failures
-  into a deny reply with exit 0 that names the failure: a release that fails
-  verification or is missing, or an adapter that exits non-zero or prints no
-  decision. Antigravity ignores a hook that exits non-zero, so the exit code
-  alone would let the call run. Other entries still exit 2.
+- For the `antigravity_v3` entry only, the bootstrap turns every failure it
+  can catch into a deny reply with exit 0 that names the failure: invalid
+  arguments, a release that fails verification, is missing or has a malformed
+  manifest, or an adapter that exits non-zero or prints no decision.
+  Antigravity ignores a hook that exits non-zero, so the exit code alone would
+  let the call run. Other entries keep their exit codes.
 - Uninstall removes only the `safe-yolo` group. When install created the file
   and nothing else was added, the file is moved to `~/.safe-yolo/backups/`. Deactivate
   restores the exact previous file, including a hand-wired group it replaced.

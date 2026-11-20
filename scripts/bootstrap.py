@@ -60,7 +60,6 @@ def verified_entry(release_dir: str | Path, entry: str, *, expected_manifest_has
 
 def _fail(entry: str, message: str) -> int:
     if entry == "antigravity_v3":
-        # Antigravity ignores a hook that exits non-zero, so a failure must be a deny reply.
         print(json.dumps({"decision": "deny", "reason": f"Safe YOLO fail-closed: {message}"}))
         return 0
     print(f"Safe YOLO fail-closed: {message}", file=sys.stderr)
@@ -68,6 +67,18 @@ def _fail(entry: str, message: str) -> int:
 
 
 def main() -> int:
+    if not any(arg in ("antigravity_v3", "--entry=antigravity_v3") for arg in sys.argv[1:]):
+        return _dispatch()
+    # Antigravity ignores a hook that exits non-zero or prints nothing, so every failure must be a deny reply.
+    try:
+        return _dispatch()
+    except SystemExit:
+        return _fail("antigravity_v3", "the hook command's arguments are invalid")
+    except Exception as error:
+        return _fail("antigravity_v3", f"{type(error).__name__}: {error}")
+
+
+def _dispatch() -> int:
     parser = argparse.ArgumentParser(description="Verify a Safe YOLO release before dispatching a Codex hook.")
     parser.add_argument("--release", type=Path, required=True)
     parser.add_argument("--manifest-sha256", required=True)
@@ -81,7 +92,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         entry = verified_entry(args.release, args.entry, expected_manifest_hash=args.manifest_sha256)
-    except (ValueError, OSError) as error:
+    except ValueError as error:
         return _fail(args.entry, str(error))
     command = [sys.executable, str(entry), "--state-dir", str(args.state_dir)]
     if args.safe_yolo_home is not None:
