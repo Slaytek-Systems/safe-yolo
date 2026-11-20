@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 from pathlib import Path
 import tempfile
 import unittest
@@ -72,17 +73,22 @@ class AcceptanceIsolationTests(unittest.TestCase):
             host_opencode = host_bin / 'opencode'
             host_opencode.write_text('#!/bin/sh\nmkdir -p "$HOME/.local/share/opencode"\necho 1.19.6\n')
             host_opencode.chmod(0o755)
-            host_agy = host_bin / 'agy'
-            host_agy.write_text('#!/bin/sh\nmkdir -p "$HOME/.gemini/antigravity-cli"\n')
+            agy_bin = root / 'agy-bin'
+            agy_bin.mkdir()
+            agy_ran = root / 'agy-ran'
+            host_agy = agy_bin / 'agy'
+            host_agy.write_text(f'#!/bin/sh\ntouch {shlex.quote(str(agy_ran))}\n')
             host_agy.chmod(0o755)
             archive = build_bundle(ROOT, root / 'bundle', revision)
-            caller = {'HOME': str(home), 'PATH': os.pathsep.join([str(host_bin), '/usr/bin', '/bin']),
+            caller = {'HOME': str(home),
+                      'PATH': os.pathsep.join([str(host_bin), str(agy_bin), '/usr/bin', '/bin']),
                       'XDG_CONFIG_HOME': str(home / '.config'), 'OPENCODE_CONFIG_DIR': str(home / 'oc'),
                       'GEMINI_HOME': str(home / 'gemini')}
             with patch.dict('os.environ', caller):
                 acceptance(archive, revision)
 
             self.assertEqual([], list(home.iterdir()))
+            self.assertFalse(agy_ran.exists())
 
 
 if __name__ == '__main__':
