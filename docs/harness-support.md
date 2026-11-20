@@ -11,7 +11,7 @@ and exact rollback are proven.
 | Cursor | Beta | `cursor` | `~/.cursor/hooks.json` | Cursor watches and reloads user hooks |
 | Grok | Adapter only | `grok` | Native hook/plugin surface | Lifecycle installer deferred |
 | OpenCode | Beta | `opencode` | `plugins/safe-yolo.js` in the OpenCode config folder (V2) | Discovered at startup; run `opencode service restart` if the background service runs, then check `opencode api plugin.list` |
-| Antigravity | Adapter only | `antigravity` | Agent hook/plugin surface | Lifecycle installer deferred |
+| Antigravity | Beta | `antigravity` | `safe-yolo` named group in `config/hooks.json` under the Gemini root | Start a new session and confirm the hook in `/hooks` |
 | Devin | Adapter only | `devin` | Adapter transport only | No supported native installation surface |
 
 The CLI reports the same machine-readable distinction:
@@ -98,10 +98,79 @@ V1 `auth.json` and the V2 SQLite database, `opencode.db` in OpenCode's data
 folder (`$XDG_DATA_HOME/opencode`, otherwise `~/.local/share/opencode`, or
 `OPENCODE_DB`), with its `-wal`, `-shm` and `-journal` files.
 
+Antigravity support targets the `agy` CLI and its
+[hooks contract](https://antigravity.google/docs/hooks). Safe YOLO owns one
+named group, `safe-yolo`, in `config/hooks.json` under the Gemini root. It
+finds the root this way: the `--config-home` folder if given, otherwise
+`~/.gemini`. `agy` 1.5.12 does not read `GEMINI_HOME`, so install ignores
+it. The group install writes is:
+
+```json
+{
+  "safe-yolo": {
+    "enabled": true,
+    "PreToolUse": [
+      {"matcher": "*", "hooks": [{"type": "command", "command": "<pinned bootstrap>", "timeout": 10}]}
+    ]
+  }
+}
+```
+
+The pinned bootstrap runs `--entry antigravity_v3` and passes the root as
+`--harness-home`. Other named groups in the file are kept as they are and not
+judged. Install, update, uninstall and deactivate refuse, and leave the hooks
+file unchanged, when it holds a duplicate key anywhere or a number that Safe
+YOLO would not write back character for character, such as `1e400`,
+`1e-400`, `0.1234567890123456789`, `1.50` or `-0`; doctor reports it.
+`<root>/config` must not be a symlink, and `hooks.json`, when it exists, must
+be a regular file inside the chosen root. Install, doctor, update, rollback,
+uninstall and deactivate all apply that rule. The check runs before the write,
+so a link swapped in between them is not caught. A group is Safe YOLO's only when it equals, field for field, what the
+installer writes for the pin the receipt records; only the `python3`
+interpreter path may differ, the command must keep the installer's spelling
+and flag order, and `timeout` must be an integer. Doctor requires that group
+once.
+
+First install refuses, and leaves the hooks file unchanged, when a
+`safe-yolo` group is already there. It may already have created the launcher
+and the release under the Safe YOLO home. The exception is a group of that
+same shape whose command runs a release under this Safe YOLO home's
+`releases/` folder that verifies against the command's non-empty manifest pin
+and lists the `antigravity_v3` entrypoint, through a bootstrap that exists,
+with entry `antigravity_v3`. That is the old hand-made wiring. Install backs the
+file up and replaces only that group. Uninstall removes only the `safe-yolo`
+group. Deactivate restores the exact previous file.
+
+Antigravity runs a hook's decision only when the hook exits 0 and prints
+JSON: `{"decision":"allow"}` passes the call on and
+`{"decision":"deny","reason":"…"}` blocks it. A hook that exits non-zero is
+ignored, so the call runs. For this entry the bootstrap therefore replies with
+a deny and exit 0 when the release fails verification or is missing, or when
+the adapter exits non-zero or prints no decision. It picks this behaviour only
+from the value of `--entry`, and its stdout holds that one reply; usage and
+help go to stderr. A hook that crashes before
+it can reply, runs past its 10-second timeout, or prints garbage still fails
+open, and Antigravity offers no fail-closed setting.
+
+Doctor checks the group, the release and allow and deny canaries. The
+canaries run the exact command in the hooks file the way Antigravity does:
+split into words, no shell, the hook's timeout. A command that cannot start,
+for example after its `python3` was moved, makes doctor unhealthy and is named.
+Doctor cannot prove Antigravity loaded the hook. Start a new
+Antigravity session, run `/hooks` and confirm the `safe-yolo` `PreToolUse`
+hook is listed.
+
+One Safe YOLO home keeps one Antigravity receipt, so it covers one Gemini
+root. Install refuses a second root while the first is active, and a second
+Safe YOLO home for the same user is refused because the global `safe-yolo`
+command belongs to the first. A T3 Code profile root is covered only when you
+choose it with `--config-home <profile>`, and then `~/.gemini` is not covered.
+Covering both roots at once is not supported in this release.
+
 Current native contract references:
 
 - [Claude Code hooks](https://code.claude.com/docs/en/hooks)
 - [Cursor hooks](https://cursor.com/docs/hooks)
 - [OpenCode plugins](https://opencode.ai/docs/plugins/) and [server hooks](https://opencode.ai/docs/build/plugins/server/)
 - [Grok plugins and hooks](https://docs.x.ai/build/features/skills-plugins-marketplaces)
-- [Antigravity agent hooks](https://codelabs.developers.google.com/secure-agentic-coding)
+- [Antigravity hooks](https://antigravity.google/docs/hooks)

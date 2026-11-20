@@ -46,12 +46,12 @@ HARNESSES = (
     HarnessSpec(
         "antigravity",
         "Antigravity",
-        "adapter-only",
+        "beta",
         "antigravity_v3",
         "agy",
         ".gemini",
         "config/hooks.json",
-        False,
+        True,
     ),
     HarnessSpec("devin", "Devin", "adapter-only", "devin_v3", "devin", ".devin", "", False),
 )

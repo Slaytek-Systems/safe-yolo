@@ -257,6 +257,8 @@ class PrivateBetaCliTests(unittest.TestCase):
         self.assertEqual("beta", catalog["cursor"]["status"])
         self.assertEqual("beta", catalog["opencode"]["status"])
         self.assertTrue(catalog["opencode"]["lifecycle_supported"])
+        self.assertEqual("beta", catalog["antigravity"]["status"])
+        self.assertTrue(catalog["antigravity"]["lifecycle_supported"])
         self.assertEqual("adapter-only", catalog["grok"]["status"])
         self.assertFalse(catalog["grok"]["lifecycle_supported"])
         self.assertEqual(

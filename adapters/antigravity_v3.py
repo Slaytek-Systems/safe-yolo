@@ -217,10 +217,8 @@ def main() -> int:
         scratch_paths=tuple(args.scratch) if args.scratch is not None else None,
         observation_dir=args.state_dir,
     )
-    response = handle_pre_tool(payload, kernel)
-    if response is not None:
-        json.dump(response, sys.stdout, sort_keys=True)
-        sys.stdout.write("\n")
+    json.dump(handle_pre_tool(payload, kernel) or {"decision": "allow"}, sys.stdout, sort_keys=True)
+    sys.stdout.write("\n")
     return 0
 
 
