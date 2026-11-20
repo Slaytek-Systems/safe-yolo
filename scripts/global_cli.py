@@ -87,27 +87,28 @@ def active_receipts(home: Path) -> list[dict[str, Any]]:
             for receipt, _ in [_read_harness_receipt(home, spec)] if receipt.get('status') == 'active']
 
 
-def _replace_if_unchanged(config: Path, expected: bytes, payload: bytes) -> None:
-    """Swap in `payload` only while `config` still holds `expected`.
-
-    The new file is fully staged first, so the comparison is the last step before
-    the rename. A save by another program between those two steps is still lost.
-    """
-    mode = config.stat().st_mode & 0o777
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f'.{config.name}.', dir=config.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, 'wb') as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temporary, mode)
-        if config.is_symlink() or not config.is_file() or config.read_bytes() != expected:
-            raise RuntimeError('Harness configuration changed; refusing to overwrite newer work.')
-        os.replace(temporary, config)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+def _without_own_hook(groups: Any, receipt: dict[str, Any], home: Path) -> list[Any]:
+    """Claude Code's PreToolUse groups minus the hook this installation pinned, and any group that empties."""
+    from scripts.doctor import pinned_hook_slots
+    slots = set(pinned_hook_slots(
+        groups,
+        bootstrap_path=receipt.get('bootstrap') or home / 'bootstrap.py',
+        release_path=receipt['release'],
+        manifest_sha256=receipt['manifest_sha256'],
+        entry='claude_code_v3',
+        safe_yolo_home=home if receipt.get('user_home') else None,
+        user_home=receipt.get('user_home'),
+        harness_home=receipt.get('harness_home'),
+    ))
+    kept = []
+    for group_index, group in enumerate(groups if isinstance(groups, list) else []):
+        if not any(index == group_index for index, _ in slots):
+            kept.append(group)
+            continue
+        hooks = [hook for hook_index, hook in enumerate(group['hooks']) if (group_index, hook_index) not in slots]
+        if hooks:
+            kept.append({**group, 'hooks': hooks})
+    return kept
 
 
 def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[str, Any]:
@@ -139,46 +140,33 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
         if baseline['previous_config_existed']:
             original_bytes = Path(baseline['previous_config_backup']).read_bytes()
             original = json.loads(original_bytes)
-        document = json.loads(current_bytes)
+        document = json.loads(config.read_text())
         event = 'preToolUse' if harness == 'cursor' else 'PreToolUse'
         original_hooks = original.get('hooks', {})
-        if harness == 'claude-code':
-            from scripts.harness_wiring import remove_safe_yolo_hooks, safe_yolo_hook_slots
-            legacy = bool(safe_yolo_hook_slots(original_hooks.get(event)))
-            others = remove_safe_yolo_hooks(document['hooks'].get(event, []))
-        else:
-            legacy, others = bool(original_hooks.get(event)), []
-        if legacy:
+        if original_hooks.get(event):
             raise RuntimeError('The legacy baseline already contains an enforcement hook; a complete uninstall needs operator review.')
+        others = _without_own_hook(document['hooks'].get(event), receipt, home) if harness == 'claude-code' else []
         if others:
             document['hooks'][event] = others
-        elif event in original_hooks and not original_hooks[event]:
+        elif event in original_hooks:
             document['hooks'][event] = original_hooks[event]
         else:
             document['hooks'].pop(event, None)
         if not document['hooks'] and 'hooks' not in original:
             document.pop('hooks')
-        if harness == 'cursor':
-            if 'version' in original:
-                document['version'] = original['version']
+        owned_key = 'version' if harness == 'cursor' else 'description' if harness == 'codex' else None
+        if owned_key:
+            if owned_key in original:
+                document[owned_key] = original[owned_key]
             else:
-                document.pop('version', None)
-        elif harness == 'codex':
-            from scripts.harness_wiring import CODEX_DESCRIPTION
-            if document.get('description') == CODEX_DESCRIPTION:
-                if 'description' in original:
-                    document['description'] = original['description']
-                else:
-                    document.pop('description')
+                document.pop(owned_key, None)
         if not document and original_bytes is None:
             from datetime import datetime, UTC
-            if config.is_symlink() or not config.is_file() or config.read_bytes() != current_bytes:
-                raise RuntimeError('Harness configuration changed; refusing to overwrite newer work.')
             retained = home / 'backups' / ('uninstalled-' + harness + '-' + datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ'))
             os.replace(config, retained)
         else:
             payload = original_bytes if document == original and original_bytes is not None else (json.dumps(document, indent=2) + '\n').encode()
-            _replace_if_unchanged(config, current_bytes, payload)
+            _atomic_write(config, payload, baseline['previous_config_mode'])
         receipt['status'] = 'inactive'
         _atomic_write(path, (json.dumps(receipt, indent=2) + '\n').encode())
         return {'status': 'inactive', 'harness': harness, 'next_action': 'Restart the harness to unload Safe YOLO.'}

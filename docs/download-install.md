@@ -54,10 +54,10 @@ python3 safe-yolo doctor --all
 ```
 
 Run only the relevant install commands. The installer applies to the selected
-user's global harness configuration across projects. In Claude Code other
-tools' `PreToolUse` hooks stay beside Safe YOLO's. Codex and Cursor must have
-no other `PreToolUse` (`preToolUse`) hook. Codex and Claude Code must have no
-`PostToolUse` hook. OpenCode loads Safe YOLO from `plugins/safe-yolo.js` in its
+user's global harness configuration across projects. It refuses conflicting
+enforcement hooks at first install. In Claude Code, a `PreToolUse` hook
+another tool adds afterwards stays in place through update and uninstall.
+OpenCode loads Safe YOLO from `plugins/safe-yolo.js` in its
 config folder (`OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`, else
 `~/.config/opencode`), keeps other plugins, and must be V2; see the
 [support matrix](harness-support.md) for how to confirm OpenCode loaded it.
@@ -136,11 +136,9 @@ safe-yolo uninstall
 Rollback restores the previous installed runtime and hook pin. Uninstall removes
 the integrations installed by this lifecycle, retaining unrelated settings.
 Use `--harness cursor` (or another supported ID) to act on just one integration.
-Both refuse to overwrite configuration changed since the last installation;
-a successful update to a different version takes such an edit as its rollback
-snapshot. Nothing locks the file, so do not save harness settings while one of
-these commands runs. Installations whose first-found configuration already held a
-Safe YOLO hook require operator review for complete removal. OpenCode differs:
+Both refuse to overwrite configuration changed since the last installation.
+Legacy installations whose baseline already contains an enforcement hook require
+operator review for complete removal. OpenCode differs:
 update refuses an edited plugin rather than snapshotting it, and uninstall
 copies Safe YOLO's plugin to `~/.safe-yolo/backups/` and then deletes it, even
 when install replaced a V1 copy. Restart the affected harness afterward; for

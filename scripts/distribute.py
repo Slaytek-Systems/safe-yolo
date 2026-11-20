@@ -21,7 +21,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.activate_v3 import _ensure_release, verify_source
-from scripts.doctor import inspect_claude_code_wiring, inspect_codex_wiring, inspect_release
+from scripts.doctor import inspect_claude_code_wiring, inspect_codex_wiring, inspect_release, pinned_hook_slots
 from scripts.harness_specs import HARNESS_BY_ID, HARNESS_HOME_ENV, HARNESSES, HarnessSpec
 from scripts.package import MANIFEST as DISTRIBUTION_MANIFEST, verify_bundle
 from scripts.harness_wiring import (
@@ -422,13 +422,9 @@ def install_harness(
             raise RuntimeError('Existing installation needs attention: ' + '; '.join(report['problems']))
         return previous_receipt
     if previous_receipt:
-        # Receipts older than the pinned release bootstrap carry neither a bootstrap nor a home context.
-        recorded_bootstrap = previous_receipt.get('bootstrap')
-        current_wiring = _inspect_wiring(
-            spec, target, home, Path(previous_receipt['release']), previous_receipt['manifest_sha256'],
-            user_home=Path(previous_receipt['user_home']) if previous_receipt.get('user_home') else None,
-            harness_home=Path(previous_receipt['harness_home']) if previous_receipt.get('harness_home') else None,
-            bootstrap=Path(recorded_bootstrap) if recorded_bootstrap else home / 'bootstrap.py')
+        current_wiring = _inspect_wiring(spec, target, home, Path(previous_receipt['release']),
+                                        previous_receipt['manifest_sha256'], user_home=user,
+                                        harness_home=harness_home, bootstrap=Path(previous_receipt['bootstrap']))
         if not current_wiring['healthy']:
             raise RuntimeError('Existing Safe YOLO hook changed; refusing to overwrite it.')
         verified_current = target.read_bytes()
@@ -449,8 +445,24 @@ def install_harness(
         if spec.id == "cursor":
             candidate, original_bytes, original_mode = _prepare_cursor_hooks(target, home, command)
         else:
+            own_slots = None
+            if previous_receipt and spec.id == "claude-code":
+                # Claude Code runs every matching hook and a deny from any of them wins, so other
+                # owners' hooks may stand beside this one. An update swaps only the hook pinned
+                # to the installed release, which the wiring check above found exactly once.
+                def own_slots(groups: Any) -> list[tuple[int, int]]:
+                    return pinned_hook_slots(
+                        groups,
+                        bootstrap_path=Path(previous_receipt['bootstrap']),
+                        release_path=Path(previous_receipt['release']),
+                        manifest_sha256=previous_receipt['manifest_sha256'],
+                        entry=spec.entry,
+                        safe_yolo_home=home,
+                        user_home=user,
+                        harness_home=harness_home,
+                    )
             candidate, original_bytes, original_mode = _prepare_hooks(
-                target, home, command, entry=spec.entry, label=spec.name
+                target, home, command, entry=spec.entry, label=spec.name, own_slots=own_slots
             )
         payload = (json.dumps(candidate, indent=2) + "\n").encode()
     backup_root = home / "backups" / (
