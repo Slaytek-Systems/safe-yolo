@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -164,6 +165,47 @@ class AntigravityLifecycleTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual("deny", absent["decision"])
         self.assertIn("manifest", absent["reason"])
+
+    def bootstrap(self, release: Path, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, str(release / "scripts" / "bootstrap.py"), *args],
+                              input="{}", text=True, capture_output=True, check=False)
+
+    def test_argument_and_manifest_shape_failures_reply_deny_with_exit_zero(self):
+        release = Path(self.install()["release"])
+        state = str(self.root / "s")
+        broken = self.root / "null-entrypoints"
+        shutil.copytree(release, broken)
+        manifest = broken / "manifest.json"
+        manifest.chmod(0o600)
+        manifest.write_text(json.dumps({**json.loads(manifest.read_text()), "entrypoints": None}))
+        pin = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        cases = {
+            "missing manifest pin": ["--release", str(release), "--entry", "antigravity_v3", "--state-dir", state],
+            "entry spelled with =": ["--release", str(release), "--entry=antigravity_v3", "--state-dir", state],
+            "null entrypoints": ["--release", str(broken), "--manifest-sha256", pin, "--entry", "antigravity_v3",
+                                 "--state-dir", state],
+        }
+        for name, args in cases.items():
+            with self.subTest(name):
+                completed = self.bootstrap(release, *args)
+                self.assertEqual(0, completed.returncode, completed.stderr)
+                self.assertEqual("deny", json.loads(completed.stdout)["decision"])
+
+    def test_other_entries_keep_their_exit_codes(self):
+        receipt = self.install()
+        release = Path(receipt["release"])
+        state = str(self.root / "s")
+        missing_pin = self.bootstrap(release, "--release", str(release), "--entry", "codex_v3", "--state-dir", state)
+        self.assertEqual((2, ""), (missing_pin.returncode, missing_pin.stdout))
+
+        unreadable = self.root / "unreadable"
+        shutil.copytree(release, unreadable)
+        (unreadable / "manifest.json").chmod(0)
+        if os.access(unreadable / "manifest.json", os.R_OK):
+            self.skipTest("running with permission to read any file")
+        completed = self.bootstrap(release, "--release", str(unreadable), "--manifest-sha256",
+                                   receipt["manifest_sha256"], "--entry", "codex_v3", "--state-dir", state)
+        self.assertEqual((1, ""), (completed.returncode, completed.stdout))
 
     def test_other_entries_still_exit_two_on_integrity_failure(self):
         receipt = self.install()
