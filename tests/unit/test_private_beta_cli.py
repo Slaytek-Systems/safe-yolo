@@ -412,6 +412,33 @@ class PrivateBetaCliTests(unittest.TestCase):
                 self.assertEqual(edited, settings.read_bytes())
 
     @patch("scripts.distribute.verify_source", return_value="f" * 40)
+    def test_claude_code_refuses_its_hook_once_any_field_of_the_entry_is_edited(self, _verify):
+        settings = self.claude_settings({"model": "kept"})
+        self.claude()
+        installed = json.loads(settings.read_text())
+        own = installed["hooks"]["PreToolUse"][0]["hooks"][0]
+        (self.source / "VERSION").write_text("3.0.0-beta.3\n")
+        for edit in (
+            {"if": "Bash(printf *)"},
+            {"timeout": "10"},
+            {"command": own["command"].replace(" --state-dir", "\n--state-dir")},
+            {"command": own["command"] + " "},
+            {"async": True},
+        ):
+            with self.subTest(edit=edit):
+                document = json.loads(json.dumps(installed))
+                document["hooks"]["PreToolUse"][0]["hooks"][0] = {**own, **edit}
+                settings.write_text(json.dumps(document))
+                edited = settings.read_bytes()
+                self.assertIn(
+                    "PreToolUse hook is not pinned to the expected Safe YOLO bootstrap release",
+                    self.claude_doctor()["problems"],
+                )
+                with self.assertRaisesRegex(RuntimeError, "Existing Safe YOLO hook changed"):
+                    self.claude()
+                self.assertEqual(edited, settings.read_bytes())
+
+    @patch("scripts.distribute.verify_source", return_value="f" * 40)
     def test_claude_code_doctor_reports_a_second_copy_of_its_own_hook(self, _verify):
         settings = self.claude_settings({"model": "kept"})
         self.claude()
