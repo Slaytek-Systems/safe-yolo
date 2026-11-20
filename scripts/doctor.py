@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from scripts.harness_wiring import command_hook
 from scripts.release_manifest import ENTRYPOINTS, verify_manifest
 
 
@@ -176,7 +177,7 @@ def _command_hooks(hooks: Any, event: str) -> list[tuple[str, str]]:
 
 
 def pinned_hook_slots(groups: Any, **pin: Any) -> list[tuple[int, int]]:
-    """Positions, as (group, hook), of each command hook that is exactly the pinned Safe YOLO command.
+    """Positions, as (group, hook), of each hook that is, field for field, the entry Safe YOLO writes for this pin.
 
     Claude Code install, doctor and uninstall all find Safe YOLO's hook here.
     Every other hook belongs to someone else and is neither read nor judged.
@@ -189,11 +190,19 @@ def pinned_hook_slots(groups: Any, **pin: Any) -> list[tuple[int, int]]:
         if isinstance(group, dict) and isinstance(group.get("hooks"), list)
         for hook_index, hook in enumerate(group["hooks"])
         if isinstance(hook, dict)
-        and hook.get("type") == "command"
-        and "args" not in hook
         and isinstance(hook.get("command"), str)
+        and hook == command_hook(hook["command"])
+        and _is_canonical_shell(hook["command"])
         and _command_is_pinned(hook["command"], **pin)
     ]
+
+
+def _is_canonical_shell(command: str) -> bool:
+    # The installer writes shlex.join output. Any other spelling may parse alike and run differently.
+    try:
+        return shlex.join(shlex.split(command)) == command
+    except ValueError:
+        return False
 
 
 def _command_is_pinned(

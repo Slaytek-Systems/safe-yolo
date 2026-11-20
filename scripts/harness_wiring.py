@@ -51,6 +51,16 @@ def is_safe_yolo_command(command: Any, home: Path, entry: str = "codex_v3") -> b
     return required_flags <= set(values) <= value_flags and values["--entry"] == entry
 
 
+def command_hook(command: str) -> dict[str, Any]:
+    """The whole hook entry Safe YOLO writes for Codex and Claude Code."""
+    return {
+        "type": "command",
+        "command": command,
+        "timeout": 10,
+        "statusMessage": "Checking explicit Safe YOLO restrictions",
+    }
+
+
 def prepare_command_hooks(
     path: Path,
     home: Path,
@@ -103,12 +113,7 @@ def prepare_command_hooks(
         )
     if hooks.get("PostToolUse", []):
         raise RuntimeError(f"{label} has a non-empty PostToolUse lifecycle; Safe YOLO will not replace it.")
-    own_hook = {
-        "type": "command",
-        "command": command,
-        "timeout": 10,
-        "statusMessage": "Checking explicit Safe YOLO restrictions",
-    }
+    own_hook = command_hook(command)
     if own_slots is None:
         hooks["PreToolUse"] = [{"matcher": "*", "hooks": [own_hook]}]
     else:
