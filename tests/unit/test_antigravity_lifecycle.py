@@ -213,6 +213,41 @@ class AntigravityLifecycleTests(unittest.TestCase):
                 self.assertEqual(original, self.hooks.read_text())
                 self.assertFalse(self.receipt_path().exists())
 
+    def test_a_file_safe_yolo_cannot_rewrite_exactly_is_refused_untouched(self):
+        cases = {
+            "overflowing number": '{"herdr": {"metadata": 1e400, "PreInvocation": []}}\n',
+            "NaN": '{"herdr": {"metadata": NaN}}\n',
+            "duplicate group": '{"herdr": {"a": 1}, "herdr": {"b": 2}}\n',
+            "duplicate field in another group": '{"herdr": {"a": 1, "a": 2}}\n',
+        }
+        for name, text in cases.items():
+            with self.subTest(name):
+                self.hooks.write_text(text)
+                with self.assertRaisesRegex(RuntimeError, "hooks file"):
+                    self.install()
+                self.assertEqual(text, self.hooks.read_text())
+                self.assertFalse(self.receipt_path().exists())
+
+    def test_duplicate_fields_in_the_owned_group_are_reported_and_refused(self):
+        self.install()
+        text = self.hooks.read_text().replace('"enabled": true', '"enabled": false, "enabled": true')
+        self.hooks.write_text(text)
+
+        report = self.doctor()
+        self.assertFalse(report["healthy"])
+        self.assertTrue(any("duplicate key" in problem for problem in report["problems"]), report)
+        steps = {
+            "update": self.install,
+            "uninstall": lambda: restore(self.safe_yolo_home, self.user_home, "antigravity", uninstall=True),
+            "deactivate": lambda: deactivate_harness(harness="antigravity", safe_yolo_home=self.safe_yolo_home,
+                                                     user_home=self.user_home),
+        }
+        for name, step in steps.items():
+            with self.subTest(name):
+                with self.assertRaises(RuntimeError):
+                    step()
+                self.assertEqual(text, self.hooks.read_text())
+
     def test_hand_wired_group_through_the_shared_bootstrap_is_replaced(self):
         (self.safe_yolo_home / "releases" / "3.0.0-alpha.8").mkdir(parents=True)
         hand_wired = self.hand_wired(bootstrap=self.safe_yolo_home / "bootstrap.py")
