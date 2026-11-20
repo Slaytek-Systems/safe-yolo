@@ -12,7 +12,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.harness_wiring import is_safe_yolo_hook
 from scripts.release_manifest import ENTRYPOINTS, verify_manifest
 
 
@@ -114,11 +113,9 @@ def inspect_claude_code_wiring(
     if document.get("disableAllHooks"):
         problems.append("disableAllHooks must not be set")
     hooks = document.get("hooks", {})
-    pretool = _safe_yolo_hooks(hooks, "PreToolUse")
-    if len(pretool) != 1:
-        problems.append("exactly one Safe YOLO PreToolUse command hook is required")
-    elif pretool[0][0] not in {"*", ""} or not _command_is_pinned(
-        pretool[0][1],
+    groups = hooks.get("PreToolUse") if isinstance(hooks, dict) else None
+    slots = pinned_hook_slots(
+        groups,
         bootstrap_path=bootstrap_path,
         release_path=release_path,
         manifest_sha256=manifest_sha256,
@@ -126,7 +123,10 @@ def inspect_claude_code_wiring(
         safe_yolo_home=safe_yolo_home,
         user_home=user_home,
         harness_home=harness_home,
-    ):
+    )
+    if len(slots) > 1:
+        problems.append("exactly one Safe YOLO PreToolUse command hook is required")
+    elif not slots or (groups[slots[0][0]].get("matcher") or "") not in {"*", ""}:
         problems.append("PreToolUse hook is not pinned to the expected Safe YOLO bootstrap release")
     if not _release_exposes_entry(release_path, entry):
         problems.append(f"release does not expose the expected entrypoint: {entry}")
@@ -173,22 +173,25 @@ def _command_hooks(hooks: Any, event: str) -> list[tuple[str, str]]:
     return found
 
 
-def _safe_yolo_hooks(hooks: Any, event: str) -> list[tuple[str, str]]:
-    groups = hooks.get(event, []) if isinstance(hooks, dict) else []
+def pinned_hook_slots(groups: Any, **pin: Any) -> list[tuple[int, int]]:
+    """Positions, as (group, hook), of each command hook that is exactly the pinned Safe YOLO command.
+
+    Claude Code install, doctor and uninstall all find Safe YOLO's hook here.
+    Every other hook belongs to someone else and is neither read nor judged.
+    """
     if not isinstance(groups, list):
         return []
     return [
-        (str(group.get("matcher") or ""), _flat_command(hook))
-        for group in groups
+        (group_index, hook_index)
+        for group_index, group in enumerate(groups)
         if isinstance(group, dict) and isinstance(group.get("hooks"), list)
-        for hook in group["hooks"]
-        if is_safe_yolo_hook(hook)
+        for hook_index, hook in enumerate(group["hooks"])
+        if isinstance(hook, dict)
+        and hook.get("type") == "command"
+        and "args" not in hook
+        and isinstance(hook.get("command"), str)
+        and _command_is_pinned(hook["command"], **pin)
     ]
-
-
-def _flat_command(hook: dict[str, Any]) -> str:
-    # A pin split across `command` and `args` is never one this installer wrote.
-    return hook["command"] if hook.get("type") == "command" and "args" not in hook else ""
 
 
 def _command_is_pinned(
