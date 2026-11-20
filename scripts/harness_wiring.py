@@ -413,6 +413,7 @@ def is_hand_wired_antigravity_group(group: Any, home: Path) -> bool:
 
     This is how Antigravity was wired by hand before it had an install lifecycle.
     """
+    from scripts.doctor import _release_exposes_entry
     from scripts.release_manifest import verify_manifest
 
     command = antigravity_group_command(group)
@@ -426,7 +427,9 @@ def is_hand_wired_antigravity_group(group: Any, home: Path) -> bool:
         release.parent == home / "releases"
         and bootstrap in (release / "scripts" / "bootstrap.py", home / "bootstrap.py")
         and bootstrap.is_file()
+        and bool(flags["--manifest-sha256"])
         and not verify_manifest(release, flags["--manifest-sha256"])
+        and _release_exposes_entry(release, "antigravity_v3")
     )
 
 
