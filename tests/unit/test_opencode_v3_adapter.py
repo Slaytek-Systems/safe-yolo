@@ -20,6 +20,9 @@ class OpenCodeV3AdapterTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.project = self.root / "project"
         self.project.mkdir()
+        environment = patch.dict(os.environ, {"HOME": str(self.root / "home")})
+        environment.start()
+        self.addCleanup(environment.stop)
         self.kernel = build_kernel(
             safe_yolo_home=self.root / "safe-yolo",
             opencode_config=self.root / "config" / "opencode",

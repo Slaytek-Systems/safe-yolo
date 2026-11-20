@@ -66,8 +66,7 @@ def build_kernel(
         user_home=home,
         enforcement_paths=tuple(enforcement),
         credential_paths=(
-            str(home / ".local" / "share" / "opencode" / "auth.json"),
-            *_credential_database_paths(home),
+            *_opencode_credential_paths(),
             str(home / ".ssh"),
             str(home / ".gnupg"),
         ),
@@ -75,14 +74,19 @@ def build_kernel(
     )
 
 
-def _credential_database_paths(home: Path) -> tuple[str, ...]:
-    """OpenCode V2 keeps credential values in SQLite (packages/cli/src/database-path.ts at v2.3.2)."""
-    data = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share") / "opencode"
+def _opencode_credential_paths() -> tuple[str, ...]:
+    """Resolved like OpenCode v2.3.2 from the server's own environment, which the plugin passes on.
+
+    Data root: packages/util/src/global-roots.ts. Database: packages/cli/src/database-path.ts, whose
+    path.resolve normalizes lexically. auth.json: the legacy file its credential migration reads.
+    """
+    data = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "opencode")
+    legacy = os.path.join(data, "auth.json")
     database = os.environ.get("OPENCODE_DB") or "opencode.db"
     if database == ":memory:":
-        return ()
-    path = data / database
-    return tuple(f"{path}{suffix}" for suffix in ("", "-wal", "-shm", "-journal"))
+        return (legacy,)
+    path = os.path.abspath(os.path.join(data, database))
+    return (legacy, *(f"{path}{suffix}" for suffix in ("", "-wal", "-shm", "-journal")))
 
 
 def _first(values: dict[str, Any], keys: tuple[str, ...]) -> str:
