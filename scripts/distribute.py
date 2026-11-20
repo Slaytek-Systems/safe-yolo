@@ -89,6 +89,22 @@ def _atomic_write(path: Path, payload: bytes, mode: int = 0o600) -> None:
             temporary.unlink()
 
 
+def _exclusive_write(path: Path, payload: bytes, mode: int) -> None:
+    """Like _atomic_write, but raises FileExistsError rather than replace an existing entry."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, mode)
+        os.link(temporary, path)
+    finally:
+        temporary.unlink()
+
+
 def _run_canaries(
     home: Path,
     release: Path,
@@ -293,8 +309,11 @@ def _retire(harness: str, path: Path, expected_sha256: str, home: Path) -> Path:
         raise RuntimeError(f"{path} is missing and no verified copy exists at {destination}; needs operator review.")
     if not holds_expected(path):
         raise RuntimeError(f"{path} changed since installation; refusing to remove newer work.")
-    payload = path.read_bytes()
-    _atomic_write(destination, payload, path.stat().st_mode & 0o777)
+    if destination.exists() or destination.is_symlink():
+        if not holds_expected(destination):
+            raise RuntimeError(f"{destination} already exists with other contents; {path} was left in place.")
+    else:
+        _exclusive_write(destination, path.read_bytes(), path.stat().st_mode & 0o777)
     if not holds_expected(destination):
         raise RuntimeError(f"Could not keep a verified copy of {path}; it was left in place.")
     if not holds_expected(path):

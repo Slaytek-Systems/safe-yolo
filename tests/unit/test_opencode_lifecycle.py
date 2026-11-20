@@ -453,16 +453,15 @@ class OpenCodeLifecycleTests(unittest.TestCase):
     def test_uninstall_refuses_a_plugin_edited_while_it_is_copied(self):
         self.install()
         import scripts.distribute as distribute
-        real_write = distribute._atomic_write
+        real_write = distribute._exclusive_write
         edited = self.plugin.read_bytes() + b"// edited\n"
 
-        def edit_during_copy(path, payload, mode=0o600):
+        def edit_during_copy(path, payload, mode):
             result = real_write(path, payload, mode)
-            if Path(path).is_relative_to(self.safe_yolo_home.resolve() / "backups"):
-                self.plugin.write_bytes(edited)
+            self.plugin.write_bytes(edited)
             return result
 
-        with patch("scripts.distribute._atomic_write", edit_during_copy):
+        with patch("scripts.distribute._exclusive_write", edit_during_copy):
             with self.assertRaisesRegex(RuntimeError, "changed"):
                 self.uninstall()
 
