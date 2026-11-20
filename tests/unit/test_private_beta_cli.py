@@ -424,6 +424,8 @@ class PrivateBetaCliTests(unittest.TestCase):
             {"command": own["command"].replace(" --state-dir", "\n--state-dir")},
             {"command": own["command"] + " "},
             {"async": True},
+            {"timeout": 10.0},
+            {"command": own["command"].replace(" --entry claude_code_v3", "") + " --entry claude_code_v3"},
         ):
             with self.subTest(edit=edit):
                 document = json.loads(json.dumps(installed))
