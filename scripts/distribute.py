@@ -33,16 +33,16 @@ from scripts.harness_specs import HARNESS_BY_ID, HARNESS_HOME_ENV, HARNESSES, Ha
 from scripts.package import MANIFEST as DISTRIBUTION_MANIFEST, verify_bundle
 from scripts.harness_wiring import (
     ANTIGRAVITY_GROUP as _ANTIGRAVITY_GROUP,
+    config_path_problem as _config_path_problem,
     inspect_cursor_wiring as _inspect_cursor_wiring,
     inspect_opencode_wiring as _inspect_opencode_wiring,
     is_hand_wired_antigravity_group as _is_hand_wired_antigravity_group,
-    config_path_problem as _config_path_problem,
     pinned_command as _pinned_command,
-    read_antigravity_hooks as _read_antigravity_hooks,
     prepare_antigravity_hooks as _prepare_antigravity_hooks,
     prepare_command_hooks as _prepare_hooks,
     prepare_cursor_hooks as _prepare_cursor_hooks,
     prepare_opencode_plugin as _prepare_opencode_plugin,
+    read_antigravity_hooks as _read_antigravity_hooks,
     read_json_object as _read_json_object,
     render_opencode_plugin as _render_opencode_plugin,
 )
