@@ -327,6 +327,24 @@ def inspect_opencode_wiring(
 ANTIGRAVITY_GROUP = "safe-yolo"
 
 
+def antigravity_hooks_path_problem(path: Path) -> str | None:
+    """Safe YOLO manages only a regular hooks file whose folder is inside the selected Antigravity root."""
+    root = path.parents[1]
+    if path.parent.is_symlink():
+        return f"{path.parent} is a symlink; Safe YOLO writes only inside the selected Antigravity root."
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        return f"{path} is not a regular file; Safe YOLO manages only a regular hooks file."
+    if not Path(os.path.realpath(path)).is_relative_to(root):
+        return f"{path} resolves outside {root}; Safe YOLO writes only inside the selected Antigravity root."
+    return None
+
+
+def config_path_problem(harness: str, path: Path) -> str | None:
+    """Why Safe YOLO must not touch this harness file in place, or None."""
+    check = {"opencode": opencode_plugin_path_problem, "antigravity": antigravity_hooks_path_problem}.get(harness)
+    return check(path) if check else None
+
+
 def antigravity_group(command: str) -> dict[str, Any]:
     """The whole named group Safe YOLO writes into Antigravity's hooks.json."""
     return {
@@ -419,9 +437,10 @@ def prepare_antigravity_hooks(
     original_bytes: bytes | None = None
     mode = 0o600
     document: dict[str, Any] = {}
-    if path.exists() or path.is_symlink():
-        if path.is_symlink() or not path.is_file():
-            raise RuntimeError("Antigravity hooks path is unavailable or unsafe.")
+    problem = antigravity_hooks_path_problem(path)
+    if problem:
+        raise RuntimeError(problem)
+    if path.exists():
         original_bytes = path.read_bytes()
         mode = path.stat().st_mode & 0o777
         document = read_antigravity_hooks(path)

@@ -128,10 +128,9 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
             f'service, and any `opencode serve` you started), then confirm safe-yolo.js is absent from {config.parent} '
             'and `opencode api plugin.list` against that server no longer lists safe-yolo.')}
     current_bytes = None if config.is_symlink() or not config.is_file() else config.read_bytes()
-    if harness == 'opencode':
-        from scripts.harness_wiring import opencode_plugin_path_problem
-        if opencode_plugin_path_problem(config):
-            current_bytes = None
+    from scripts.harness_wiring import config_path_problem
+    if config_path_problem(harness, config):
+        current_bytes = None
     if current_bytes is None or hashlib.sha256(current_bytes).hexdigest() != receipt['installed_config_sha256']:
         raise RuntimeError('Harness configuration changed; refusing to overwrite newer work.')
     if uninstall:

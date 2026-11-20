@@ -35,7 +35,7 @@ from scripts.harness_wiring import (
     inspect_cursor_wiring as _inspect_cursor_wiring,
     inspect_opencode_wiring as _inspect_opencode_wiring,
     is_hand_wired_antigravity_group as _is_hand_wired_antigravity_group,
-    opencode_plugin_path_problem as _opencode_plugin_path_problem,
+    config_path_problem as _config_path_problem,
     pinned_command as _pinned_command,
     prepare_antigravity_hooks as _prepare_antigravity_hooks,
     prepare_command_hooks as _prepare_hooks,
@@ -309,7 +309,7 @@ def _retire(
     by a retry that finds the file gone and that copy in place. A failed install passes its own
     attempt folder as `destination`, so an earlier retained copy can never keep the file in place.
     """
-    problem = _opencode_plugin_path_problem(path) if harness == "opencode" else None
+    problem = _config_path_problem(harness, path)
     if problem:
         raise RuntimeError(problem)
     destination = destination or home / "backups" / f"retired-{harness}-{expected_sha256}-{path.name}"
@@ -678,7 +678,7 @@ def deactivate_harness(
         if (
             config_path.is_symlink()
             or not config_path.is_file()
-            or (spec.id == "opencode" and _opencode_plugin_path_problem(config_path))
+            or _config_path_problem(spec.id, config_path)
             or _sha256(config_path) != receipt.get("installed_config_sha256")
         ):
             raise RuntimeError(

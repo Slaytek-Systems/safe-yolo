@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 from scripts.harness_wiring import (
     ANTIGRAVITY_GROUP,
     antigravity_group_command,
+    antigravity_hooks_path_problem,
     command_hook,
     read_antigravity_hooks,
 )
@@ -211,6 +212,9 @@ def owns_antigravity_group(group: Any, **pin: Any) -> bool:
 
 def inspect_antigravity_wiring(path: str | Path, **pin: Any) -> dict[str, Any]:
     """Read-only check of Safe YOLO's named group in Antigravity's hooks.json; other groups are not judged."""
+    problem = antigravity_hooks_path_problem(Path(path))
+    if problem:
+        return {"healthy": False, "problems": [problem]}
     try:
         document = read_antigravity_hooks(Path(path))
     except RuntimeError as error:
