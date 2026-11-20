@@ -67,8 +67,9 @@ Claude Code:
 - Safe YOLO's hook is the one entry that is, field for field, what the
   installer writes for the pin the installation receipt records: same
   bootstrap, release, manifest digest, entry, state folder and home folders,
-  the same `type`, `timeout` and `statusMessage`, and no other field. Only
-  the path of the `python3` interpreter may differ. An entry edited in any
+  the same `type`, integer `timeout` and `statusMessage`, no other field,
+  and the command spelled and ordered as the installer writes it. Only the
+  path of the `python3` interpreter may differ. An entry edited in any
   way is no longer Safe YOLO's: doctor reports it and update refuses. Every other hook belongs to someone else. It is
   not read, judged, moved or changed.
 - Update replaces that one hook where it stands.
@@ -92,9 +93,9 @@ decision. Another hook can still rewrite a tool input that Safe YOLO
 allowed, and Safe YOLO does not read the rewritten input. Doctor still
 reports any later edit to the harness file as "configuration changed after
 activation", and deactivate, rollback and uninstall refuse after such an
-edit. A successful update to a different version records the edited file as
-the installed file, which deactivate, rollback and uninstall check against,
-and as its rollback snapshot. Uninstall restores toward the file as first
+edit. A successful update to a different version keeps the edited file as
+its rollback snapshot and records the file it then writes as the installed
+file, which deactivate, rollback and uninstall check against. Uninstall restores toward the file as first
 found, keeping other owners' hooks. Those checks read the file
 once at the start of the command. Nothing locks it, so a save by another
 program while uninstall or rollback runs is overwritten.

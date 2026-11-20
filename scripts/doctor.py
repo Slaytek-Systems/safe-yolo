@@ -192,17 +192,26 @@ def pinned_hook_slots(groups: Any, **pin: Any) -> list[tuple[int, int]]:
         if isinstance(hook, dict)
         and isinstance(hook.get("command"), str)
         and hook == command_hook(hook["command"])
-        and _is_canonical_shell(hook["command"])
+        and type(hook["timeout"]) is int
+        and _is_installer_spelling(hook["command"])
         and _command_is_pinned(hook["command"], **pin)
     ]
 
 
-def _is_canonical_shell(command: str) -> bool:
-    # The installer writes shlex.join output. Any other spelling may parse alike and run differently.
+INSTALLER_FLAG_ORDER = (
+    "--release", "--manifest-sha256", "--entry", "--state-dir", "--safe-yolo-home", "--user-home", "--harness-home",
+)
+
+
+def _is_installer_spelling(command: str) -> bool:
+    # The installer writes shlex.join output with its flags in one order. Any other
+    # spelling may parse alike and run differently, so it is not the installed entry.
     try:
-        return shlex.join(shlex.split(command)) == command
+        tokens = shlex.split(command)
     except ValueError:
         return False
+    flags = tuple(tokens[2::2])
+    return shlex.join(tokens) == command and flags == INSTALLER_FLAG_ORDER[: len(flags)]
 
 
 def _command_is_pinned(
