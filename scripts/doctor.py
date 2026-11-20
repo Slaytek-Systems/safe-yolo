@@ -101,6 +101,7 @@ def inspect_claude_code_wiring(
     safe_yolo_home: str | Path | None = None,
     user_home: str | Path | None = None,
     harness_home: str | Path | None = None,
+    state_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Read-only check that Claude Code user settings pin one Safe YOLO PreToolUse hook."""
     problems: list[str] = []
@@ -123,10 +124,11 @@ def inspect_claude_code_wiring(
         safe_yolo_home=safe_yolo_home,
         user_home=user_home,
         harness_home=harness_home,
+        state_dir=state_dir,
     )
     if len(slots) > 1:
         problems.append("exactly one Safe YOLO PreToolUse command hook is required")
-    elif not slots or (groups[slots[0][0]].get("matcher") or "") not in {"*", ""}:
+    elif not slots or groups[slots[0][0]].get("matcher", "") not in ("*", ""):
         problems.append("PreToolUse hook is not pinned to the expected Safe YOLO bootstrap release")
     if not _release_exposes_entry(release_path, entry):
         problems.append(f"release does not expose the expected entrypoint: {entry}")
@@ -204,6 +206,7 @@ def _command_is_pinned(
     safe_yolo_home: str | Path | None = None,
     user_home: str | Path | None = None,
     harness_home: str | Path | None = None,
+    state_dir: str | Path | None = None,
 ) -> bool:
     try:
         tokens = shlex.split(command, posix=True)
@@ -263,6 +266,7 @@ def _command_is_pinned(
         values.get("--release") == str(release_path)
         and values.get("--manifest-sha256") == manifest_sha256
         and values.get("--entry") == entry
+        and (state_dir is None or values.get("--state-dir") == str(state_dir))
     )
 
 

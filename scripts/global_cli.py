@@ -98,6 +98,7 @@ def _without_own_hook(groups: Any, receipt: dict[str, Any], home: Path) -> list[
         safe_yolo_home=home if receipt.get('user_home') else None,
         user_home=receipt.get('user_home'),
         harness_home=receipt.get('harness_home'),
+        state_dir=home / 'state',
     ))
     kept = []
     for group_index, group in enumerate(groups if isinstance(groups, list) else []):
