@@ -369,11 +369,15 @@ class AntigravityLifecycleTests(unittest.TestCase):
             self.hooks.unlink()
             self.hooks.mkdir()
 
+        inside = self.gemini / "real-config"
+
         def linked_into_root():
-            shutil.rmtree(config)
-            (self.gemini / "real-config").mkdir()
-            (self.gemini / "real-config" / "hooks.json").write_text(OTHER_FILE)
-            config.symlink_to(self.gemini / "real-config")
+            config.rename(inside)
+            config.symlink_to(inside)
+
+        def targets() -> dict:
+            return {path: path.read_bytes() for path in (elsewhere / "hooks.json", inside / "hooks.json")
+                    if path.is_file()}
 
         cases = {"linked config folder": linked_config, "linked hooks file": linked_file,
                  "hooks path is a folder": directory, "config folder linked inside the root": linked_into_root}
@@ -385,14 +389,17 @@ class AntigravityLifecycleTests(unittest.TestCase):
                     shutil.rmtree(path, ignore_errors=True)
                 config.mkdir(parents=True)
                 self.hooks.write_text(OTHER_FILE)
+                (elsewhere / "hooks.json").write_text(OTHER_FILE)
                 change()
+                before = targets()
                 with self.assertRaisesRegex(RuntimeError, "symlink|regular file"):
                     self.install()
                 self.assertFalse(self.receipt_path().exists())
-                self.assertEqual(OTHER_FILE, (elsewhere / "hooks.json").read_text())
+                self.assertEqual(before, targets())
 
                 if config.is_symlink():
                     config.unlink()
+                    shutil.rmtree(inside, ignore_errors=True)
                 elif self.hooks.is_symlink():
                     self.hooks.unlink()
                 else:
@@ -403,6 +410,7 @@ class AntigravityLifecycleTests(unittest.TestCase):
                 installed = self.hooks.read_bytes()
                 (elsewhere / "hooks.json").write_bytes(installed)
                 change()
+                before = targets()
                 report = self.doctor()
                 self.assertFalse(report["healthy"])
                 self.assertTrue(any("symlink" in line or "regular file" in line for line in report["problems"]),
@@ -415,7 +423,7 @@ class AntigravityLifecycleTests(unittest.TestCase):
                 ):
                     with self.assertRaisesRegex(RuntimeError, "symlink|regular file|changed"):
                         step()
-                    self.assertEqual(installed, (elsewhere / "hooks.json").read_bytes())
+                    self.assertEqual(before, targets())
                 self.assertEqual("active", json.loads(self.receipt_path().read_text())["status"])
 
     def test_doctor_runs_the_configured_command_and_fails_when_it_cannot(self):
