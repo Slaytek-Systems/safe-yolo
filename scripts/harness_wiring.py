@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import re
 from pathlib import Path
@@ -363,20 +362,23 @@ def read_antigravity_hooks(path: Path) -> dict[str, Any]:
             seen.add(key)
         return dict(pairs)
 
-    def finite_number(text: str) -> float:
-        value = float(text)
-        if not math.isfinite(value):
-            raise ValueError(f"number {text} is out of range")
-        return value
+    def exact(parse: Callable[[str], Any]) -> Callable[[str], Any]:
+        def number(literal: str) -> Any:
+            value = parse(literal)
+            if json.dumps(value) != literal:
+                raise ValueError(f"number {literal} would not be written back as {literal}")
+            return value
+        return number
 
-    def not_json(name: str) -> Any:
-        raise ValueError(f"{name} is not valid JSON")
+    def not_json(literal: str) -> Any:
+        raise ValueError(f"{literal} is not a JSON number")
 
     try:
         document = json.loads(
             path.read_text(encoding="utf-8"),
             object_pairs_hook=unique_keys,
-            parse_float=finite_number,
+            parse_float=exact(float),
+            parse_int=exact(int),
             parse_constant=not_json,
         )
     except (OSError, ValueError) as error:
