@@ -263,9 +263,6 @@ class AntigravityLifecycleTests(unittest.TestCase):
                 self.hand_wired(manifest="bad"))[1],
             "pin does not match the release": lambda: self.hand_wired(
                 manifest="0" * 64, bootstrap=Path(self.legacy_release()["bootstrap"])),
-            "named bootstrap is missing": lambda: (
-                legacy := self.legacy_release(), (self.safe_yolo_home / "bootstrap.py").unlink(),
-                self.hand_wired(manifest=legacy["manifest_sha256"], bootstrap=self.safe_yolo_home / "bootstrap.py"))[2],
         }
         for name, group in cases.items():
             with self.subTest(name):

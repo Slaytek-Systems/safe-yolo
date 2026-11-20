@@ -128,8 +128,9 @@ once.
 
 First install refuses, and changes nothing, when a `safe-yolo` group is
 already there, except for a group of that same shape whose command runs a
-release already present under this Safe YOLO home's `releases/` folder, with
-entry `antigravity_v3`. That is the old hand-made wiring. Install backs the
+release under this Safe YOLO home's `releases/` folder that verifies against
+the command's manifest pin, through a bootstrap that exists, with entry
+`antigravity_v3`. That is the old hand-made wiring. Install backs the
 file up and replaces only that group. Uninstall removes only the `safe-yolo`
 group. Deactivate restores the exact previous file.
 

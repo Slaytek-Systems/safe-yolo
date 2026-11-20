@@ -21,8 +21,9 @@ beta.12.
   and flag order, and `timeout` must be an integer.
 - First install refuses, and changes nothing, when a `safe-yolo` group already
   exists, with one exception: a group of the installer's shape whose command
-  runs a release that already exists under this Safe YOLO home's `releases/`
-  folder, with entry `antigravity_v3`. That is how Antigravity was wired by
+  runs a release under this Safe YOLO home's `releases/` folder that verifies
+  against the command's manifest pin, through a bootstrap that exists, with
+  entry `antigravity_v3`. That is how Antigravity was wired by
   hand before. Install backs the file up, then replaces only that group.
 - The Antigravity adapter now replies `{"decision":"allow"}` on allow, as
   Antigravity's hook contract requires. Deny is unchanged.

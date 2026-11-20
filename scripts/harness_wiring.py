@@ -389,19 +389,24 @@ def read_antigravity_hooks(path: Path) -> dict[str, Any]:
 
 
 def is_hand_wired_antigravity_group(group: Any, home: Path) -> bool:
-    """A group shaped like the installer's that runs a release already under this Safe YOLO home.
+    """A group shaped like the installer's that runs a verified release already under this Safe YOLO home.
 
     This is how Antigravity was wired by hand before it had an install lifecycle.
     """
+    from scripts.release_manifest import verify_manifest
+
     command = antigravity_group_command(group)
     if command is None or not is_safe_yolo_command(command, home, "antigravity_v3"):
         return False
     tokens = shlex.split(command)
-    release = Path(dict(zip(tokens[2::2], tokens[3::2]))["--release"])
+    flags = dict(zip(tokens[2::2], tokens[3::2]))
+    release = Path(flags["--release"])
+    bootstrap = Path(tokens[1])
     return (
         release.parent == home / "releases"
-        and release.is_dir()
-        and Path(tokens[1]) in (release / "scripts" / "bootstrap.py", home / "bootstrap.py")
+        and bootstrap in (release / "scripts" / "bootstrap.py", home / "bootstrap.py")
+        and bootstrap.is_file()
+        and not verify_manifest(release, flags["--manifest-sha256"])
     )
 
 
