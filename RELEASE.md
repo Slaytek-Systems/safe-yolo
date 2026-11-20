@@ -2,7 +2,7 @@
 
 OpenCode V2 is now a beta lifecycle harness. OpenCode V2 skips V1 plugins,
 including the hand-installed Safe YOLO V1 copy. The new plugin uses the
-same policy engine as beta.13.
+same policy engine as beta.12.
 
 - `safe-yolo install --harness opencode` writes one V2 plugin,
   `plugins/safe-yolo.js`, in the folder OpenCode reads: a non-empty
@@ -51,7 +51,7 @@ not `failed`, from the plugin file Safe YOLO installed, and try a harmless allow
 in a session. Another plugin's `execute.before` hook can change a tool's input
 after Safe YOLO has read it.
 
-## Changes from beta.12, first shipped in beta.13
+## Also in this release: Claude Code update beside other hooks
 
 In Claude Code, `safe-yolo update` now works when another tool's `PreToolUse`
 hook sits beside Safe YOLO's. No decision changes: the policy is the one in

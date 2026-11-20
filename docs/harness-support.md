@@ -83,8 +83,9 @@ deny.
 
 Uninstall, and deactivate when there was no previous file, copy the plugin to
 `~/.safe-yolo/backups/`, check the copy, check the plugin still has the bytes
-Safe YOLO installed, and only then delete it. A failed fresh install removes
-its plugin the same way. The copy's name comes from the plugin's digest. If an
+Safe YOLO installed, and only then delete it. The copy's name comes from the
+plugin's digest. A failed fresh install removes its plugin the same way, into
+that attempt's own `backups/pre-opencode-…` folder as `failed-safe-yolo.js`. If an
 uninstall stops after deleting the plugin, doctor reports the plugin missing,
 and running uninstall again finds that copy and finishes. If the plugin is
 missing and no matching copy exists, or the plugin changed, uninstall refuses
