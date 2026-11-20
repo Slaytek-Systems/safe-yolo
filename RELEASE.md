@@ -32,7 +32,7 @@ same policy engine as beta.13.
   `~/.safe-yolo/backups/` under a name derived from its digest, checks both
   files, then deletes the plugin, so it works across filesystems and a rerun
   finishes an interrupted uninstall. A failed fresh install removes its plugin
-  the same way. Deactivate restores the exact previous file.
+  the same way, into that attempt's own `backups/pre-opencode-…` folder. Deactivate restores the exact previous file.
 - The OpenCode adapter now protects the V2 credential database
   (`opencode.db` in OpenCode's data folder, or `OPENCODE_DB`) and its `-wal`,
   `-shm` and `-journal` files, as well as the V1 `auth.json`.

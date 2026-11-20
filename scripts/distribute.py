@@ -284,17 +284,20 @@ def _require_opencode_v2() -> None:
         )
 
 
-def _retire(harness: str, path: Path, expected_sha256: str, home: Path) -> Path:
+def _retire(
+    harness: str, path: Path, expected_sha256: str, home: Path, *, destination: Path | None = None
+) -> Path:
     """Take an owned file out of the harness folder, keeping a verified copy in Safe YOLO's backups.
 
     Copy, re-check, unlink: no rename, so the backups may sit on another filesystem. The copy's
     name comes from the harness and digest, so a run interrupted after the unlink can be finished
-    by a retry that finds the file gone and that copy in place.
+    by a retry that finds the file gone and that copy in place. A failed install passes its own
+    attempt folder as `destination`, so an earlier retained copy can never keep the file in place.
     """
     problem = _opencode_plugin_path_problem(path) if harness == "opencode" else None
     if problem:
         raise RuntimeError(problem)
-    destination = home / "backups" / f"retired-{harness}-{expected_sha256}-{path.name}"
+    destination = destination or home / "backups" / f"retired-{harness}-{expected_sha256}-{path.name}"
 
     def holds_expected(candidate: Path) -> bool:
         return (
@@ -500,7 +503,8 @@ def install_harness(
             )
     except Exception as error:
         if original_bytes is None:
-            _retire(spec.id, target, hashlib.sha256(payload).hexdigest(), home)
+            _retire(spec.id, target, hashlib.sha256(payload).hexdigest(), home,
+                    destination=backup_root / f"failed-{target.name}")
         else:
             _atomic_write(target, original_bytes, original_mode)
         raise RuntimeError(f"Safe YOLO activation failed; previous hooks restored: {error}") from error

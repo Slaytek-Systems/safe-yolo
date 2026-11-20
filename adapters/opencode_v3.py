@@ -80,7 +80,9 @@ def _opencode_credential_paths() -> tuple[str, ...]:
     Data root: packages/util/src/global-roots.ts. Database: packages/cli/src/database-path.ts, whose
     path.resolve normalizes lexically. auth.json: the legacy file its credential migration reads.
     """
-    data = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "opencode")
+    data = os.path.abspath(
+        os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "opencode")
+    )
     legacy = os.path.join(data, "auth.json")
     database = os.environ.get("OPENCODE_DB") or "opencode.db"
     if database == ":memory:":
