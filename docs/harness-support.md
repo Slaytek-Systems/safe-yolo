@@ -118,19 +118,26 @@ it. The group install writes is:
 
 The pinned bootstrap runs `--entry antigravity_v3` and passes the root as
 `--harness-home`. Other named groups in the file are kept as they are and not
-judged. Install, update, uninstall and deactivate refuse, and change nothing,
-when the file holds a duplicate key anywhere or a number Safe YOLO cannot
-write back unchanged, such as `1e400`; doctor reports it. A group is Safe YOLO's only when it equals, field for field, what the
+judged. Install, update, uninstall and deactivate refuse, and leave the hooks
+file unchanged, when it holds a duplicate key anywhere or a number that Safe
+YOLO would not write back character for character, such as `1e400`,
+`1e-400`, `0.1234567890123456789`, `1.50` or `-0`; doctor reports it.
+`<root>/config` must not be a symlink, and `hooks.json`, when it exists, must
+be a regular file inside the chosen root. Install, doctor, update, rollback,
+uninstall and deactivate all apply that rule. The check runs before the write,
+so a link swapped in between them is not caught. A group is Safe YOLO's only when it equals, field for field, what the
 installer writes for the pin the receipt records; only the `python3`
 interpreter path may differ, the command must keep the installer's spelling
 and flag order, and `timeout` must be an integer. Doctor requires that group
 once.
 
-First install refuses, and changes nothing, when a `safe-yolo` group is
-already there, except for a group of that same shape whose command runs a
-release under this Safe YOLO home's `releases/` folder that verifies against
-the command's manifest pin, through a bootstrap that exists, with entry
-`antigravity_v3`. That is the old hand-made wiring. Install backs the
+First install refuses, and leaves the hooks file unchanged, when a
+`safe-yolo` group is already there. It may already have created the launcher
+and the release under the Safe YOLO home. The exception is a group of that
+same shape whose command runs a release under this Safe YOLO home's
+`releases/` folder that verifies against the command's non-empty manifest pin
+and lists the `antigravity_v3` entrypoint, through a bootstrap that exists,
+with entry `antigravity_v3`. That is the old hand-made wiring. Install backs the
 file up and replaces only that group. Uninstall removes only the `safe-yolo`
 group. Deactivate restores the exact previous file.
 
@@ -139,12 +146,17 @@ JSON: `{"decision":"allow"}` passes the call on and
 `{"decision":"deny","reason":"…"}` blocks it. A hook that exits non-zero is
 ignored, so the call runs. For this entry the bootstrap therefore replies with
 a deny and exit 0 when the release fails verification or is missing, or when
-the adapter exits non-zero or prints no decision. A hook that crashes before
+the adapter exits non-zero or prints no decision. It picks this behaviour only
+from the value of `--entry`, and its stdout holds that one reply; usage and
+help go to stderr. A hook that crashes before
 it can reply, runs past its 10-second timeout, or prints garbage still fails
 open, and Antigravity offers no fail-closed setting.
 
-Doctor checks the group, the release and allow and deny canaries through the
-pinned command. It cannot prove Antigravity loaded the hook. Start a new
+Doctor checks the group, the release and allow and deny canaries. The
+canaries run the exact command in the hooks file the way Antigravity does:
+split into words, no shell, the hook's timeout. A command that cannot start,
+for example after its `python3` was moved, makes doctor unhealthy and is named.
+Doctor cannot prove Antigravity loaded the hook. Start a new
 Antigravity session, run `/hooks` and confirm the `safe-yolo` `PreToolUse`
 hook is listed.
 

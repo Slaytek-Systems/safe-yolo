@@ -613,7 +613,7 @@ def install_harness(
             ),
             "antigravity": (
                 "Start a new Antigravity session, run /hooks and confirm the safe-yolo PreToolUse hook is listed. "
-                "Doctor checks the hooks file, release and pinned command but cannot prove Antigravity loaded the "
+                "Doctor runs the command in the hooks file but cannot prove Antigravity loaded the "
                 "hook. Antigravity ignores a hook that crashes, times out or prints invalid output."
             ),
         }[spec.id],
