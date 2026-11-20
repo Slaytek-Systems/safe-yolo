@@ -167,21 +167,24 @@ class AntigravityLifecycleTests(unittest.TestCase):
         self.assertEqual(2, completed.returncode)
         self.assertEqual("", completed.stdout)
 
-    def test_root_follows_config_home_then_gemini_home_then_default(self):
-        os.environ["GEMINI_HOME"] = ""
-        self.assertEqual(str(self.hooks), self.install()["config_path"])
-        restore(self.safe_yolo_home, self.user_home, "antigravity", uninstall=True)
-
+    def test_root_is_config_home_else_default_and_ignores_gemini_home(self):
         profile = self.root / "t3-profile"
         os.environ["GEMINI_HOME"] = str(profile)
         receipt = self.install()
-        self.assertEqual(str(profile / "config" / "hooks.json"), receipt["config_path"])
-        self.assertEqual(owned_group(self.installed_command(receipt, profile)),
-                         json.loads((profile / "config" / "hooks.json").read_text())["safe-yolo"])
+        self.assertEqual(str(self.hooks), receipt["config_path"])
+        self.assertEqual(owned_group(self.installed_command(receipt)),
+                         json.loads(self.hooks.read_text())["safe-yolo"])
+        self.assertFalse(profile.exists())
         restore(self.safe_yolo_home, self.user_home, "antigravity", uninstall=True)
 
         chosen = self.root / "chosen"
-        self.assertEqual(str(chosen / "config" / "hooks.json"), self.install(config_home=chosen)["config_path"])
+        receipt = self.install(config_home=chosen)
+        self.assertEqual(str(chosen / "config" / "hooks.json"), receipt["config_path"])
+        code, denied, _ = self.reply(self.installed_command(receipt, chosen), "edit_file",
+                                     {"AbsolutePath": str(chosen / "config" / "hooks.json")})
+        self.assertEqual(0, code)
+        self.assertEqual("deny", denied["decision"])
+        self.assertIn("enforcement.modify", denied["reason"])
 
     def test_a_second_root_under_the_same_home_is_refused(self):
         self.install()
