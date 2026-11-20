@@ -163,6 +163,10 @@ class OpenCodeV3AdapterTests(unittest.TestCase):
                 {"XDG_DATA_HOME": str(self.root / "xdg-data"), "OPENCODE_DB": "link/../custom.db"},
                 (xdg_data / "custom.db",),
             ),
+            (
+                {"XDG_DATA_HOME": str(xdg_data / "link" / ".." / ".." / ".." / "xdg-data")},
+                (xdg_data / "opencode.db", xdg_data / "auth.json"),
+            ),
         )
         for environment, protected in cases:
             with self.subTest(environment=environment), patch.dict(os.environ, environment):

@@ -47,6 +47,17 @@ class RetireTests(unittest.TestCase):
         self.assertEqual(self.payload, self.backup.read_bytes())
         self.assertFalse(self.source.exists())
 
+    def test_a_named_destination_is_used_when_the_digest_named_backup_is_taken(self):
+        self.backup.write_bytes(b"operator recovery note\n")
+        attempt = self.home / "backups" / "pre-codex-attempt" / "failed-hooks.json"
+        attempt.parent.mkdir()
+
+        self.assertEqual(attempt, _retire("codex", self.source, self.digest, self.home, destination=attempt))
+
+        self.assertEqual(self.payload, attempt.read_bytes())
+        self.assertEqual(b"operator recovery note\n", self.backup.read_bytes())
+        self.assertFalse(self.source.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
