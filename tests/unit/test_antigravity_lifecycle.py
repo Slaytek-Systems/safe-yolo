@@ -446,6 +446,24 @@ class AntigravityLifecycleTests(unittest.TestCase):
         self.assertFalse(report["healthy"])
         self.assertEqual({"allow": False, "deny": False}, report["canaries"])
 
+    def test_rollback_keeps_the_working_hook_when_the_previous_command_cannot_start(self):
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        interpreter = bin_dir / "python3"
+        interpreter.symlink_to(sys.executable)
+        with patch.object(sys, "executable", str(interpreter)):
+            self.install()
+        (self.source / "VERSION").write_text("3.0.0-beta.3\n")
+        self.install()
+        interpreter.unlink()
+        before = self.hooks.read_bytes(), self.receipt_path().read_bytes()
+
+        with self.assertRaisesRegex(RuntimeError, "rollback was not applied"):
+            restore(self.safe_yolo_home, self.user_home, "antigravity", uninstall=False)
+
+        self.assertEqual(before, (self.hooks.read_bytes(), self.receipt_path().read_bytes()))
+        self.assertTrue(self.doctor()["healthy"], self.doctor())
+
     def test_a_hand_wired_group_whose_release_does_not_verify_is_refused_untouched(self):
         cases = {
             "empty release, missing bootstrap, bad pin": lambda: (
