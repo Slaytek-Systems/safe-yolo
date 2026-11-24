@@ -71,3 +71,14 @@ Limits.
   file with what install wrote. An edit to another named group after install
   makes doctor report the file changed and makes uninstall refuse, until an
   update to a newer release records the new file.
+- Rollback runs the previous hook command's allow and deny check before it
+  replaces the working hook, and refuses when that command cannot start or
+  gives the wrong reply.
+- Safe YOLO guards against honest mistakes, not a user working against it.
+  Three cases an independent review raised are left as they are for that
+  reason: doctor reads the hooks file once to check it and again to run it, so
+  a file swapped between the two reads is run unchecked; taking over
+  hand-made wiring accepts a release that lists the Antigravity adapter
+  without a checksum for it; and a hook command edited to repeat `--entry`
+  can get the wrong failure reply. No command Safe YOLO installs repeats
+  `--entry`.

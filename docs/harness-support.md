@@ -125,7 +125,9 @@ YOLO would not write back character for character, such as `1e400`,
 `<root>/config` must not be a symlink, and `hooks.json`, when it exists, must
 be a regular file inside the chosen root. Install, doctor, update, rollback,
 uninstall and deactivate all apply that rule. The check runs before the write,
-so a link swapped in between them is not caught. A group is Safe YOLO's only when it equals, field for field, what the
+so a link swapped in between them is not caught. Rollback also runs the
+previous hook command's allow and deny check first, and refuses when that
+command cannot start or replies wrongly. A group is Safe YOLO's only when it equals, field for field, what the
 installer writes for the pin the receipt records; only the `python3`
 interpreter path may differ, the command must keep the installer's spelling
 and flag order, and `timeout` must be an integer. Doctor requires that group

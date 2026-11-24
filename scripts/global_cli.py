@@ -185,6 +185,17 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
     report = inspect_release(Path(previous['release']), previous['manifest_sha256'])
     if not report['healthy']:
         raise RuntimeError('Previous release failed verification; rollback was not applied.')
+    if harness == 'antigravity':
+        # Antigravity ignores a hook that cannot start, so a dead command would restore no guard at all.
+        from scripts.distribute import _run_canaries
+        try:
+            canaries = _run_canaries(home, Path(previous['release']), previous['manifest_sha256'],
+                                     harness=harness, config_path=backup)
+        except RuntimeError as error:
+            raise RuntimeError(f'{error}; rollback was not applied.') from error
+        if not all(canaries.values()):
+            raise RuntimeError(f'Previous hook command failed its allow/deny check ({canaries}); '
+                               'rollback was not applied.')
     _atomic_write(config, backup.read_bytes(), receipt['previous_config_mode'])
     _atomic_write(path, (json.dumps(previous, indent=2) + '\n').encode())
     return {'status': 'active', 'harness': harness, 'version': previous['version'],
