@@ -111,6 +111,8 @@ _CONTENT_DESTROYING_COMMANDS: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 _SED_VALUE_OPTIONS = ("efl", ("--expression", "--file", "--line-length"))
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+# Words that only open a command; the command they open is the next word.
+_LEADING_WORDS = frozenset({"{", "}", "!", "if", "then", "elif", "else", "do", "while", "until", "time"})
 # Shell syntax that runs more than one command. shlex reads these as words,
 # so only a command without them earns the public credential file exemption.
 _COMPOSITION = re.compile(r"[\n;|&$`()]")
@@ -374,7 +376,10 @@ class ConsequenceKernel:
                 original = self._shell(command, effective_cwd, residuals=False)
                 if original.outcome != "allow":
                     return original
-                return self._shell(command, effective_cwd)
+                whole = self._shell(command, effective_cwd)
+                if whole.outcome != "allow":
+                    return whole
+                return self._each_command(command, effective_cwd)
         paths = self._structured_paths(tool_input, cwd)
         readable = tool_name in _CREDENTIAL_READ_TOOLS
         if any(
@@ -802,18 +807,74 @@ class ConsequenceKernel:
                 "remote.execute",
                 "execute an unparseable remote command",
             )
-        current: list[str] = []
-        separators = {"|", "||", "|&", "&&", ";"}
-        for token in [*tokens, ";"]:
-            if token not in separators:
-                current.append(token)
+        for segment in self._commands(tokens):
+            decision = self._remote_segment(segment, cwd, residuals=residuals)
+            if decision.outcome != "allow":
+                return decision
+        return Decision("allow")
+
+    def _each_command(self, command: str, cwd: Path) -> Decision:
+        """A chain gets the strictest answer any of its commands gets alone."""
+        try:
+            commands = self._commands(self._chain_tokens(command))
+        except ValueError:
+            return Decision("allow")
+        if len(commands) < 2:
+            return Decision("allow")
+        for tokens in commands:
+            if Path(tokens[0]).name == "cd" and len(tokens) == 2:
+                cwd = self._resolve_from(tokens[1], cwd)
                 continue
-            if current:
-                decision = self._remote_segment(current, cwd, residuals=residuals)
+            text = " ".join(
+                token if token.strip("<>&|") == "" else shlex.quote(token) for token in tokens
+            )
+            for residuals in (False, True):
+                decision = self._shell(text, cwd, residuals=residuals)
                 if decision.outcome != "allow":
                     return decision
-                current = []
         return Decision("allow")
+
+    @staticmethod
+    def _commands(tokens: list[str]) -> list[list[str]]:
+        commands: list[list[str]] = []
+        current: list[str] = []
+        for token in [*tokens, ";"]:
+            if not ConsequenceKernel._separator(token):
+                if current or token not in _LEADING_WORDS:
+                    current.append(token)
+                continue
+            if current:
+                commands.append(current)
+                current = []
+        return commands
+
+    @staticmethod
+    def _separator(token: str) -> bool:
+        # The lexer fuses neighbouring punctuation (";\n", "&&\n"); redirects such as ">&" stay words.
+        return bool(token) and not token.strip("<>|&;()\n") and (
+            token in {"&", "&&"} or any(mark in token for mark in ";|()\n")
+        )
+
+    @classmethod
+    def _chain_tokens(cls, command: str) -> list[str]:
+        """Words and separators of a shell line. Heredoc bodies are data, so they are dropped."""
+        kept: list[str] = []
+        heredoc: tuple[str, bool] | None = None
+        for line in command.replace("\\\n", " ").split("\n"):
+            if heredoc is not None:
+                if (line.lstrip("\t") if heredoc[1] else line) == heredoc[0]:
+                    heredoc = None
+                continue
+            kept.append(line)
+            try:
+                heredoc = cls._heredoc_delimiter(cls._line_tokens(line))
+            except ValueError:
+                pass
+        lexer = shlex.shlex("\n".join(kept), posix=True, punctuation_chars="<>|&;()\n")
+        lexer.whitespace = " \t\r"
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        return list(lexer)
 
     def _remote_segment(self, tokens: list[str], cwd: Path, *, residuals: bool = True) -> Decision:
         if not tokens:
