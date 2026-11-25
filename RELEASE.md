@@ -50,3 +50,8 @@ Limits.
   another group after install makes doctor report the file changed and makes
   uninstall refuse until the next update; a moved Python stops the launcher
   and makes reinstall refuse.
+- If the T3 Code provider folder exists but cannot be listed, for example
+  after a restore that left its permissions wrong, install covers only
+  `~/.gemini` without saying it skipped T3 Code, and the terminal hook does
+  not protect the T3 Code hooks file. Fix the folder's permissions and run
+  the install again.
