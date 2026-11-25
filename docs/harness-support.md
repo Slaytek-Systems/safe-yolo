@@ -79,8 +79,9 @@ failed to load shows `"status":"failed"` with its error. The first call after
 the server starts can return an empty list while plugins load; run it again.
 `opencode plugin list` lists failed plugins without their status, so it is not
 a check. Then, in a session, ask for `echo hello`, which should run, and
-`git push --force origin main` in a scratch repository, which Safe YOLO should
-deny.
+`git push --force origin main` in a new empty folder after `git init`, which
+Safe YOLO should deny. With no remote, nothing is pushed if the plugin did not
+load.
 
 Uninstall, and deactivate when there was no previous file, copy the plugin to
 `~/.safe-yolo/backups/`, check the copy, check the plugin still has the bytes

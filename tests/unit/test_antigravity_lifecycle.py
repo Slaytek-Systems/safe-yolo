@@ -464,6 +464,18 @@ class AntigravityLifecycleTests(unittest.TestCase):
         self.assertEqual(before, (self.hooks.read_bytes(), self.receipt_path().read_bytes()))
         self.assertTrue(self.doctor()["healthy"], self.doctor())
 
+    def test_one_hooks_file_cannot_be_managed_under_two_harness_ids(self):
+        profile = self.user_home / ".t3/userdata/providers/antigravity/abc123"
+        self.install(config_home=profile)
+        before = (profile / "config/hooks.json").read_bytes()
+
+        with patch("scripts.distribute.verify_source", return_value="e" * 40):
+            with self.assertRaisesRegex(RuntimeError, "already managed as antigravity"):
+                install_harness(harness="antigravity-t3", source=self.source, safe_yolo_home=self.safe_yolo_home,
+                                user_home=self.user_home, expected_commit="e" * 40)
+
+        self.assertEqual(before, (profile / "config/hooks.json").read_bytes())
+
     def test_a_hand_wired_group_whose_release_does_not_verify_is_refused_untouched(self):
         cases = {
             "empty release, missing bootstrap, bad pin": lambda: (
@@ -633,6 +645,27 @@ class AntigravityGlobalLifecycleTests(unittest.TestCase):
             run(launcher, "uninstall")
 
             self.assertEqual((OTHER_FILE, OTHER_FILE), (terminal.read_text(), in_t3.read_text()))
+
+    @patch("scripts.package.verify_source", return_value="a" * 40)
+    def test_a_refusal_in_one_folder_says_which_folder_was_installed(self, _verify):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            archive = build_bundle(ROOT, root / "downloads", "a" * 40)
+            with zipfile.ZipFile(archive) as bundle:
+                bundle.extractall(root / "first")
+            first = next((root / "first").iterdir())
+            user = root / "user"
+            in_t3 = user / ".t3/userdata/providers/antigravity/abc123/config/hooks.json"
+            in_t3.parent.mkdir(parents=True)
+            in_t3.write_text('{"herdr": {}, "herdr": {}}')
+            environment = {key: value for key, value in os.environ.items() if key != "GEMINI_HOME"}
+            result = subprocess.run(
+                [sys.executable, str(first / "safe-yolo"), "--home", str(root / "runtime"), "--user-home", str(user),
+                 "install", "--harness", "antigravity"], capture_output=True, text=True, env=environment)
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("Installed antigravity. Not installed: antigravity-t3:", result.stdout + result.stderr)
+            self.assertEqual('{"herdr": {}, "herdr": {}}', in_t3.read_text())
 
     @patch("scripts.package.verify_source", return_value="a" * 40)
     def test_install_without_a_t3_code_profile_covers_only_the_terminal_folder(self, _verify):

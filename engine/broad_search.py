@@ -19,6 +19,7 @@ HOME_ROOTS = (
     ".local", ".local/state", ".local/share", ".cache",
     # The harness folders of scripts/harness_specs.py.
     ".codex", ".claude", ".cursor", ".grok", ".config/opencode", ".gemini", ".devin",
+    ".t3/userdata/providers/antigravity",
 )
 # `find` reads names, not contents, so only the trees that hold everything count.
 WALK_ROOTS = ("/", "/home", "/Users")

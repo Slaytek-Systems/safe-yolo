@@ -85,8 +85,6 @@ class BroadSearchTests(unittest.TestCase):
 
     def test_every_known_harness_folder_is_a_root(self):
         for spec in HARNESSES:
-            if spec.id == "antigravity-t3":
-                continue  # A profile folder inside T3 Code's data, not a harness folder of its own.
             with self.subTest(harness=spec.id):
                 decision = self.shell(f"rg needle ~/{spec.config_dir}")
                 self.assertEqual(("deny", BROAD), (decision.outcome, decision.consequence))

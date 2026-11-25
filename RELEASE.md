@@ -1,7 +1,8 @@
 # Safe YOLO 3.0.0-beta.16
 
 One Antigravity install now covers every place Antigravity runs on the
-machine. The policy is the one in beta.12.
+machine. The policy is the one in beta.12 with two additions for the T3 Code
+profile folder, listed below.
 
 T3 Code runs Antigravity from a profile folder of its own, under
 `~/.t3/userdata/providers/antigravity/`, with its own `config/hooks.json`.
@@ -17,6 +18,18 @@ Until now Safe YOLO managed one Antigravity hooks file, so either the terminal
   beta.15.
 - `--config-home` still selects one folder and installs only the harness
   named.
+- Policy: `~/.t3/userdata/providers/antigravity` is now a whole-folder search
+  root like `~/.gemini`, and every Antigravity hook protects the `config`
+  folder and token files of each T3 Code profile, so the terminal `agy`
+  cannot edit the T3 Code hooks file.
+- One hooks file belongs to one harness id. If beta.15 was installed with
+  `--config-home <T3 profile>`, run `safe-yolo uninstall --harness
+  antigravity` first; install says so.
+- When one of the two folders refuses, install still tries the other and the
+  error names what was installed and what was not. Plain `safe-yolo rollback`
+  skips a harness that has no previous install.
+- The suggested after-install check now uses a new empty folder after
+  `git init`, so nothing is pushed if the hook did not load.
 
 Limits.
 

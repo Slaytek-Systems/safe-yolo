@@ -476,6 +476,14 @@ def install_harness(
             f"The active {spec.name} installation is wired to {previous_receipt.get('config_path')}, "
             f"not {target}. Run `safe-yolo uninstall --harness {spec.id}` first, or select that folder again."
         )
+    for other in HARNESSES:
+        if other.id != spec.id and other.lifecycle_supported and _has_harness_receipt(home, other):
+            claimed, _ = _read_harness_receipt(home, other)
+            if claimed.get('status') == 'active' and Path(str(claimed.get('config_path'))) == target:
+                raise RuntimeError(
+                    f"{target} is already managed as {other.id}. Run `safe-yolo uninstall --harness {other.id}` "
+                    f"first, then install {spec.id}."
+                )
     if spec.id == "opencode":
         _require_opencode_v2()
     source_commit = (
@@ -625,7 +633,8 @@ def install_harness(
                 "run `opencode api plugin.list` against the server and location your sessions use and confirm the "
                 "safe-yolo entry has state status `active`, not `failed`, with this plugin file as its source "
                 "(repeat it if the list is empty while plugins load), then in a session check that "
-                "`echo hello` runs and `git push --force origin main` in a scratch repository is denied."
+                "`echo hello` runs and `git push --force origin main` is denied in a new empty folder after "
+                "`git init` (no remote, so nothing is pushed if the plugin did not load)."
             ),
             "antigravity": (
                 "Start a new Antigravity session, run /hooks and confirm the safe-yolo PreToolUse hook is listed. "
@@ -633,8 +642,9 @@ def install_harness(
                 "hook. Antigravity ignores a hook that crashes, times out or prints invalid output."
             ),
             "antigravity-t3": (
-                "Start a new Antigravity thread in T3 Code and check that `git push --force origin main` in a "
-                "scratch repository is denied. Doctor runs the command in the hooks file but cannot prove "
+                "Start a new Antigravity thread in T3 Code and check that `git push --force origin main` is "
+                "denied in a new empty folder after `git init` (no remote, so nothing is pushed if the hook did "
+                "not load). Doctor runs the command in the hooks file but cannot prove "
                 "Antigravity loaded the hook. Antigravity ignores a hook that crashes, times out or prints "
                 "invalid output."
             ),
@@ -858,7 +868,7 @@ def main(argv: list[str] | None = None) -> int:
             revision = _current_commit(source)
             from scripts.global_cli import install_command
             launcher = install_command(source, args.home.resolve(), args.user_home.resolve())
-            reports, skipped = [], []
+            reports, skipped, refused = [], [], []
             for harness in selected:
                 try:
                     reports.append(install_harness(harness=harness, source=source, safe_yolo_home=args.home,
@@ -868,6 +878,13 @@ def main(argv: list[str] | None = None) -> int:
                     if args.harness:
                         raise
                     skipped.append({'harness': harness, 'reason': str(error)})
+                except RuntimeError as error:
+                    if len(selected) == 1 or not args.harness:
+                        raise
+                    refused.append(f'{harness}: {error}')
+            if refused:
+                done = ', '.join(report['harness'] for report in reports) or 'nothing'
+                raise RuntimeError(f"Installed {done}. Not installed: {'; '.join(refused)}")
             result = reports[0] if len(selected) == 1 and args.harness else {
                 'healthy': True, 'reports': reports, 'skipped': skipped}
             result['command'] = str(launcher) if launcher else None
@@ -898,7 +915,10 @@ def main(argv: list[str] | None = None) -> int:
                 result = {'healthy': True, 'reports': reports, 'command': str(launcher)}
         elif args.command in {'rollback', 'uninstall'}:
             from scripts.global_cli import active_receipts, restore
-            selected = [args.harness] if args.harness else [receipt['harness'] for receipt in active_receipts(args.home.resolve())]
+            selected = [args.harness] if args.harness else [
+                receipt['harness'] for receipt in active_receipts(args.home.resolve())
+                # A harness installed once has nothing to roll back to; it must not stop the others.
+                if args.command == 'uninstall' or receipt.get('previous_install')]
             if not selected:
                 raise RuntimeError('No active installations found.')
             result = {'reports': [restore(args.home.resolve(), args.user_home.resolve(), harness,
