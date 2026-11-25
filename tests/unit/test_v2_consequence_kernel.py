@@ -565,6 +565,8 @@ class V2ConsequenceKernelTests(unittest.TestCase):
             "(cd repo && git push --force origin main)": "git.history_mutation",
             "for f in a b; do rm \"$f\"; done": "filesystem.delete",
             "if true; then railway up; fi": "production.mutate",
+            "# don't skip this\ngit push --force origin main": "git.history_mutation",
+            "ssh buildbox 'git status\ngit push --force origin main'": "git.history_mutation",
         }
         for command, consequence in expected.items():
             with self.subTest(command=command):
@@ -579,6 +581,9 @@ class V2ConsequenceKernelTests(unittest.TestCase):
             "git status && git diff | head -50",
             "git commit -F - <<'EOF'\nStop running rm -rf build; git push --force.\nEOF\ngit log -1",
             "cat <<EOF > notes.txt && git status\nrm -rf everything\nEOF",
+            "git status # Inspect the worktree; rm -rf build is a separate step",
+            "rg -nF '|' scripts/rm",
+            "find . -name '*.orig' -exec echo {} \\; && git status",
         ):
             with self.subTest(command=command):
                 self.assertEqual("allow", self._shell(command).outcome)
@@ -597,6 +602,9 @@ class V2ConsequenceKernelTests(unittest.TestCase):
 
         self.assertEqual("allow", shell("cd /tmp/work && rm -rf build").outcome)
         self.assertEqual("approval_required", shell("cd /workspace && rm -rf build").outcome)
+        self.assertEqual("allow", shell("cd -- /tmp && rm -rf build").outcome)
+        self.assertEqual("approval_required", shell("(cd /tmp && ls); rm -rf build").outcome)
+        self.assertEqual("allow", shell("(cd /tmp && rm -rf build); ls").outcome)
         self.assertEqual("operator_only", shell("cd /home/test && rm -rf .safe-yolo").outcome)
 
     def _shell(self, command):
