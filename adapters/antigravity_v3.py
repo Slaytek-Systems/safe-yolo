@@ -93,6 +93,12 @@ def build_kernel(
     gemini = Path(gemini_home).expanduser()
     home = Path(user_home).expanduser()
     default_gemini = home / ".gemini"
+    # T3 Code keeps one Antigravity profile per provider instance; each has a hooks file of its own.
+    t3_parent = home / ".t3" / "userdata" / "providers" / "antigravity"
+    try:
+        t3_profiles = sorted(path for path in t3_parent.iterdir() if path.is_dir())
+    except OSError:  # absent or unlistable: the terminal policy must still run
+        t3_profiles = []
     enforcement = [
         str(safe_yolo),
         str(gemini / "config" / "hooks.json"),
@@ -100,6 +106,7 @@ def build_kernel(
         str(gemini / "antigravity-acp" / "settings.json"),
         str(gemini / "antigravity-acp" / "trusted_workspaces.json"),
         str(default_gemini / "config"),
+        *(str(profile / "config") for profile in t3_profiles),
     ]
     if cwd:
         project = Path(cwd).expanduser()
@@ -113,6 +120,8 @@ def build_kernel(
         credential_paths=(
             str(gemini / "antigravity-acp" / "acp_token.json"),
             str(gemini / "antigravity-acp" / "acp_business_token.json"),
+            *(str(profile / "antigravity-acp" / name) for profile in t3_profiles
+              for name in ("acp_token.json", "acp_business_token.json")),
             str(home / ".ssh"),
             str(home / ".gnupg"),
         ),

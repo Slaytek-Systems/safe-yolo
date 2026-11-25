@@ -464,6 +464,25 @@ class AntigravityLifecycleTests(unittest.TestCase):
         self.assertEqual(before, (self.hooks.read_bytes(), self.receipt_path().read_bytes()))
         self.assertTrue(self.doctor()["healthy"], self.doctor())
 
+    def test_one_hooks_file_cannot_be_managed_under_two_harness_ids(self):
+        profile = self.user_home / ".t3/userdata/providers/antigravity/abc123"
+        self.install(config_home=profile)
+        before = (profile / "config/hooks.json").read_bytes()
+
+        with patch("scripts.distribute.verify_source", return_value="e" * 40):
+            with self.assertRaisesRegex(RuntimeError, "already managed as antigravity"):
+                install_harness(harness="antigravity-t3", source=self.source, safe_yolo_home=self.safe_yolo_home,
+                                user_home=self.user_home, expected_commit="e" * 40)
+
+        self.assertEqual(before, (profile / "config/hooks.json").read_bytes())
+
+    def test_an_unreadable_receipt_of_another_harness_does_not_stop_the_install(self):
+        claude = self.safe_yolo_home / "state" / "installations" / "claude-code.json"
+        claude.parent.mkdir(parents=True)
+        claude.write_text("not json")
+
+        self.assertEqual("active", self.install()["status"])
+
     def test_a_hand_wired_group_whose_release_does_not_verify_is_refused_untouched(self):
         cases = {
             "empty release, missing bootstrap, bad pin": lambda: (
@@ -596,6 +615,83 @@ class AntigravityGlobalLifecycleTests(unittest.TestCase):
             run(launcher, "uninstall")
 
             self.assertEqual(OTHER_FILE, hooks.read_text())
+
+
+    @patch("scripts.package.verify_source", return_value="a" * 40)
+    def test_one_install_covers_the_terminal_folder_and_the_t3_code_profile(self, _verify):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            archive = build_bundle(ROOT, root / "downloads", "a" * 40)
+            with zipfile.ZipFile(archive) as bundle:
+                bundle.extractall(root / "first")
+            first = next((root / "first").iterdir())
+            user = root / "user"
+            home = root / "runtime"
+            terminal = user / ".gemini/config/hooks.json"
+            profile = user / ".t3/userdata/providers/antigravity/abc123"
+            in_t3 = profile / "config/hooks.json"
+            for hooks in (terminal, in_t3):
+                hooks.parent.mkdir(parents=True)
+                hooks.write_text(OTHER_FILE)
+            environment = {key: value for key, value in os.environ.items() if key != "GEMINI_HOME"}
+
+            def run(command, *args):
+                result = subprocess.run([*command, *args], capture_output=True, text=True, env=environment)
+                self.assertEqual(0, result.returncode, result.stderr)
+                return json.loads(result.stdout)
+
+            run([sys.executable, str(first / "safe-yolo"), "--home", str(home), "--user-home", str(user)],
+                "install", "--harness", "antigravity")
+            launcher = [str(user / ".local/bin/safe-yolo")]
+            for hooks, folder in ((terminal, user / ".gemini"), (in_t3, profile)):
+                command = json.loads(hooks.read_text())["safe-yolo"]["PreToolUse"][0]["hooks"][0]["command"]
+                self.assertEqual(str(folder), shlex.split(command)[-1])
+            report = run(launcher, "doctor")
+            self.assertTrue(report["healthy"], report)
+            self.assertEqual({"antigravity", "antigravity-t3"}, {item["harness"] for item in report["reports"]})
+            run(launcher, "uninstall")
+
+            self.assertEqual((OTHER_FILE, OTHER_FILE), (terminal.read_text(), in_t3.read_text()))
+
+    @patch("scripts.package.verify_source", return_value="a" * 40)
+    def test_a_refusal_in_one_folder_says_which_folder_was_installed(self, _verify):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            archive = build_bundle(ROOT, root / "downloads", "a" * 40)
+            with zipfile.ZipFile(archive) as bundle:
+                bundle.extractall(root / "first")
+            first = next((root / "first").iterdir())
+            user = root / "user"
+            in_t3 = user / ".t3/userdata/providers/antigravity/abc123/config/hooks.json"
+            in_t3.parent.mkdir(parents=True)
+            in_t3.write_text('{"herdr": {}, "herdr": {}}')
+            environment = {key: value for key, value in os.environ.items() if key != "GEMINI_HOME"}
+            result = subprocess.run(
+                [sys.executable, str(first / "safe-yolo"), "--home", str(root / "runtime"), "--user-home", str(user),
+                 "install", "--harness", "antigravity"], capture_output=True, text=True, env=environment)
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("Installed antigravity. Not installed: antigravity-t3:", result.stdout + result.stderr)
+            self.assertEqual('{"herdr": {}, "herdr": {}}', in_t3.read_text())
+
+    @patch("scripts.package.verify_source", return_value="a" * 40)
+    def test_install_without_a_t3_code_profile_covers_only_the_terminal_folder(self, _verify):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            archive = build_bundle(ROOT, root / "downloads", "a" * 40)
+            with zipfile.ZipFile(archive) as bundle:
+                bundle.extractall(root / "first")
+            first = next((root / "first").iterdir())
+            user = root / "user"
+            (user / ".gemini/config").mkdir(parents=True)
+            environment = {key: value for key, value in os.environ.items() if key != "GEMINI_HOME"}
+            result = subprocess.run(
+                [sys.executable, str(first / "safe-yolo"), "--home", str(root / "runtime"), "--user-home", str(user),
+                 "install", "--harness", "antigravity"], capture_output=True, text=True, env=environment)
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual("antigravity", json.loads(result.stdout)["harness"])
+            self.assertFalse((user / ".t3").exists())
 
 
 if __name__ == "__main__":

@@ -53,10 +53,23 @@ HARNESSES = (
         "config/hooks.json",
         True,
     ),
+    HarnessSpec(
+        "antigravity-t3",
+        "Antigravity in T3 Code",
+        "beta",
+        "antigravity_v3",
+        "agy",
+        ".t3/userdata/providers/antigravity",
+        "config/hooks.json",
+        True,
+    ),
     HarnessSpec("devin", "Devin", "adapter-only", "devin_v3", "devin", ".devin", "", False),
 )
 
 HARNESS_BY_ID = {spec.id: spec for spec in HARNESSES}
+
+# T3 Code runs Antigravity from a profile folder of its own, so one machine has two hooks files.
+ANTIGRAVITY_IDS = frozenset({"antigravity", "antigravity-t3"})
 
 HARNESS_HOME_ENV = {
     "codex": "CODEX_HOME",

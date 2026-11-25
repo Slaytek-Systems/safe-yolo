@@ -19,7 +19,10 @@ HOME_ROOTS = (
     ".local", ".local/state", ".local/share", ".cache",
     # The harness folders of scripts/harness_specs.py.
     ".codex", ".claude", ".cursor", ".grok", ".config/opencode", ".gemini", ".devin",
+    ".t3/userdata/providers/antigravity",
 )
+# T3 Code gives each Antigravity provider a profile folder here; each one is that provider's whole `.gemini`.
+PROFILE_PARENT = ".t3/userdata/providers/antigravity"
 # `find` reads names, not contents, so only the trees that hold everything count.
 WALK_ROOTS = ("/", "/home", "/Users")
 MAX_FIND_DEPTH = 3
@@ -275,10 +278,11 @@ def _normal(path: str) -> str | None:
     return "/" + os.path.normpath(path).lstrip("/") if path.startswith("/") else None
 
 
-def _root_named(words: list[str], roots: set[str | None]) -> str | None:
+def _root_named(words: list[str], roots: set[str | None], home: str | None = None) -> str | None:
+    profiles = _normal(f"{home}/{PROFILE_PARENT}") if home else None
     for word in words:
         path = _normal(word)
-        if path and path in roots:
+        if path and (path in roots or (profiles and os.path.dirname(path) == profiles)):
             return path
     return None
 
@@ -302,7 +306,7 @@ def _classify(script: str, home: str) -> Hit | None:
         if folder not in _TOOL_FOLDERS:
             continue  # some other program that shares the name
         if tool in ("grep", "egrep", "fgrep", "rg"):
-            root = _root_named(_search_paths(tool, args), _roots(home))
+            root = _root_named(_search_paths(tool, args), _roots(home), home)
         elif tool == "find":
             root = _root_named(_find_paths(args), walk_roots)
         else:
@@ -322,6 +326,6 @@ def inspect(payload: dict[str, Any], home: str) -> Hit | None:
         command = tool_input.get("command") or tool_input.get("cmd")
         return _classify(command, home) if isinstance(command, str) else None
     if tool_name == "grep" and isinstance(tool_input.get("path"), str):
-        root = _root_named([tool_input["path"]], _roots(home))
+        root = _root_named([tool_input["path"]], _roots(home), home)
         return Hit("grep tool", root) if root else None
     return None

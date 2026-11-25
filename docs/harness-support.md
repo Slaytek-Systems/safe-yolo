@@ -12,6 +12,7 @@ and exact rollback are proven.
 | Grok | Adapter only | `grok` | Native hook/plugin surface | Lifecycle installer deferred |
 | OpenCode | Beta | `opencode` | `plugins/safe-yolo.js` in the OpenCode config folder (V2) | Discovered at startup; run `opencode service restart` if the background service runs, then check `opencode api plugin.list` |
 | Antigravity | Beta | `antigravity` | `safe-yolo` named group in `config/hooks.json` under the Gemini root | Start a new session and confirm the hook in `/hooks` |
+| Antigravity in T3 Code | Beta | `antigravity-t3` | The same group in `config/hooks.json` under the T3 Code Antigravity profile; installed together with `antigravity` | Start a new Antigravity thread in T3 Code |
 | Devin | Adapter only | `devin` | Adapter transport only | No supported native installation surface |
 
 The CLI reports the same machine-readable distinction:
@@ -78,8 +79,9 @@ failed to load shows `"status":"failed"` with its error. The first call after
 the server starts can return an empty list while plugins load; run it again.
 `opencode plugin list` lists failed plugins without their status, so it is not
 a check. Then, in a session, ask for `echo hello`, which should run, and
-`git push --force origin main` in a scratch repository, which Safe YOLO should
-deny.
+`git push --force origin main` in a new empty folder after `git init`, which
+Safe YOLO should deny. With no remote, nothing is pushed if the plugin did not
+load.
 
 Uninstall, and deactivate when there was no previous file, copy the plugin to
 `~/.safe-yolo/backups/`, check the copy, check the plugin still has the bytes
@@ -162,12 +164,18 @@ Doctor cannot prove Antigravity loaded the hook. Start a new
 Antigravity session, run `/hooks` and confirm the `safe-yolo` `PreToolUse`
 hook is listed.
 
-One Safe YOLO home keeps one Antigravity receipt, so it covers one Gemini
-root. Install refuses a second root while the first is active, and a second
-Safe YOLO home for the same user is refused because the global `safe-yolo`
-command belongs to the first. A T3 Code profile root is covered only when you
-choose it with `--config-home <profile>`, and then `~/.gemini` is not covered.
-Covering both roots at once is not supported in this release.
+T3 Code runs Antigravity from a profile folder of its own, under
+`~/.t3/userdata/providers/antigravity/`, and passes it as `--gemini-dir`. That
+folder has its own `config/hooks.json`, so one machine can have two.
+`safe-yolo install --harness antigravity` covers both: `~/.gemini` as the
+`antigravity` harness and the T3 Code profile as `antigravity-t3`. Each has its
+own receipt, and doctor, update, rollback and uninstall act on both. When T3
+Code has made no profile yet, only `~/.gemini` is covered; run the install
+again after the first Antigravity thread in T3 Code. With more than one
+profile, install names them and asks for
+`--harness antigravity-t3 --config-home <profile>`. If T3 Code later moves to
+a new profile folder, the new folder has no hook until install runs again;
+doctor still checks the old one and does not notice.
 
 Current native contract references:
 
