@@ -112,7 +112,9 @@ _CONTENT_DESTROYING_COMMANDS: dict[str, tuple[str, tuple[str, ...]]] = {
 _SED_VALUE_OPTIONS = ("efl", ("--expression", "--file", "--line-length"))
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 # Shell punctuation inside quotes, kept as private characters while a line is split.
-_QUOTED = str.maketrans({mark: chr(0xE000 + index) for index, mark in enumerate(";|&()<>\n#")})
+_QUOTED = str.maketrans({mark: chr(0xE000 + index) for index, mark in enumerate(";|&()<>\n# \t\r")})
+# A redirect's & and | are kept as private characters so 2>&1 and >| stay one word.
+_QUOTED_REDIRECT = ("&|").translate(_QUOTED)
 _UNQUOTED = {ord(value): key for key, value in _QUOTED.items()}
 # Words that only open a command; the command they open is the next word.
 _LEADING_WORDS = frozenset({"{", "}", "!", "if", "then", "elif", "else", "do", "while", "until", "time"})
@@ -829,9 +831,9 @@ class ConsequenceKernel:
         directories = [cwd]
         for words, separator in commands:
             if words and Path(words[0]).name == "cd":
-                operands = self._cd_operands([word.translate(_UNQUOTED) for word in words[1:]])
+                operands = self._cd_operands(words[1:])
                 if len(operands) == 1:
-                    directories[-1] = self._resolve_from(operands[0], directories[-1])
+                    directories[-1] = self._resolve_from(operands[0].translate(_UNQUOTED), directories[-1])
             elif words:
                 text = " ".join(shlex.quote(word.translate(_UNQUOTED)) for word in words)
                 for residuals in (False, True):
@@ -853,7 +855,9 @@ class ConsequenceKernel:
             if target:
                 target = False
             elif _REDIRECT_SYNTAX & set(word):
-                target = word.rstrip("0123456789").endswith(("<", ">", "&", "|"))
+                # Quoted < and > are still private characters here. A bare operator
+                # such as > or 2> takes the next word; 2>&1 or >file is complete.
+                target = not word.lstrip("0123456789").strip("<>&|" + "".join(_QUOTED_REDIRECT))
             elif not word.startswith("-"):
                 operands.append(word)
         return operands
