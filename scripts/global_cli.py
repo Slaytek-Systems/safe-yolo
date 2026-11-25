@@ -128,33 +128,37 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
             f'service, and any `opencode serve` you started), then confirm safe-yolo.js is absent from {config.parent} '
             'and `opencode api plugin.list` against that server no longer lists safe-yolo.')}
     current_bytes = None if config.is_symlink() or not config.is_file() else config.read_bytes()
-    if harness == 'opencode':
-        from scripts.harness_wiring import opencode_plugin_path_problem
-        if opencode_plugin_path_problem(config):
-            current_bytes = None
+    from scripts.harness_wiring import config_path_problem
+    if config_path_problem(harness, config):
+        current_bytes = None
     if current_bytes is None or hashlib.sha256(current_bytes).hexdigest() != receipt['installed_config_sha256']:
         raise RuntimeError('Harness configuration changed; refusing to overwrite newer work.')
     if uninstall:
         baseline = receipt.get('original_install', receipt)
         original_bytes = None
         original = {}
+        from scripts.harness_wiring import ANTIGRAVITY_GROUP, read_antigravity_hooks
         if baseline['previous_config_existed']:
             original_bytes = Path(baseline['previous_config_backup']).read_bytes()
-            original = json.loads(original_bytes)
-        document = json.loads(config.read_text())
-        event = 'preToolUse' if harness == 'cursor' else 'PreToolUse'
-        original_hooks = original.get('hooks', {})
-        if original_hooks.get(event):
-            raise RuntimeError('The legacy baseline already contains an enforcement hook; a complete uninstall needs operator review.')
-        others = _without_own_hook(document['hooks'].get(event), receipt, home) if harness == 'claude-code' else []
-        if others:
-            document['hooks'][event] = others
-        elif event in original_hooks:
-            document['hooks'][event] = original_hooks[event]
+            original = (read_antigravity_hooks(Path(baseline['previous_config_backup'])) if harness == 'antigravity'
+                        else json.loads(original_bytes))
+        document = read_antigravity_hooks(config) if harness == 'antigravity' else json.loads(config.read_text())
+        if harness == 'antigravity':
+            document.pop(ANTIGRAVITY_GROUP)
         else:
-            document['hooks'].pop(event, None)
-        if not document['hooks'] and 'hooks' not in original:
-            document.pop('hooks')
+            event = 'preToolUse' if harness == 'cursor' else 'PreToolUse'
+            original_hooks = original.get('hooks', {})
+            if original_hooks.get(event):
+                raise RuntimeError('The legacy baseline already contains an enforcement hook; a complete uninstall needs operator review.')
+            others = _without_own_hook(document['hooks'].get(event), receipt, home) if harness == 'claude-code' else []
+            if others:
+                document['hooks'][event] = others
+            elif event in original_hooks:
+                document['hooks'][event] = original_hooks[event]
+            else:
+                document['hooks'].pop(event, None)
+            if not document['hooks'] and 'hooks' not in original:
+                document.pop('hooks')
         owned_key = 'version' if harness == 'cursor' else 'description' if harness == 'codex' else None
         if owned_key:
             if owned_key in original:
@@ -166,7 +170,7 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
             retained = home / 'backups' / ('uninstalled-' + harness + '-' + datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ'))
             os.replace(config, retained)
         else:
-            payload = original_bytes if document == original and original_bytes is not None else (json.dumps(document, indent=2) + '\n').encode()
+            payload = original_bytes if document == original and original_bytes is not None else (json.dumps(document, indent=2, allow_nan=harness != 'antigravity') + '\n').encode()
             _atomic_write(config, payload, baseline['previous_config_mode'])
         receipt['status'] = 'inactive'
         _atomic_write(path, (json.dumps(receipt, indent=2) + '\n').encode())
@@ -181,6 +185,17 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
     report = inspect_release(Path(previous['release']), previous['manifest_sha256'])
     if not report['healthy']:
         raise RuntimeError('Previous release failed verification; rollback was not applied.')
+    if harness == 'antigravity':
+        # Antigravity ignores a hook that cannot start, so a dead command would restore no guard at all.
+        from scripts.distribute import _run_canaries
+        try:
+            canaries = _run_canaries(home, Path(previous['release']), previous['manifest_sha256'],
+                                     harness=harness, config_path=backup)
+        except RuntimeError as error:
+            raise RuntimeError(f'{error}; rollback was not applied.') from error
+        if not all(canaries.values()):
+            raise RuntimeError(f'Previous hook command failed its allow/deny check ({canaries}); '
+                               'rollback was not applied.')
     _atomic_write(config, backup.read_bytes(), receipt['previous_config_mode'])
     _atomic_write(path, (json.dumps(previous, indent=2) + '\n').encode())
     return {'status': 'active', 'harness': harness, 'version': previous['version'],

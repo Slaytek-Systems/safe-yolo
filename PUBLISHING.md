@@ -7,8 +7,8 @@ availability does not replace that custom permission with an open-source license
 1. Make changes on a branch. Give every changed release a new `VERSION`, update
    `RELEASE.md`, and run `python3 -m unittest discover -s tests/unit`.
 2. Commit, then run `python3 scripts/publish.py --check`. This builds from the
-   clean source commit and tests an isolated Codex, Claude Code, Cursor, and
-   OpenCode installation, doctor, update, and uninstall. It does not touch your live tools.
+   clean source commit and tests an isolated Codex, Claude Code, Cursor,
+   OpenCode and Antigravity installation, doctor, update, and uninstall. It does not touch your live tools.
 3. Open a PR, complete review and CI, and merge into `main`.
 4. Run **Publish Safe YOLO** in GitHub Actions on `main`, or:
    `gh workflow run publish.yml --repo Slaytek-Systems/safe-yolo --ref main`.

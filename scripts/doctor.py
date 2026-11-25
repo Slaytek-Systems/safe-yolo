@@ -12,7 +12,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.harness_wiring import command_hook
+from scripts.harness_wiring import (
+    ANTIGRAVITY_GROUP,
+    antigravity_group_command,
+    antigravity_hooks_path_problem,
+    command_hook,
+    read_antigravity_hooks,
+)
 from scripts.release_manifest import ENTRYPOINTS, verify_manifest
 
 
@@ -196,6 +202,29 @@ def pinned_hook_slots(groups: Any, **pin: Any) -> list[tuple[int, int]]:
         and _is_installer_spelling(hook["command"])
         and _command_is_pinned(hook["command"], **pin)
     ]
+
+
+def owns_antigravity_group(group: Any, **pin: Any) -> bool:
+    """Whether this named group is, field for field, the one Safe YOLO writes for this pin."""
+    command = antigravity_group_command(group)
+    return command is not None and _is_installer_spelling(command) and _command_is_pinned(command, **pin)
+
+
+def inspect_antigravity_wiring(path: str | Path, **pin: Any) -> dict[str, Any]:
+    """Read-only check of Safe YOLO's named group in Antigravity's hooks.json; other groups are not judged."""
+    problem = antigravity_hooks_path_problem(Path(path))
+    if problem:
+        return {"healthy": False, "problems": [problem]}
+    try:
+        document = read_antigravity_hooks(Path(path))
+    except RuntimeError as error:
+        return {"healthy": False, "problems": [str(error)]}
+    problems: list[str] = []
+    if not owns_antigravity_group(document.get(ANTIGRAVITY_GROUP), **pin):
+        problems.append("Antigravity safe-yolo hook group is not the one Safe YOLO installed")
+    if not _release_exposes_entry(pin["release_path"], pin["entry"]):
+        problems.append(f"release does not expose the expected entrypoint: {pin['entry']}")
+    return {"healthy": not problems, "problems": problems}
 
 
 INSTALLER_FLAG_ORDER = (

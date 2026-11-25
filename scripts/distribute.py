@@ -21,17 +21,28 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.activate_v3 import _ensure_release, verify_source
-from scripts.doctor import inspect_claude_code_wiring, inspect_codex_wiring, inspect_release, pinned_hook_slots
+from scripts.doctor import (
+    inspect_antigravity_wiring,
+    inspect_claude_code_wiring,
+    inspect_codex_wiring,
+    inspect_release,
+    owns_antigravity_group,
+    pinned_hook_slots,
+)
 from scripts.harness_specs import HARNESS_BY_ID, HARNESS_HOME_ENV, HARNESSES, HarnessSpec
 from scripts.package import MANIFEST as DISTRIBUTION_MANIFEST, verify_bundle
 from scripts.harness_wiring import (
+    ANTIGRAVITY_GROUP as _ANTIGRAVITY_GROUP,
+    config_path_problem as _config_path_problem,
     inspect_cursor_wiring as _inspect_cursor_wiring,
     inspect_opencode_wiring as _inspect_opencode_wiring,
-    opencode_plugin_path_problem as _opencode_plugin_path_problem,
+    is_hand_wired_antigravity_group as _is_hand_wired_antigravity_group,
     pinned_command as _pinned_command,
+    prepare_antigravity_hooks as _prepare_antigravity_hooks,
     prepare_command_hooks as _prepare_hooks,
     prepare_cursor_hooks as _prepare_cursor_hooks,
     prepare_opencode_plugin as _prepare_opencode_plugin,
+    read_antigravity_hooks as _read_antigravity_hooks,
     read_json_object as _read_json_object,
     render_opencode_plugin as _render_opencode_plugin,
 )
@@ -114,9 +125,18 @@ def _run_canaries(
     entry: str = "codex_v3",
     user_home: Path | None = None,
     harness_home: Path | None = None,
+    config_path: Path | None = None,
 ) -> dict[str, bool]:
-    command = shlex.split(
-        _pinned_command(
+    """Allow and deny replies of the hook command; for Antigravity, the command its hooks file runs.
+
+    The Antigravity hooks file must already have passed the wiring check.
+    """
+    timeout = None
+    if harness == "antigravity":
+        hook = _read_antigravity_hooks(config_path)[_ANTIGRAVITY_GROUP]["PreToolUse"][0]["hooks"][0]
+        command_text, timeout = hook["command"], hook["timeout"]
+    else:
+        command_text = _pinned_command(
             home,
             release,
             manifest_sha256,
@@ -124,7 +144,7 @@ def _run_canaries(
             user_home=user_home,
             harness_home=harness_home,
         )
-    )
+    command = shlex.split(command_text)
     base = {"hook_event_name": "PreToolUse", "cwd": str(Path.cwd())}
     if harness == "codex":
         allowed_payload = {**base, "tool_name": "exec_command", "tool_input": {"cmd": "git status --short"}}
@@ -136,10 +156,28 @@ def _run_canaries(
         opencode_base = {"tool": "shell", "sessionID": "canary", "callID": "canary", "cwd": str(Path.cwd())}
         allowed_payload = {**opencode_base, "args": {"command": "git status --short"}}
         denied_payload = {**opencode_base, "args": {"command": "git push --force-with-lease"}}
+    elif harness == "antigravity":
+        antigravity_base = {"stepIdx": 0, "conversationId": "canary", "workspacePaths": [str(Path.cwd())]}
+        allowed_payload = {**antigravity_base, "toolCall": {"name": "run_command",
+                                                            "args": {"CommandLine": "git status --short"}}}
+        denied_payload = {**antigravity_base, "toolCall": {"name": "run_command",
+                                                           "args": {"CommandLine": "git push --force-with-lease"}}}
     else:
         cursor_base = {"hook_event_name": "preToolUse", "cwd": str(Path.cwd()), "tool_name": "Shell"}
         allowed_payload = {**cursor_base, "tool_input": {"command": "git status --short"}}
         denied_payload = {**cursor_base, "tool_input": {"command": "git push --force-with-lease"}}
+    if harness == "antigravity":
+        def reply(payload: dict[str, Any]) -> str | None:
+            try:
+                completed = subprocess.run(command, input=json.dumps(payload), text=True, capture_output=True,
+                                           check=False, timeout=timeout)
+            except OSError as error:
+                raise RuntimeError(f"Antigravity hook command cannot start: {command_text} ({error})") from error
+            except subprocess.TimeoutExpired:
+                return None
+            return _reply_decision(completed.stdout) if completed.returncode == 0 else None
+
+        return {"allow": reply(allowed_payload) == "allow", "deny": reply(denied_payload) == "deny"}
     allowed = subprocess.run(
         command,
         input=json.dumps(allowed_payload),
@@ -156,7 +194,7 @@ def _run_canaries(
     )
     if harness == "opencode":
         return {
-            outcome: completed.returncode == 0 and _opencode_decision(completed.stdout) == outcome
+            outcome: completed.returncode == 0 and _reply_decision(completed.stdout) == outcome
             for outcome, completed in (("allow", allowed), ("deny", denied))
         }
     allow_ok = allowed.returncode == 0 and not allowed.stdout.strip()
@@ -180,7 +218,7 @@ def _run_canaries(
     return {"allow": allow_ok, "deny": deny_ok}
 
 
-def _opencode_decision(stdout: str) -> str | None:
+def _reply_decision(stdout: str) -> str | None:
     try:
         decision = json.loads(stdout)
     except json.JSONDecodeError:
@@ -294,7 +332,7 @@ def _retire(
     by a retry that finds the file gone and that copy in place. A failed install passes its own
     attempt folder as `destination`, so an earlier retained copy can never keep the file in place.
     """
-    problem = _opencode_plugin_path_problem(path) if harness == "opencode" else None
+    problem = _config_path_problem(harness, path)
     if problem:
         raise RuntimeError(problem)
     destination = destination or home / "backups" / f"retired-{harness}-{expected_sha256}-{path.name}"
@@ -353,6 +391,18 @@ def _inspect_wiring(
             safe_yolo_home=home if user_home is not None else None,
             user_home=user_home,
             harness_home=harness_home,
+        )
+    if spec.id == "antigravity":
+        return inspect_antigravity_wiring(
+            config_path,
+            bootstrap_path=bootstrap_path,
+            release_path=release,
+            manifest_sha256=digest,
+            entry=spec.entry,
+            safe_yolo_home=home if user_home is not None else None,
+            user_home=user_home,
+            harness_home=harness_home,
+            state_dir=home / "state",
         )
     if spec.id == "claude-code":
         return inspect_claude_code_wiring(
@@ -448,6 +498,22 @@ def install_harness(
     else:
         if spec.id == "cursor":
             candidate, original_bytes, original_mode = _prepare_cursor_hooks(target, home, command)
+        elif spec.id == "antigravity":
+            def owns(group: Any) -> bool:
+                if not previous_receipt:
+                    return _is_hand_wired_antigravity_group(group, home)
+                return owns_antigravity_group(
+                    group,
+                    bootstrap_path=Path(previous_receipt['bootstrap']),
+                    release_path=Path(previous_receipt['release']),
+                    manifest_sha256=previous_receipt['manifest_sha256'],
+                    entry=spec.entry,
+                    safe_yolo_home=home,
+                    user_home=user,
+                    harness_home=harness_home,
+                    state_dir=home / "state",
+                )
+            candidate, original_bytes, original_mode = _prepare_antigravity_hooks(target, command, owns)
         else:
             own_slots = None
             if previous_receipt and spec.id == "claude-code":
@@ -469,7 +535,7 @@ def install_harness(
             candidate, original_bytes, original_mode = _prepare_hooks(
                 target, home, command, entry=spec.entry, label=spec.name, own_slots=own_slots
             )
-        payload = (json.dumps(candidate, indent=2) + "\n").encode()
+        payload = (json.dumps(candidate, indent=2, allow_nan=spec.id != "antigravity") + "\n").encode()
     backup_root = home / "backups" / (
         f"pre-{spec.id}-{version}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
     )
@@ -490,14 +556,19 @@ def install_harness(
             harness_home=harness_home,
             bootstrap=release / "scripts" / "bootstrap.py",
         )
-        canaries = _run_canaries(
-            home,
-            release,
-            digest,
-            harness=spec.id,
-            entry=spec.entry,
-            user_home=user,
-            harness_home=harness_home,
+        canaries = (
+            _run_canaries(
+                home,
+                release,
+                digest,
+                harness=spec.id,
+                entry=spec.entry,
+                user_home=user,
+                harness_home=harness_home,
+                config_path=target,
+            )
+            if wiring["healthy"] or spec.id != "antigravity"
+            else {"allow": False, "deny": False}
         )
         if not wiring["healthy"] or not all(canaries.values()):
             raise RuntimeError(
@@ -539,6 +610,11 @@ def install_harness(
                 "safe-yolo entry has state status `active`, not `failed`, with this plugin file as its source "
                 "(repeat it if the list is empty while plugins load), then in a session check that "
                 "`echo hello` runs and `git push --force origin main` in a scratch repository is denied."
+            ),
+            "antigravity": (
+                "Start a new Antigravity session, run /hooks and confirm the safe-yolo PreToolUse hook is listed. "
+                "Doctor runs the command in the hooks file but cannot prove Antigravity loaded the "
+                "hook. Antigravity ignores a hook that crashes, times out or prints invalid output."
             ),
         }[spec.id],
     }
@@ -590,19 +666,21 @@ def doctor_harness(
         bootstrap=bootstrap,
     )
     problems.extend(wiring["problems"])
-    canaries = (
-        _run_canaries(
-            home,
-            release,
-            digest,
-            harness=spec.id,
-            entry=spec.entry,
-            user_home=user,
-            harness_home=harness_home,
-        )
-        if release_report["healthy"]
-        else {"allow": False, "deny": False}
-    )
+    canaries = {"allow": False, "deny": False}
+    if release_report["healthy"] and (wiring["healthy"] or spec.id != "antigravity"):
+        try:
+            canaries = _run_canaries(
+                home,
+                release,
+                digest,
+                harness=spec.id,
+                entry=spec.entry,
+                user_home=user,
+                harness_home=harness_home,
+                config_path=config_path,
+            )
+        except RuntimeError as error:
+            problems.append(str(error))
     if not all(canaries.values()):
         problems.append("allow/deny runtime canaries failed")
     return {
@@ -630,7 +708,7 @@ def deactivate_harness(
         if (
             config_path.is_symlink()
             or not config_path.is_file()
-            or (spec.id == "opencode" and _opencode_plugin_path_problem(config_path))
+            or _config_path_problem(spec.id, config_path)
             or _sha256(config_path) != receipt.get("installed_config_sha256")
         ):
             raise RuntimeError(

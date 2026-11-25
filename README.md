@@ -32,7 +32,7 @@ repository. Existing installations migrate through a bridge release.
 `python3.14`. `3.0.0-beta.5` added a public download, global management commands,
 and persistent local customizations. Installed releases remain separate. One
 immutable consequence-policy kernel is exposed through native harness adapters.
-Codex is supported; Claude Code, Cursor, and OpenCode V2 have beta lifecycle support. Other
+Codex is supported; Claude Code, Cursor, OpenCode V2 and Antigravity have beta lifecycle support. Other
 included adapters remain adapter-only until their install, doctor, and rollback
 journeys receive equivalent proof. See the [support matrix](docs/harness-support.md).
 
@@ -102,7 +102,7 @@ distribution, upgrades, rollback, and limitations.
 For development, use this repository for code, installer, tests, docs, and
 releases. Make changes on a branch, run `python3 -m unittest discover -s tests/unit`,
 and open a PR. After committing, `python3 scripts/publish.py --check` builds the
-package and exercises an isolated four-harness installation. See
+package and exercises an isolated five-harness installation. See
 [PUBLISHING.md](PUBLISHING.md) for the single-repository release workflow.
 
 The previous `safe-yolo-releases` repo remains a compatibility archive. Its final
@@ -119,7 +119,7 @@ manual artifact copying belongs there.
 - `adapters/cursor_v3.py` — stateless Cursor Agent transport over the same kernel (see `hosts/linux/devbox.cursor-candidate.hooks.json`).
 - `adapters/opencode_v3.py` — stateless OpenCode transport over the same kernel, called by the V2 plugin `adapters/opencode_v2_plugin.js` from its `execute.before` tool hook.
 - `adapters/opencode_v1_retired_plugin.js` — the retired hand-placed V1 plugin. Install replaces a file of this shape, with only its pin constants changed, or a plugin rendered from an installed release, and nothing else.
-- `adapters/antigravity_v3.py` — stateless Antigravity ACP `PreToolUse` transport over the same kernel (see `hosts/linux/devbox.antigravity-candidate.hooks.json`).
+- `adapters/antigravity_v3.py` — stateless Antigravity `PreToolUse` transport over the same kernel; install writes its `safe-yolo` named group into `config/hooks.json` under the Gemini root.
 - `tests/unit/test_v3_*`, `tests/unit/test_devin_adapter.py`, `tests/unit/test_claude_code_adapter.py`, `tests/unit/test_grok_adapter.py`, `tests/unit/test_cursor_v3_adapter.py`, and `tests/unit/test_opencode_v3_adapter.py` — allow, deny, release, and executable-hook journeys.
 - `hosts/linux/devbox.v3-candidate.hooks.json` — non-active cutover example.
 
@@ -131,4 +131,4 @@ Deletion candidates can be recorded as private, sanitized local SQLite observati
 without changing any allow/deny decision. Use `python3 safe-yolo observations` for
 the read-only grouped JSON report. See [coverage, privacy, and capacity limits](docs/deletion-observation.md).
 
-Antigravity hook files must contain only named hook objects: the Antigravity CLI's Go loader rejects the whole `hooks.json` when any top-level value is not an object (for example a `description` string), and then logs `loaded 0 named hooks`. The ACP server's Python loader tolerates it, which is why the mistake is easy to miss. `GEMINI_HOME` is read from the hook environment because the bootstrap forwards no adapter flags.
+Antigravity hook files must contain only named hook objects: the Antigravity CLI's Go loader rejects the whole `hooks.json` when any top-level value is not an object (for example a `description` string), and then logs `loaded 0 named hooks`. The ACP server's Python loader tolerates it, which is why the mistake is easy to miss. Installed hooks pass the Gemini root as `--harness-home`, which the bootstrap forwards as `--gemini-home`; without it the adapter reads `GEMINI_HOME` from the hook environment.

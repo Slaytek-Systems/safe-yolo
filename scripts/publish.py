@@ -27,13 +27,16 @@ def acceptance(archive: Path, revision: str) -> None:
         if verify_bundle(source) != revision:
             raise ValueError('Source provenance mismatch')
         user = root / 'user'
-        for directory in ('.codex', '.claude', '.cursor', '.config/opencode/plugins'):
+        for directory in ('.codex', '.claude', '.cursor', '.config/opencode/plugins', '.gemini/config'):
             (user / directory).mkdir(parents=True)
         (user / '.codex/config.toml').write_text(
             'approval_policy = "never"\nsandbox_mode = "danger-full-access"\n[features]\nhooks = true\n')
         (user / '.claude/settings.json').write_text('{"theme": "dark"}\n')
         other_plugin = user / '.config/opencode/plugins/other.js'
         other_plugin.write_text('export default { id: "other", setup() {} }\n')
+        antigravity_hooks = user / '.gemini/config/hooks.json'
+        antigravity_others = '{"herdr": {"PreInvocation": [{"type": "command", "command": "herdr"}]}}\n'
+        antigravity_hooks.write_text(antigravity_others)
         # The host's own `opencode --version` creates its config, data, state and cache folders, and a host V1
         # would fail the check, so the check sees only a fixture that prints the V2 version line.
         fixture = root / 'bin'
@@ -44,7 +47,7 @@ def acceptance(archive: Path, revision: str) -> None:
                                    if entry and not (Path(entry) / 'opencode').exists()]
         environment = {key: value for key, value in os.environ.items()
                        if key not in {'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'OPENCODE_CONFIG_DIR', 'OPENCODE_DB',
-                                      'PYTHONPATH'}}
+                                      'GEMINI_HOME', 'PYTHONPATH'}}
         environment.update(HOME=str(user), PATH=os.pathsep.join(search),
                            XDG_CONFIG_HOME=str(user / '.config'), XDG_DATA_HOME=str(user / '.local/share'),
                            XDG_STATE_HOME=str(user / '.local/state'), XDG_CACHE_HOME=str(user / '.cache'))
@@ -56,8 +59,9 @@ def acceptance(archive: Path, revision: str) -> None:
 
         result = run([sys.executable, str(source / 'safe-yolo'), '--home', str(user / '.safe-yolo'),
                       '--user-home', str(user), 'install'])
-        if {item['harness'] for item in result['reports']} != {'codex', 'claude-code', 'cursor', 'opencode'}:
-            raise ValueError('Expected four installed harnesses')
+        if {item['harness'] for item in result['reports']} != {'codex', 'claude-code', 'cursor', 'opencode',
+                                                               'antigravity'}:
+            raise ValueError('Expected five installed harnesses')
         source.rename(root / 'moved-download')
         launcher = str(user / '.local/bin/safe-yolo')
         if not run([launcher, 'doctor'])['healthy']:
@@ -71,6 +75,8 @@ def acceptance(archive: Path, revision: str) -> None:
             raise ValueError('Uninstall changed unrelated settings')
         if other_plugin.read_text() != 'export default { id: "other", setup() {} }\n':
             raise ValueError('Uninstall changed another OpenCode plugin')
+        if antigravity_hooks.read_text() != antigravity_others:
+            raise ValueError('Uninstall changed another Antigravity hook group')
 
 
 def publish(archive: Path, version: str, revision: str) -> None:
@@ -122,7 +128,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix='safe-yolo-publish-') as temporary:
         archive = build_bundle(ROOT, Path(temporary), revision)
         acceptance(archive, revision)
-        print(f'PROVEN: {version} at {revision}: bundle and four-harness lifecycle', flush=True)
+        print(f'PROVEN: {version} at {revision}: bundle and five-harness lifecycle', flush=True)
         if args.publish:
             publish(archive, version, revision)
 
