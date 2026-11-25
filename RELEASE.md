@@ -18,8 +18,9 @@ Until now Safe YOLO managed one Antigravity hooks file, so either the terminal
   beta.15.
 - `--config-home` still selects one folder and installs only the harness
   named.
-- Policy: `~/.t3/userdata/providers/antigravity` is now a whole-folder search
-  root like `~/.gemini`, and every Antigravity hook protects the `config`
+- Policy: `~/.t3/userdata/providers/antigravity` and each profile folder
+  directly inside it are now whole-folder search roots like `~/.gemini`; a
+  search of a subfolder of a profile is still allowed. Every Antigravity hook protects the `config`
   folder and token files of each T3 Code profile, so the terminal `agy`
   cannot edit the T3 Code hooks file.
 - One hooks file belongs to one harness id. If beta.15 was installed with

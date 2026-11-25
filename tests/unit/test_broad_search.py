@@ -88,7 +88,9 @@ class BroadSearchTests(unittest.TestCase):
             with self.subTest(harness=spec.id):
                 decision = self.shell(f"rg needle ~/{spec.config_dir}")
                 self.assertEqual(("deny", BROAD), (decision.outcome, decision.consequence))
-                self.assertEqual("allow", self.shell(f"rg needle ~/{spec.config_dir}/child").outcome)
+                # Under the T3 Code folder each child is a whole profile, itself a root.
+                child = "profile/child" if spec.id == "antigravity-t3" else "child"
+                self.assertEqual("allow", self.shell(f"rg needle ~/{spec.config_dir}/{child}").outcome)
 
     def test_one_whole_t3_code_antigravity_profile_is_a_root(self):
         profile = "~/.t3/userdata/providers/antigravity/abc123"

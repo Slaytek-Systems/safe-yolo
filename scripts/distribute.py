@@ -270,7 +270,10 @@ def _has_harness_receipt(home: Path, spec: HarnessSpec) -> bool:
 def _t3_antigravity_profiles(user_home: Path) -> list[Path]:
     """The profile folders T3 Code has created for Antigravity; it passes one as `--gemini-dir`."""
     parent = user_home / HARNESS_BY_ID["antigravity-t3"].config_dir
-    return sorted(path for path in parent.iterdir() if path.is_dir()) if parent.is_dir() else []
+    try:
+        return sorted(path for path in parent.iterdir() if path.is_dir())
+    except OSError:
+        return []
 
 
 def _harness_root(spec: HarnessSpec, user_home: Path, config_home: str | Path | None) -> Path:
@@ -477,7 +480,9 @@ def install_harness(
             f"not {target}. Run `safe-yolo uninstall --harness {spec.id}` first, or select that folder again."
         )
     for other in HARNESSES:
-        if other.id != spec.id and other.lifecycle_supported and _has_harness_receipt(home, other):
+        # Only another id that writes the same kind of file can own this one.
+        if (other.id != spec.id and other.lifecycle_supported and other.config_file == spec.config_file
+                and other.entry == spec.entry and _has_harness_receipt(home, other)):
             claimed, _ = _read_harness_receipt(home, other)
             if claimed.get('status') == 'active' and Path(str(claimed.get('config_path'))) == target:
                 raise RuntimeError(
@@ -643,8 +648,8 @@ def install_harness(
             ),
             "antigravity-t3": (
                 "Start a new Antigravity thread in T3 Code and check that `git push --force origin main` is "
-                "denied in a new empty folder after `git init` (no remote, so nothing is pushed if the hook did "
-                "not load). Doctor runs the command in the hooks file but cannot prove "
+                "denied with a Safe YOLO reason in a new empty folder after `git init` (no remote, so nothing is "
+                "pushed if the hook did not load; a git error about the remote is not proof). Doctor runs the command in the hooks file but cannot prove "
                 "Antigravity loaded the hook. Antigravity ignores a hook that crashes, times out or prints "
                 "invalid output."
             ),
@@ -878,7 +883,7 @@ def main(argv: list[str] | None = None) -> int:
                     if args.harness:
                         raise
                     skipped.append({'harness': harness, 'reason': str(error)})
-                except RuntimeError as error:
+                except (RuntimeError, OSError) as error:
                     if len(selected) == 1 or not args.harness:
                         raise
                     refused.append(f'{harness}: {error}')
@@ -920,7 +925,8 @@ def main(argv: list[str] | None = None) -> int:
                 # A harness installed once has nothing to roll back to; it must not stop the others.
                 if args.command == 'uninstall' or receipt.get('previous_install')]
             if not selected:
-                raise RuntimeError('No active installations found.')
+                raise RuntimeError('No active installations found.' if not active_receipts(args.home.resolve())
+                                   else 'No previous installation is available for rollback.')
             result = {'reports': [restore(args.home.resolve(), args.user_home.resolve(), harness,
                       uninstall=args.command == 'uninstall') for harness in selected],
                       'note': 'Inactive releases and the management command are retained for recovery.'}

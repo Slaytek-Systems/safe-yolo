@@ -95,7 +95,10 @@ def build_kernel(
     default_gemini = home / ".gemini"
     # T3 Code keeps one Antigravity profile per provider instance; each has a hooks file of its own.
     t3_parent = home / ".t3" / "userdata" / "providers" / "antigravity"
-    t3_profiles = sorted(path for path in t3_parent.iterdir() if path.is_dir()) if t3_parent.is_dir() else []
+    try:
+        t3_profiles = sorted(path for path in t3_parent.iterdir() if path.is_dir())
+    except OSError:  # absent or unlistable: the terminal policy must still run
+        t3_profiles = []
     enforcement = [
         str(safe_yolo),
         str(gemini / "config" / "hooks.json"),
