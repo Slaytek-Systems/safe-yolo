@@ -476,6 +476,13 @@ class AntigravityLifecycleTests(unittest.TestCase):
 
         self.assertEqual(before, (profile / "config/hooks.json").read_bytes())
 
+    def test_an_unreadable_receipt_of_another_harness_does_not_stop_the_install(self):
+        claude = self.safe_yolo_home / "state" / "installations" / "claude-code.json"
+        claude.parent.mkdir(parents=True)
+        claude.write_text("not json")
+
+        self.assertEqual("active", self.install()["status"])
+
     def test_a_hand_wired_group_whose_release_does_not_verify_is_refused_untouched(self):
         cases = {
             "empty release, missing bootstrap, bad pin": lambda: (

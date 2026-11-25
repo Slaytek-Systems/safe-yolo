@@ -90,6 +90,12 @@ class BroadSearchTests(unittest.TestCase):
                 self.assertEqual(("deny", BROAD), (decision.outcome, decision.consequence))
                 self.assertEqual("allow", self.shell(f"rg needle ~/{spec.config_dir}/child").outcome)
 
+    def test_one_whole_t3_code_antigravity_profile_is_a_root(self):
+        profile = "~/.t3/userdata/providers/antigravity/abc123"
+        decision = self.shell(f"rg needle {profile}")
+        self.assertEqual(("deny", BROAD), (decision.outcome, decision.consequence))
+        self.assertEqual("allow", self.shell(f"rg needle {profile}/config").outcome)
+
     def test_existing_denials_keep_their_consequence(self):
         for command, consequence in (
             ("sudo grep -r foo /var", "privilege.modify"),

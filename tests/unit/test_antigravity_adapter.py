@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from adapters.antigravity_v3 import build_kernel, handle_pre_tool, normalize_payload
 from scripts.install import install_release
@@ -106,6 +107,15 @@ class AntigravityAdapterTests(unittest.TestCase):
 
         self.assertEqual("deny", denied["decision"])
         self.assertIn("enforcement.modify", denied["reason"])
+
+    def test_an_unlistable_t3_code_folder_does_not_stop_ordinary_work(self):
+        parent = self.root / "home" / ".t3" / "userdata" / "providers" / "antigravity"
+        parent.mkdir(parents=True)
+        with patch.object(Path, "iterdir", side_effect=PermissionError("unlistable")):
+            kernel = build_kernel(safe_yolo_home=self.root / "safe-yolo", gemini_home=self.gemini_home,
+                                  user_home=self.root / "home", cwd=self.project)
+
+        self.assertIsNone(handle_pre_tool(self.payload("run_command", {"CommandLine": "hostname"}), kernel))
 
     def test_credential_reads_are_denied(self):
         credentials = (
