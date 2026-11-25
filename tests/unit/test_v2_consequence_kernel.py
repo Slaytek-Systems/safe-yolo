@@ -23,7 +23,6 @@ class V2ConsequenceKernelTests(unittest.TestCase):
             "curl http://127.0.0.1:3000/health",
             "bunx unknown-package --help",
             "docker ps",
-            "git status && rm obsolete.txt",
             "git clean --dry-run",
             "git clean -n",
         )
@@ -552,6 +551,53 @@ class V2ConsequenceKernelTests(unittest.TestCase):
                 decision = kernel.evaluate(payload)
                 self.assertEqual("operator_only", decision.outcome)
                 self.assertEqual(consequence, decision.consequence)
+
+    def test_every_command_in_a_chain_gets_the_answer_it_gets_alone(self):
+        expected = {
+            "echo hi && git push --force origin main": "git.history_mutation",
+            "cd /tmp/x && git push --force origin main": "git.history_mutation",
+            "echo hi; git push --force origin main": "git.history_mutation",
+            "make || git reset --hard HEAD~1": "git.history_mutation",
+            "git status && rm obsolete.txt": "filesystem.delete",
+            "npm run build & rm -rf build": "filesystem.delete",
+            "echo hi | sudo tee /etc/hosts": "privilege.modify",
+            "git fetch\ngit push --force origin main": "git.history_mutation",
+            "(cd repo && git push --force origin main)": "git.history_mutation",
+            "for f in a b; do rm \"$f\"; done": "filesystem.delete",
+            "if true; then railway up; fi": "production.mutate",
+        }
+        for command, consequence in expected.items():
+            with self.subTest(command=command):
+                decision = self._shell(command)
+                self.assertEqual("approval_required", decision.outcome)
+                self.assertEqual(consequence, decision.consequence)
+
+    def test_quoted_text_and_heredoc_bodies_in_a_chain_are_not_commands(self):
+        for command in (
+            "cd repo && git push origin feature/x",
+            'git add . && git commit -m "drop the rm -rf build step; git push --force later"',
+            "git status && git diff | head -50",
+            "git commit -F - <<'EOF'\nStop running rm -rf build; git push --force.\nEOF\ngit log -1",
+            "cat <<EOF > notes.txt && git status\nrm -rf everything\nEOF",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual("allow", self._shell(command).outcome)
+
+    def test_a_cd_in_a_chain_moves_where_later_paths_resolve(self):
+        kernel = ConsequenceKernel(
+            enforcement_paths=self.kernel.enforcement_paths,
+            credential_paths=self.kernel.credential_paths,
+            scratch_paths=("/tmp",),
+        )
+
+        def shell(command: str):
+            return kernel.evaluate(
+                {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": "/workspace"}
+            )
+
+        self.assertEqual("allow", shell("cd /tmp/work && rm -rf build").outcome)
+        self.assertEqual("approval_required", shell("cd /workspace && rm -rf build").outcome)
+        self.assertEqual("operator_only", shell("cd /home/test && rm -rf .safe-yolo").outcome)
 
     def _shell(self, command):
         return self.kernel.evaluate(
