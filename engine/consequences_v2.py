@@ -111,6 +111,13 @@ _CONTENT_DESTROYING_COMMANDS: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 _SED_VALUE_OPTIONS = ("efl", ("--expression", "--file", "--line-length"))
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+# Shell punctuation inside quotes, kept as private characters while a line is split.
+_QUOTED = str.maketrans({mark: chr(0xE000 + index) for index, mark in enumerate(";|&()<>\n# \t\r")})
+# A redirect's & and | are kept as private characters so 2>&1 and >| stay one word.
+_QUOTED_REDIRECT = ("&|").translate(_QUOTED)
+_UNQUOTED = {ord(value): key for key, value in _QUOTED.items()}
+# Words that only open a command; the command they open is the next word.
+_LEADING_WORDS = frozenset({"{", "}", "!", "if", "then", "elif", "else", "do", "while", "until", "time"})
 # Shell syntax that runs more than one command. shlex reads these as words,
 # so only a command without them earns the public credential file exemption.
 _COMPOSITION = re.compile(r"[\n;|&$`()]")
@@ -374,7 +381,10 @@ class ConsequenceKernel:
                 original = self._shell(command, effective_cwd, residuals=False)
                 if original.outcome != "allow":
                     return original
-                return self._shell(command, effective_cwd)
+                whole = self._shell(command, effective_cwd)
+                if whole.outcome != "allow":
+                    return whole
+                return self._each_command(command, effective_cwd)
         paths = self._structured_paths(tool_input, cwd)
         readable = tool_name in _CREDENTIAL_READ_TOOLS
         if any(
@@ -795,25 +805,146 @@ class ConsequenceKernel:
 
     def _remote_shell(self, command: str, cwd: Path, *, residuals: bool = True) -> Decision:
         try:
-            tokens = self._line_tokens(command)
+            tokens = self._chain_tokens(command)
         except ValueError:
             return Decision(
                 "approval_required",
                 "remote.execute",
                 "execute an unparseable remote command",
             )
-        current: list[str] = []
-        separators = {"|", "||", "|&", "&&", ";"}
-        for token in [*tokens, ";"]:
-            if token not in separators:
-                current.append(token)
-                continue
-            if current:
-                decision = self._remote_segment(current, cwd, residuals=residuals)
+        for words, _ in self._commands(tokens):
+            if words:
+                decision = self._remote_segment(
+                    [word.translate(_UNQUOTED) for word in words], cwd, residuals=residuals
+                )
                 if decision.outcome != "allow":
                     return decision
-                current = []
         return Decision("allow")
+
+    def _each_command(self, command: str, cwd: Path) -> Decision:
+        """A chain gets the strictest answer any of its commands gets alone."""
+        try:
+            commands = self._commands(self._chain_tokens(command))
+        except ValueError:
+            return Decision("allow")
+        # A subshell gets its own working directory; leaving it restores the outer one.
+        directories = [cwd]
+        for words, separator in commands:
+            if words and Path(words[0]).name == "cd":
+                operands = self._cd_operands(words[1:])
+                if len(operands) == 1:
+                    directories[-1] = self._resolve_from(operands[0].translate(_UNQUOTED), directories[-1])
+            elif words:
+                text = " ".join(shlex.quote(word.translate(_UNQUOTED)) for word in words)
+                for residuals in (False, True):
+                    decision = self._shell(text, directories[-1], residuals=residuals)
+                    if decision.outcome != "allow":
+                        return decision
+            for mark in separator:
+                if mark == "(":
+                    directories.append(directories[-1])
+                elif mark == ")" and len(directories) > 1:
+                    directories.pop()
+        return Decision("allow")
+
+    @staticmethod
+    def _cd_operands(words: list[str]) -> list[str]:
+        operands: list[str] = []
+        target = False
+        for word in words:
+            if target:
+                target = False
+            elif _REDIRECT_SYNTAX & set(word):
+                # Quoted < and > are still private characters here. A bare operator
+                # such as > or 2> takes the next word; 2>&1 or >file is complete.
+                target = not word.lstrip("0123456789").strip("<>&|" + "".join(_QUOTED_REDIRECT))
+            elif not word.startswith("-"):
+                operands.append(word)
+        return operands
+
+    @staticmethod
+    def _commands(tokens: list[str]) -> list[tuple[list[str], str]]:
+        """Each command's words with the separator that ends it; an opening "(" ends an empty one."""
+        commands: list[tuple[list[str], str]] = []
+        current: list[str] = []
+        for token in [*tokens, ";"]:
+            if ConsequenceKernel._separator(token):
+                commands.append((current, token))
+                current = []
+            elif current or token not in _LEADING_WORDS:
+                current.append(token)
+        return commands
+
+    @staticmethod
+    def _separator(token: str) -> bool:
+        # The lexer fuses neighbouring punctuation such as ";\n" and "&&\n".
+        return bool(token) and not token.strip("|&;()\n") and (
+            token in {"&", "&&"} or any(mark in token for mark in ";|()\n")
+        )
+
+    @classmethod
+    def _chain_tokens(cls, command: str) -> list[str]:
+        """Words and separators of a shell line.
+
+        Heredoc bodies and comments are dropped. Punctuation inside quotes or
+        after a backslash is kept as a private character so it stays part of
+        a word; translate words with _UNQUOTED to get the text back.
+        """
+        kept: list[str] = []
+        heredocs: list[tuple[str, bool]] = []
+        for line in command.replace("\\\n", " ").split("\n"):
+            if heredocs:
+                marker, strip_tabs = heredocs[0]
+                if (line.lstrip("\t") if strip_tabs else line) == marker:
+                    heredocs.pop(0)
+                continue
+            kept.append(line)
+            try:
+                tokens = cls._line_tokens(line)
+            except ValueError:
+                continue
+            for index, token in enumerate(tokens[:-1]):
+                if token == "<<":
+                    delimiter = tokens[index + 1]
+                    strip_tabs = delimiter.startswith("-") and len(delimiter) > 1
+                    heredocs.append((delimiter[1:] if strip_tabs else delimiter, strip_tabs))
+        text = "\n".join(kept)
+        out: list[str] = []
+        quote = ""
+        depth = 0  # inside $( ), <( ) or >( ): a word of the command around it, not read
+        index = 0
+        while index < len(text):
+            char = text[index]
+            previous, following = text[index - 1 : index], text[index + 1 : index + 2]
+            if char == "\\" and quote != "'" and following:
+                out.append(char + following.translate(_QUOTED))
+                index += 2
+                continue
+            if quote:
+                quote = "" if char == quote else quote
+                protect = char != "'" and char != '"'
+            elif char in "'\"":
+                quote, protect = char, False
+            elif char == "(" and (depth or previous in {"$", "<", ">"}):
+                depth, protect = depth + 1, True
+            elif char == ")" and depth:
+                depth, protect = depth - 1, True
+            elif char == "#" and not depth and (not out or out[-1][-1] in " \t\r\n;|&()<>"):
+                newline = text.find("\n", index)
+                index = len(text) if newline < 0 else newline
+                continue
+            else:
+                # Redirects such as 2>&1, &> and >| are one word to the recognizers.
+                protect = bool(depth) or (char == "&" and (previous in {"<", ">"} or following == ">")) or (
+                    char == "|" and previous == ">"
+                )
+            out.append(char.translate(_QUOTED) if protect else char)
+            index += 1
+        lexer = shlex.shlex("".join(out), posix=True, punctuation_chars="|&;()\n")
+        lexer.whitespace = " \t\r"
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        return list(lexer)
 
     def _remote_segment(self, tokens: list[str], cwd: Path, *, residuals: bool = True) -> Decision:
         if not tokens:

@@ -103,12 +103,11 @@ class DeletionObservationTests(unittest.TestCase):
 
     def test_lexical_candidates_do_not_claim_recognized_consequences(self):
         kernel = self.kernel()
-        for command in ('find private-name -delete', 'echo ok && rm -rf private-name',
-                        'rm "unterminated-private', 'echo rm private-name'):
+        for command in ('find private-name -delete', 'rm "unterminated-private', 'echo rm private-name'):
             payload = self.payload(command)
             self.assertEqual(handle_pre_tool(payload, self.kernel(False)), handle_pre_tool(payload, kernel))
         result = self.report()
-        self.assertEqual(3, result['total_events'])
+        self.assertEqual(2, result['total_events'])
         self.assertEqual({'partial', 'unparsed'}, {group['coverage'] for group in result['groups']})
         self.assertEqual({0}, {group['recognized'] for group in result['groups']})
         self.assertNotIn('private-name', self.database().read_bytes().decode(errors='replace'))
@@ -130,12 +129,12 @@ class DeletionObservationTests(unittest.TestCase):
         quoted_data = self.payload('echo "data\nrm -rf synthetic-private"')
         self.assertIsNone(handle_pre_tool(quoted_data, self.kernel()))
         groups = self.report()['groups']
-        self.assertEqual(1, len(groups))
-        self.assertEqual(2, groups[0]['attempts'])
-        self.assertEqual('shell <compound-deletion-candidate>', groups[0]['shape'])
-        self.assertEqual('partial', groups[0]['coverage'])
-        self.assertEqual(0, groups[0]['recognized'])
-        self.assertEqual('allow', groups[0]['outcome'])
+        self.assertEqual(2, sum(group['attempts'] for group in groups))
+        for group in groups:
+            self.assertEqual('shell <compound-deletion-candidate>', group['shape'])
+            self.assertEqual('partial', group['coverage'])
+            self.assertEqual(1, group['recognized'])
+            self.assertEqual('deny', group['outcome'])
 
     def test_private_permissions_and_read_only_report(self):
         handle_pre_tool(self.payload(), self.kernel())
@@ -237,7 +236,9 @@ class DeletionObservationTests(unittest.TestCase):
         def write(index):
             payload = self.payload(session=f'session-{index}')
             return handle_pre_tool(payload, self.kernel())
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        # The hook's lock wait is deliberately short; this test is about counting, not timing.
+        with mock.patch.object(deletion_observation, 'LOCK_TIMEOUT', 30), \
+                ThreadPoolExecutor(max_workers=4) as executor:
             responses = list(executor.map(write, range(4)))
         self.assertTrue(all(response['hookSpecificOutput']['permissionDecision'] == 'deny'
                             for response in responses))
