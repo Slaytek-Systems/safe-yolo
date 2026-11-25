@@ -583,6 +583,11 @@ class V2ConsequenceKernelTests(unittest.TestCase):
             "cat <<EOF > notes.txt && git status\nrm -rf everything\nEOF",
             "git status # Inspect the worktree; rm -rf build is a separate step",
             "rg -nF '|' scripts/rm",
+            "diff <(git show HEAD:scripts/rm) scripts/rm",
+            "ssh buildbox 'diff <(git show HEAD:scripts/rm) scripts/rm'",
+            "echo $(date) scripts/rm && git status",
+            "diff /dev/fd/3 /dev/fd/4 3<<BEFORE 4<<AFTER\nrm -f old.log\nBEFORE\nrm -f new.log\nAFTER",
+            "ssh buildbox 'diff /dev/fd/3 /dev/fd/4 3<<BEFORE 4<<AFTER\nrm -f old.log\nBEFORE\nrm -f new.log\nAFTER'",
             "find . -name '*.orig' -exec echo {} \\; && git status",
         ):
             with self.subTest(command=command):
@@ -603,6 +608,8 @@ class V2ConsequenceKernelTests(unittest.TestCase):
         self.assertEqual("allow", shell("cd /tmp/work && rm -rf build").outcome)
         self.assertEqual("approval_required", shell("cd /workspace && rm -rf build").outcome)
         self.assertEqual("allow", shell("cd -- /tmp && rm -rf build").outcome)
+        self.assertEqual("allow", shell("cd -- /tmp 2>/dev/null && rm -rf build").outcome)
+        self.assertEqual("allow", shell("cd /tmp > /dev/null && rm -rf build").outcome)
         self.assertEqual("approval_required", shell("(cd /tmp && ls); rm -rf build").outcome)
         self.assertEqual("allow", shell("(cd /tmp && rm -rf build); ls").outcome)
         self.assertEqual("operator_only", shell("cd /home/test && rm -rf .safe-yolo").outcome)

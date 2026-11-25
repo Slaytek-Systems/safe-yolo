@@ -236,7 +236,9 @@ class DeletionObservationTests(unittest.TestCase):
         def write(index):
             payload = self.payload(session=f'session-{index}')
             return handle_pre_tool(payload, self.kernel())
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        # The hook's lock wait is deliberately short; this test is about counting, not timing.
+        with mock.patch.object(deletion_observation, 'LOCK_TIMEOUT', 30), \
+                ThreadPoolExecutor(max_workers=4) as executor:
             responses = list(executor.map(write, range(4)))
         self.assertTrue(all(response['hookSpecificOutput']['permissionDecision'] == 'deny'
                             for response in responses))
