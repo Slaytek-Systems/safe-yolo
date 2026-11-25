@@ -12,6 +12,7 @@ import sys
 import tempfile
 from typing import Any
 
+from scripts.harness_specs import ANTIGRAVITY_IDS
 from scripts.package import MANIFEST, verify_bundle
 
 
@@ -140,10 +141,10 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
         from scripts.harness_wiring import ANTIGRAVITY_GROUP, read_antigravity_hooks
         if baseline['previous_config_existed']:
             original_bytes = Path(baseline['previous_config_backup']).read_bytes()
-            original = (read_antigravity_hooks(Path(baseline['previous_config_backup'])) if harness == 'antigravity'
+            original = (read_antigravity_hooks(Path(baseline['previous_config_backup'])) if harness in ANTIGRAVITY_IDS
                         else json.loads(original_bytes))
-        document = read_antigravity_hooks(config) if harness == 'antigravity' else json.loads(config.read_text())
-        if harness == 'antigravity':
+        document = read_antigravity_hooks(config) if harness in ANTIGRAVITY_IDS else json.loads(config.read_text())
+        if harness in ANTIGRAVITY_IDS:
             document.pop(ANTIGRAVITY_GROUP)
         else:
             event = 'preToolUse' if harness == 'cursor' else 'PreToolUse'
@@ -170,7 +171,7 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
             retained = home / 'backups' / ('uninstalled-' + harness + '-' + datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ'))
             os.replace(config, retained)
         else:
-            payload = original_bytes if document == original and original_bytes is not None else (json.dumps(document, indent=2, allow_nan=harness != 'antigravity') + '\n').encode()
+            payload = original_bytes if document == original and original_bytes is not None else (json.dumps(document, indent=2, allow_nan=harness not in ANTIGRAVITY_IDS) + '\n').encode()
             _atomic_write(config, payload, baseline['previous_config_mode'])
         receipt['status'] = 'inactive'
         _atomic_write(path, (json.dumps(receipt, indent=2) + '\n').encode())
@@ -185,7 +186,7 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
     report = inspect_release(Path(previous['release']), previous['manifest_sha256'])
     if not report['healthy']:
         raise RuntimeError('Previous release failed verification; rollback was not applied.')
-    if harness == 'antigravity':
+    if harness in ANTIGRAVITY_IDS:
         # Antigravity ignores a hook that cannot start, so a dead command would restore no guard at all.
         from scripts.distribute import _run_canaries
         try:

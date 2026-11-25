@@ -341,7 +341,8 @@ def antigravity_hooks_path_problem(path: Path) -> str | None:
 
 def config_path_problem(harness: str, path: Path) -> str | None:
     """Why Safe YOLO must not touch this harness file in place, or None."""
-    check = {"opencode": opencode_plugin_path_problem, "antigravity": antigravity_hooks_path_problem}.get(harness)
+    check = {"opencode": opencode_plugin_path_problem, "antigravity": antigravity_hooks_path_problem,
+             "antigravity-t3": antigravity_hooks_path_problem}.get(harness)
     return check(path) if check else None
 
 

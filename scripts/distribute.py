@@ -29,7 +29,7 @@ from scripts.doctor import (
     owns_antigravity_group,
     pinned_hook_slots,
 )
-from scripts.harness_specs import HARNESS_BY_ID, HARNESS_HOME_ENV, HARNESSES, HarnessSpec
+from scripts.harness_specs import ANTIGRAVITY_IDS, HARNESS_BY_ID, HARNESS_HOME_ENV, HARNESSES, HarnessSpec
 from scripts.package import MANIFEST as DISTRIBUTION_MANIFEST, verify_bundle
 from scripts.harness_wiring import (
     ANTIGRAVITY_GROUP as _ANTIGRAVITY_GROUP,
@@ -60,7 +60,8 @@ def harness_catalog(user_home: str | Path | None = None) -> list[dict[str, Any]]
             "status": spec.status,
             "entry": spec.entry,
             "lifecycle_supported": spec.lifecycle_supported,
-            "detected": shutil.which(spec.binary) is not None or _harness_root(spec, home, None).exists(),
+            "detected": bool(_t3_antigravity_profiles(home)) if spec.id == "antigravity-t3" else (
+                shutil.which(spec.binary) is not None or _harness_root(spec, home, None).exists()),
         }
         for spec in HARNESSES
     ]
@@ -132,7 +133,7 @@ def _run_canaries(
     The Antigravity hooks file must already have passed the wiring check.
     """
     timeout = None
-    if harness == "antigravity":
+    if harness in ANTIGRAVITY_IDS:
         hook = _read_antigravity_hooks(config_path)[_ANTIGRAVITY_GROUP]["PreToolUse"][0]["hooks"][0]
         command_text, timeout = hook["command"], hook["timeout"]
     else:
@@ -156,7 +157,7 @@ def _run_canaries(
         opencode_base = {"tool": "shell", "sessionID": "canary", "callID": "canary", "cwd": str(Path.cwd())}
         allowed_payload = {**opencode_base, "args": {"command": "git status --short"}}
         denied_payload = {**opencode_base, "args": {"command": "git push --force-with-lease"}}
-    elif harness == "antigravity":
+    elif harness in ANTIGRAVITY_IDS:
         antigravity_base = {"stepIdx": 0, "conversationId": "canary", "workspacePaths": [str(Path.cwd())]}
         allowed_payload = {**antigravity_base, "toolCall": {"name": "run_command",
                                                             "args": {"CommandLine": "git status --short"}}}
@@ -166,7 +167,7 @@ def _run_canaries(
         cursor_base = {"hook_event_name": "preToolUse", "cwd": str(Path.cwd()), "tool_name": "Shell"}
         allowed_payload = {**cursor_base, "tool_input": {"command": "git status --short"}}
         denied_payload = {**cursor_base, "tool_input": {"command": "git push --force-with-lease"}}
-    if harness == "antigravity":
+    if harness in ANTIGRAVITY_IDS:
         def reply(payload: dict[str, Any]) -> str | None:
             try:
                 completed = subprocess.run(command, input=json.dumps(payload), text=True, capture_output=True,
@@ -266,10 +267,25 @@ def _has_harness_receipt(home: Path, spec: HarnessSpec) -> bool:
     )
 
 
+def _t3_antigravity_profiles(user_home: Path) -> list[Path]:
+    """The profile folders T3 Code has created for Antigravity; it passes one as `--gemini-dir`."""
+    parent = user_home / HARNESS_BY_ID["antigravity-t3"].config_dir
+    return sorted(path for path in parent.iterdir() if path.is_dir()) if parent.is_dir() else []
+
+
 def _harness_root(spec: HarnessSpec, user_home: Path, config_home: str | Path | None) -> Path:
     """The configuration folder the harness itself reads, for discovery and install alike."""
     if config_home is not None:
         chosen = Path(config_home)
+    elif spec.id == "antigravity-t3":
+        profiles = _t3_antigravity_profiles(user_home)
+        if len(profiles) != 1:
+            found = ", ".join(map(str, profiles)) or "none"
+            raise RuntimeError(
+                f"Expected one T3 Code Antigravity profile under {user_home / spec.config_dir}, found {found}. "
+                "Start an Antigravity thread in T3 Code once to create it, or pass --config-home <profile>."
+            )
+        chosen = profiles[0]
     elif spec.id == "opencode":
         # OpenCode 2.3.2's CLI order (packages/cli/src/index.ts): a non-empty OPENCODE_CONFIG_DIR,
         # then a non-empty XDG_CONFIG_HOME, then ~/.config.
@@ -392,7 +408,7 @@ def _inspect_wiring(
             user_home=user_home,
             harness_home=harness_home,
         )
-    if spec.id == "antigravity":
+    if spec.id in ANTIGRAVITY_IDS:
         return inspect_antigravity_wiring(
             config_path,
             bootstrap_path=bootstrap_path,
@@ -498,7 +514,7 @@ def install_harness(
     else:
         if spec.id == "cursor":
             candidate, original_bytes, original_mode = _prepare_cursor_hooks(target, home, command)
-        elif spec.id == "antigravity":
+        elif spec.id in ANTIGRAVITY_IDS:
             def owns(group: Any) -> bool:
                 if not previous_receipt:
                     return _is_hand_wired_antigravity_group(group, home)
@@ -535,7 +551,7 @@ def install_harness(
             candidate, original_bytes, original_mode = _prepare_hooks(
                 target, home, command, entry=spec.entry, label=spec.name, own_slots=own_slots
             )
-        payload = (json.dumps(candidate, indent=2, allow_nan=spec.id != "antigravity") + "\n").encode()
+        payload = (json.dumps(candidate, indent=2, allow_nan=spec.id not in ANTIGRAVITY_IDS) + "\n").encode()
     backup_root = home / "backups" / (
         f"pre-{spec.id}-{version}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
     )
@@ -567,7 +583,7 @@ def install_harness(
                 harness_home=harness_home,
                 config_path=target,
             )
-            if wiring["healthy"] or spec.id != "antigravity"
+            if wiring["healthy"] or spec.id not in ANTIGRAVITY_IDS
             else {"allow": False, "deny": False}
         )
         if not wiring["healthy"] or not all(canaries.values()):
@@ -615,6 +631,12 @@ def install_harness(
                 "Start a new Antigravity session, run /hooks and confirm the safe-yolo PreToolUse hook is listed. "
                 "Doctor runs the command in the hooks file but cannot prove Antigravity loaded the "
                 "hook. Antigravity ignores a hook that crashes, times out or prints invalid output."
+            ),
+            "antigravity-t3": (
+                "Start a new Antigravity thread in T3 Code and check that `git push --force origin main` in a "
+                "scratch repository is denied. Doctor runs the command in the hooks file but cannot prove "
+                "Antigravity loaded the hook. Antigravity ignores a hook that crashes, times out or prints "
+                "invalid output."
             ),
         }[spec.id],
     }
@@ -667,7 +689,7 @@ def doctor_harness(
     )
     problems.extend(wiring["problems"])
     canaries = {"allow": False, "deny": False}
-    if release_report["healthy"] and (wiring["healthy"] or spec.id != "antigravity"):
+    if release_report["healthy"] and (wiring["healthy"] or spec.id not in ANTIGRAVITY_IDS):
         try:
             canaries = _run_canaries(
                 home,
@@ -827,6 +849,10 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError('--config-home requires --harness.')
             selected = [args.harness] if args.harness else [item['id'] for item in harness_catalog(args.user_home)
                         if item['detected'] and item['lifecycle_supported']]
+            if (args.harness == 'antigravity' and not args.config_home
+                    and _t3_antigravity_profiles(args.user_home.expanduser())):
+                # One request covers every place Antigravity runs on this machine.
+                selected.append('antigravity-t3')
             if not selected:
                 raise RuntimeError('No supported harness detected. Run harnesses, then install --harness <id>.')
             revision = _current_commit(source)
@@ -842,7 +868,8 @@ def main(argv: list[str] | None = None) -> int:
                     if args.harness:
                         raise
                     skipped.append({'harness': harness, 'reason': str(error)})
-            result = reports[0] if args.harness else {'healthy': True, 'reports': reports, 'skipped': skipped}
+            result = reports[0] if len(selected) == 1 and args.harness else {
+                'healthy': True, 'reports': reports, 'skipped': skipped}
             result['command'] = str(launcher) if launcher else None
             result['path_note'] = 'Add ~/.local/bin to PATH if safe-yolo is not found.'
         elif args.command == 'update':

@@ -33,9 +33,9 @@ For a manual or offline installation, download the ZIP and its `.zip.sha256`
 from Releases, verify before extraction, then run:
 
 ```sh
-sha256sum -c safe-yolo-3.0.0-beta.15.zip.sha256
-unzip safe-yolo-3.0.0-beta.15.zip
-cd safe-yolo-3.0.0-beta.15
+sha256sum -c safe-yolo-3.0.0-beta.16.zip.sha256
+unzip safe-yolo-3.0.0-beta.16.zip
+cd safe-yolo-3.0.0-beta.16
 python3 safe-yolo harnesses
 python3 safe-yolo install
 ```

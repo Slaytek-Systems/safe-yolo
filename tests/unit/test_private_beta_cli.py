@@ -262,7 +262,7 @@ class PrivateBetaCliTests(unittest.TestCase):
         self.assertEqual("adapter-only", catalog["grok"]["status"])
         self.assertFalse(catalog["grok"]["lifecycle_supported"])
         self.assertEqual(
-            {"codex", "claude-code", "cursor", "grok", "opencode", "antigravity", "devin"},
+            {"codex", "claude-code", "cursor", "grok", "opencode", "antigravity", "antigravity-t3", "devin"},
             set(catalog),
         )
 
