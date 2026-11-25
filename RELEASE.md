@@ -10,9 +10,11 @@ alone was denied. That held on every harness since the 3.0 engine.
   similar opening words are skipped, so `for f in a b; do rm "$f"; done` is
   read as `rm`.
 - A `cd` in the chain moves where later paths resolve, so `cd /tmp/x && rm
-  -rf build` is judged as a delete inside `/tmp`.
-- Quoted text and heredoc bodies are data: a commit message that mentions
-  `rm -rf` or `git push --force` is not a command.
+  -rf build` is judged as a delete inside `/tmp`. A `cd` inside `( … )`
+  ends with the subshell.
+- Quoted text, comments and heredoc bodies are data: a commit message or a
+  `# note` that mentions `rm -rf` or `git push --force` is not a command.
+  Redirects such as `2>&1` and `&>` are not separators.
 - Commands sent over `ssh` use the same reading, so a newline now separates
   remote commands too.
 

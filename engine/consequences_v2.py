@@ -111,6 +111,9 @@ _CONTENT_DESTROYING_COMMANDS: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 _SED_VALUE_OPTIONS = ("efl", ("--expression", "--file", "--line-length"))
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+# Shell punctuation inside quotes, kept as private characters while a line is split.
+_QUOTED = str.maketrans({mark: chr(0xE000 + index) for index, mark in enumerate(";|&()<>\n#")})
+_UNQUOTED = {ord(value): key for key, value in _QUOTED.items()}
 # Words that only open a command; the command they open is the next word.
 _LEADING_WORDS = frozenset({"{", "}", "!", "if", "then", "elif", "else", "do", "while", "until", "time"})
 # Shell syntax that runs more than one command. shlex reads these as words,
@@ -800,17 +803,20 @@ class ConsequenceKernel:
 
     def _remote_shell(self, command: str, cwd: Path, *, residuals: bool = True) -> Decision:
         try:
-            tokens = self._line_tokens(command)
+            tokens = self._chain_tokens(command)
         except ValueError:
             return Decision(
                 "approval_required",
                 "remote.execute",
                 "execute an unparseable remote command",
             )
-        for segment in self._commands(tokens):
-            decision = self._remote_segment(segment, cwd, residuals=residuals)
-            if decision.outcome != "allow":
-                return decision
+        for words, _ in self._commands(tokens):
+            if words:
+                decision = self._remote_segment(
+                    [word.translate(_UNQUOTED) for word in words], cwd, residuals=residuals
+                )
+                if decision.outcome != "allow":
+                    return decision
         return Decision("allow")
 
     def _each_command(self, command: str, cwd: Path) -> Decision:
@@ -819,45 +825,54 @@ class ConsequenceKernel:
             commands = self._commands(self._chain_tokens(command))
         except ValueError:
             return Decision("allow")
-        if len(commands) < 2:
-            return Decision("allow")
-        for tokens in commands:
-            if Path(tokens[0]).name == "cd" and len(tokens) == 2:
-                cwd = self._resolve_from(tokens[1], cwd)
-                continue
-            text = " ".join(
-                token if token.strip("<>&|") == "" else shlex.quote(token) for token in tokens
-            )
-            for residuals in (False, True):
-                decision = self._shell(text, cwd, residuals=residuals)
-                if decision.outcome != "allow":
-                    return decision
+        # A subshell gets its own working directory; leaving it restores the outer one.
+        directories = [cwd]
+        for words, separator in commands:
+            if words and Path(words[0]).name == "cd":
+                operands = [word for word in words[1:] if not word.startswith("-")]
+                if len(operands) == 1:
+                    directories[-1] = self._resolve_from(operands[0].translate(_UNQUOTED), directories[-1])
+            elif words:
+                text = " ".join(shlex.quote(word.translate(_UNQUOTED)) for word in words)
+                for residuals in (False, True):
+                    decision = self._shell(text, directories[-1], residuals=residuals)
+                    if decision.outcome != "allow":
+                        return decision
+            for mark in separator:
+                if mark == "(":
+                    directories.append(directories[-1])
+                elif mark == ")" and len(directories) > 1:
+                    directories.pop()
         return Decision("allow")
 
     @staticmethod
-    def _commands(tokens: list[str]) -> list[list[str]]:
-        commands: list[list[str]] = []
+    def _commands(tokens: list[str]) -> list[tuple[list[str], str]]:
+        """Each command's words with the separator that ends it; an opening "(" ends an empty one."""
+        commands: list[tuple[list[str], str]] = []
         current: list[str] = []
         for token in [*tokens, ";"]:
-            if not ConsequenceKernel._separator(token):
-                if current or token not in _LEADING_WORDS:
-                    current.append(token)
-                continue
-            if current:
-                commands.append(current)
+            if ConsequenceKernel._separator(token):
+                commands.append((current, token))
                 current = []
+            elif current or token not in _LEADING_WORDS:
+                current.append(token)
         return commands
 
     @staticmethod
     def _separator(token: str) -> bool:
-        # The lexer fuses neighbouring punctuation (";\n", "&&\n"); redirects such as ">&" stay words.
-        return bool(token) and not token.strip("<>|&;()\n") and (
+        # The lexer fuses neighbouring punctuation such as ";\n" and "&&\n".
+        return bool(token) and not token.strip("|&;()\n") and (
             token in {"&", "&&"} or any(mark in token for mark in ";|()\n")
         )
 
     @classmethod
     def _chain_tokens(cls, command: str) -> list[str]:
-        """Words and separators of a shell line. Heredoc bodies are data, so they are dropped."""
+        """Words and separators of a shell line.
+
+        Heredoc bodies and comments are dropped. Punctuation inside quotes or
+        after a backslash is kept as a private character so it stays part of
+        a word; translate words with _UNQUOTED to get the text back.
+        """
         kept: list[str] = []
         heredoc: tuple[str, bool] | None = None
         for line in command.replace("\\\n", " ").split("\n"):
@@ -870,7 +885,38 @@ class ConsequenceKernel:
                 heredoc = cls._heredoc_delimiter(cls._line_tokens(line))
             except ValueError:
                 pass
-        lexer = shlex.shlex("\n".join(kept), posix=True, punctuation_chars="<>|&;()\n")
+        text = "\n".join(kept)
+        out: list[str] = []
+        quote = ""
+        index = 0
+        while index < len(text):
+            char = text[index]
+            if char == "\\" and quote != "'" and index + 1 < len(text):
+                out.append(char + text[index + 1].translate(_QUOTED))
+                index += 2
+                continue
+            if quote:
+                if char == quote:
+                    quote = ""
+                    out.append(char)
+                else:
+                    out.append(char.translate(_QUOTED))
+            elif char in "'\"":
+                quote = char
+                out.append(char)
+            elif (char == "&" and (text[index - 1 : index] in {"<", ">"} or text[index + 1 : index + 2] == ">")) or (
+                char == "|" and text[index - 1 : index] == ">"
+            ):
+                # Part of a redirect such as 2>&1, &> or >|, which the recognizers read as one word.
+                out.append(char.translate(_QUOTED))
+            elif char == "#" and (not out or out[-1][-1] in " \t\r\n;|&()<>"):
+                newline = text.find("\n", index)
+                index = len(text) if newline < 0 else newline
+                continue
+            else:
+                out.append(char)
+            index += 1
+        lexer = shlex.shlex("".join(out), posix=True, punctuation_chars="|&;()\n")
         lexer.whitespace = " \t\r"
         lexer.whitespace_split = True
         lexer.commenters = ""
