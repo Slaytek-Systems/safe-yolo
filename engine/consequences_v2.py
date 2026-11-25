@@ -829,9 +829,9 @@ class ConsequenceKernel:
         directories = [cwd]
         for words, separator in commands:
             if words and Path(words[0]).name == "cd":
-                operands = [word for word in words[1:] if not word.startswith("-")]
+                operands = self._cd_operands([word.translate(_UNQUOTED) for word in words[1:]])
                 if len(operands) == 1:
-                    directories[-1] = self._resolve_from(operands[0].translate(_UNQUOTED), directories[-1])
+                    directories[-1] = self._resolve_from(operands[0], directories[-1])
             elif words:
                 text = " ".join(shlex.quote(word.translate(_UNQUOTED)) for word in words)
                 for residuals in (False, True):
@@ -844,6 +844,19 @@ class ConsequenceKernel:
                 elif mark == ")" and len(directories) > 1:
                     directories.pop()
         return Decision("allow")
+
+    @staticmethod
+    def _cd_operands(words: list[str]) -> list[str]:
+        operands: list[str] = []
+        target = False
+        for word in words:
+            if target:
+                target = False
+            elif _REDIRECT_SYNTAX & set(word):
+                target = word.rstrip("0123456789").endswith(("<", ">", "&", "|"))
+            elif not word.startswith("-"):
+                operands.append(word)
+        return operands
 
     @staticmethod
     def _commands(tokens: list[str]) -> list[tuple[list[str], str]]:
@@ -874,47 +887,54 @@ class ConsequenceKernel:
         a word; translate words with _UNQUOTED to get the text back.
         """
         kept: list[str] = []
-        heredoc: tuple[str, bool] | None = None
+        heredocs: list[tuple[str, bool]] = []
         for line in command.replace("\\\n", " ").split("\n"):
-            if heredoc is not None:
-                if (line.lstrip("\t") if heredoc[1] else line) == heredoc[0]:
-                    heredoc = None
+            if heredocs:
+                marker, strip_tabs = heredocs[0]
+                if (line.lstrip("\t") if strip_tabs else line) == marker:
+                    heredocs.pop(0)
                 continue
             kept.append(line)
             try:
-                heredoc = cls._heredoc_delimiter(cls._line_tokens(line))
+                tokens = cls._line_tokens(line)
             except ValueError:
-                pass
+                continue
+            for index, token in enumerate(tokens[:-1]):
+                if token == "<<":
+                    delimiter = tokens[index + 1]
+                    strip_tabs = delimiter.startswith("-") and len(delimiter) > 1
+                    heredocs.append((delimiter[1:] if strip_tabs else delimiter, strip_tabs))
         text = "\n".join(kept)
         out: list[str] = []
         quote = ""
+        depth = 0  # inside $( ), <( ) or >( ): a word of the command around it, not read
         index = 0
         while index < len(text):
             char = text[index]
-            if char == "\\" and quote != "'" and index + 1 < len(text):
-                out.append(char + text[index + 1].translate(_QUOTED))
+            previous, following = text[index - 1 : index], text[index + 1 : index + 2]
+            if char == "\\" and quote != "'" and following:
+                out.append(char + following.translate(_QUOTED))
                 index += 2
                 continue
             if quote:
-                if char == quote:
-                    quote = ""
-                    out.append(char)
-                else:
-                    out.append(char.translate(_QUOTED))
+                quote = "" if char == quote else quote
+                protect = char != "'" and char != '"'
             elif char in "'\"":
-                quote = char
-                out.append(char)
-            elif (char == "&" and (text[index - 1 : index] in {"<", ">"} or text[index + 1 : index + 2] == ">")) or (
-                char == "|" and text[index - 1 : index] == ">"
-            ):
-                # Part of a redirect such as 2>&1, &> or >|, which the recognizers read as one word.
-                out.append(char.translate(_QUOTED))
-            elif char == "#" and (not out or out[-1][-1] in " \t\r\n;|&()<>"):
+                quote, protect = char, False
+            elif char == "(" and (depth or previous in {"$", "<", ">"}):
+                depth, protect = depth + 1, True
+            elif char == ")" and depth:
+                depth, protect = depth - 1, True
+            elif char == "#" and not depth and (not out or out[-1][-1] in " \t\r\n;|&()<>"):
                 newline = text.find("\n", index)
                 index = len(text) if newline < 0 else newline
                 continue
             else:
-                out.append(char)
+                # Redirects such as 2>&1, &> and >| are one word to the recognizers.
+                protect = bool(depth) or (char == "&" and (previous in {"<", ">"} or following == ">")) or (
+                    char == "|" and previous == ">"
+                )
+            out.append(char.translate(_QUOTED) if protect else char)
             index += 1
         lexer = shlex.shlex("".join(out), posix=True, punctuation_chars="|&;()\n")
         lexer.whitespace = " \t\r"

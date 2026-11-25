@@ -14,13 +14,15 @@ alone was denied. That held on every harness since the 3.0 engine.
   ends with the subshell.
 - Quoted text, comments and heredoc bodies are data: a commit message or a
   `# note` that mentions `rm -rf` or `git push --force` is not a command.
-  Redirects such as `2>&1` and `&>` are not separators.
+  Redirects such as `2>&1` and `&>` are not separators. A `$( )`, `<( )` or
+  `>( )` substitution is a word of the command around it.
 - Commands sent over `ssh` use the same reading, so a newline now separates
   remote commands too.
 
 Cost: an agent that chains a delete or a force push after other work is now
 denied, exactly as if it had run that command alone.
 
-Limits. Wrappers, scripts, `bash -c` and `python -c` strings, variables and
-command output used as commands are still not read, as the architecture
+Limits. Wrappers, scripts, `bash -c` and `python -c` strings, variables,
+the inside of `$( )` substitutions and command output used as commands are
+still not read, as the architecture
 contract says.
