@@ -69,18 +69,16 @@ class AntigravityLifecycleTests(unittest.TestCase):
     def receipt_path(self):
         return self.safe_yolo_home / "state" / "installations" / "antigravity.json"
 
-    def installed_command(self, receipt: dict, root: Path | None = None) -> str:
-        release = Path(receipt["release"])
-        return shlex.join([
-            sys.executable, str(release / "scripts" / "bootstrap.py"),
-            "--release", str(release),
-            "--manifest-sha256", receipt["manifest_sha256"],
+    def installed_command(self, receipt: dict) -> str:
+        """The stable command: it names the launcher and harness, never the release the receipt holds."""
+        command = shlex.join([
+            sys.executable, str(self.safe_yolo_home / "hooks" / "antigravity.py"),
+            "--harness", "antigravity",
             "--entry", "antigravity_v3",
-            "--state-dir", str(self.safe_yolo_home / "state"),
             "--safe-yolo-home", str(self.safe_yolo_home),
-            "--user-home", str(self.user_home),
-            "--harness-home", str(root or self.gemini),
         ])
+        self.assertEqual(command, receipt["command"])
+        return command
 
     def hand_wired(self, release_name: str = "3.0.0-alpha.8", bootstrap: Path | None = None,
                    manifest: str = "f" * 64) -> dict:
@@ -166,8 +164,9 @@ class AntigravityLifecycleTests(unittest.TestCase):
         self.assertEqual("deny", tampered["decision"])
         self.assertIn("release verification failed", tampered["reason"])
 
-        missing = command.replace(f"--release {release}", f"--release {release}-missing")
-        code, absent, _ = self.reply(missing, "run_command", {"CommandLine": "git status"})
+        receipt_path = self.receipt_path()
+        receipt_path.write_text(json.dumps({**json.loads(receipt_path.read_text()), "release": f"{release}-missing"}))
+        code, absent, _ = self.reply(command, "run_command", {"CommandLine": "git status"})
         self.assertEqual(0, code)
         self.assertEqual("deny", absent["decision"])
         self.assertIn("manifest", absent["reason"])
@@ -235,7 +234,9 @@ class AntigravityLifecycleTests(unittest.TestCase):
             self.skipTest("running with permission to read any file")
         completed = self.bootstrap(release, "--release", str(unreadable), "--manifest-sha256",
                                    receipt["manifest_sha256"], "--entry", "codex_v3", "--state-dir", state)
-        self.assertEqual((1, ""), (completed.returncode, completed.stdout))
+        # An unreadable release blocks like any other integrity failure: exit 2, not a traceback.
+        self.assertEqual((2, ""), (completed.returncode, completed.stdout))
+        self.assertIn("fail-closed: PermissionError", completed.stderr)
 
     def test_other_entries_still_exit_two_on_integrity_failure(self):
         receipt = self.install()
@@ -260,7 +261,8 @@ class AntigravityLifecycleTests(unittest.TestCase):
         chosen = self.root / "chosen"
         receipt = self.install(config_home=chosen)
         self.assertEqual(str(chosen / "config" / "hooks.json"), receipt["config_path"])
-        code, denied, _ = self.reply(self.installed_command(receipt, chosen), "edit_file",
+        self.assertEqual(str(chosen), receipt["harness_home"])
+        code, denied, _ = self.reply(self.installed_command(receipt), "edit_file",
                                      {"AbsolutePath": str(chosen / "config" / "hooks.json")})
         self.assertEqual(0, code)
         self.assertEqual("deny", denied["decision"])
@@ -457,10 +459,21 @@ class AntigravityLifecycleTests(unittest.TestCase):
         self.install()
         interpreter.unlink()
         before = self.hooks.read_bytes(), self.receipt_path().read_bytes()
+        from scripts import distribute
+        real_write = distribute._atomic_write
+        published = []
 
-        with self.assertRaisesRegex(RuntimeError, "rollback was not applied"):
-            restore(self.safe_yolo_home, self.user_home, "antigravity", uninstall=False)
+        def write(path, payload, mode=0o600):
+            if Path(path) == self.hooks:
+                published.append(payload)
+            real_write(path, payload, mode)
 
+        with patch("scripts.distribute._atomic_write", side_effect=write):
+            with self.assertRaisesRegex(RuntimeError, "rollback was not applied"):
+                restore(self.safe_yolo_home, self.user_home, "antigravity", uninstall=False)
+
+        # Antigravity ignores a hook that cannot start, so the dead command must never be the live one.
+        self.assertEqual([], published)
         self.assertEqual(before, (self.hooks.read_bytes(), self.receipt_path().read_bytes()))
         self.assertTrue(self.doctor()["healthy"], self.doctor())
 
@@ -541,8 +554,7 @@ class AntigravityLifecycleTests(unittest.TestCase):
                 {**group["PreToolUse"][0]["hooks"][0], "timeout": 10.0}]}]},
             "other entry": owned_group(self.installed_command(receipt).replace("antigravity_v3", "codex_v3")),
             "reordered flags": owned_group(self.installed_command(receipt).replace(
-                f"--entry antigravity_v3 --state-dir {self.safe_yolo_home / 'state'}",
-                f"--state-dir {self.safe_yolo_home / 'state'} --entry antigravity_v3")),
+                "--harness antigravity --entry antigravity_v3", "--entry antigravity_v3 --harness antigravity")),
         }
         for name, edited in variants.items():
             with self.subTest(name):
@@ -601,6 +613,7 @@ class AntigravityGlobalLifecycleTests(unittest.TestCase):
 
             run([sys.executable, str(first / "safe-yolo"), "--home", str(home), "--user-home", str(user)],
                 "install", "--harness", "antigravity")
+            installed = hooks.read_bytes()
             launcher = [str(user / ".local/bin/safe-yolo")]
             first_version = (first / "VERSION").read_text().strip()
             environment["GEMINI_HOME"] = str(root / "another-root")
@@ -609,7 +622,7 @@ class AntigravityGlobalLifecycleTests(unittest.TestCase):
             report = run(launcher, "doctor")
             self.assertTrue(report["healthy"], report)
             self.assertEqual("3.0.0-beta.999", report["reports"][0]["version"])
-            self.assertIn("releases/3.0.0-beta.999/", json.dumps(json.loads(hooks.read_text())["safe-yolo"]))
+            self.assertEqual(installed, hooks.read_bytes())
             run(launcher, "rollback")
             self.assertEqual(first_version, run(launcher, "doctor")["reports"][0]["version"])
             run(launcher, "uninstall")
@@ -643,9 +656,12 @@ class AntigravityGlobalLifecycleTests(unittest.TestCase):
             run([sys.executable, str(first / "safe-yolo"), "--home", str(home), "--user-home", str(user)],
                 "install", "--harness", "antigravity")
             launcher = [str(user / ".local/bin/safe-yolo")]
-            for hooks, folder in ((terminal, user / ".gemini"), (in_t3, profile)):
+            for harness, folder in (("antigravity", user / ".gemini"), ("antigravity-t3", profile)):
+                receipt = json.loads((home / "state" / "installations" / f"{harness}.json").read_text())
+                self.assertEqual(str(folder), receipt["harness_home"])
+                hooks = folder / "config" / "hooks.json"
                 command = json.loads(hooks.read_text())["safe-yolo"]["PreToolUse"][0]["hooks"][0]["command"]
-                self.assertEqual(str(folder), shlex.split(command)[-1])
+                self.assertEqual(["--harness", harness], shlex.split(command)[2:4])
             report = run(launcher, "doctor")
             self.assertTrue(report["healthy"], report)
             self.assertEqual({"antigravity", "antigravity-t3"}, {item["harness"] for item in report["reports"]})

@@ -15,16 +15,25 @@ adapters. Lifecycle support is promoted per harness according to the
    `~/.safe-yolo/releases/`;
 3. preserves the selected harness's previous configuration in a timestamped
    backup;
-4. adds one native enforcement hook pinned to the release's manifest-covered
-   bootstrap and records the selected user and harness configuration roots;
+4. adds one native enforcement hook running the stable launcher
+   `~/.safe-yolo/hooks/<harness>.py`, a copy of the release's bootstrap, and
+   records the release, its manifest digest and the selected user and harness
+   configuration roots in the receipt the launcher reads;
 5. validates the native configuration without rewriting unrelated settings;
 6. runs an ordinary-work allow canary and a force-push deny canary through that
    harness adapter; and
 7. records an independent receipt under
    `~/.safe-yolo/state/installations/<harness>.json`.
 
+An update verifies the new release, runs the canaries against it directly,
+switches the receipt and launcher, then runs the canaries through the
+unchanged hook command, and restores the previous receipt and launcher if any
+step fails. It rewrites the harness file only when its Safe YOLO entry differs
+from the stable form: on first install, and once when migrating a
+release-pinned command from 3.0.0-beta.17 or earlier.
+
 It refuses to replace a foreign enforcement hook. In Claude Code, an update
-replaces only the hook the receipt pins and leaves `PreToolUse` hooks added
+replaces only the hook the receipt records and leaves `PreToolUse` hooks added
 since install in place. Deactivation refuses to overwrite configuration
 changed after installation.
 
@@ -66,9 +75,13 @@ for new installs and upgrades.
 python3 safe-yolo deactivate --harness cursor
 ```
 
-Deactivation restores the exact previous configuration bytes. For a fresh
-configuration, it moves the Safe-YOLO-created file into the backup area rather
-than erasing it.
+Deactivation removes only the Safe YOLO hook, even after updates, so no Safe
+YOLO hook stays behind and other owners' hooks and settings stay in place. Keys
+only Safe YOLO writes go back to their values from before the first install.
+If Safe YOLO created the file and nothing else is left in it, the file moves to
+the backup area rather than being erased. The OpenCode plugin file is wholly
+Safe YOLO's: deactivation puts back the plugin it replaced, or moves it to the
+backup area.
 
 ## Support boundary
 

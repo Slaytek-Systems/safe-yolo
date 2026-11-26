@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts.global_cli import restore
+from scripts.harness_wiring import pinned_command
 from scripts.distribute import (
     deactivate_codex,
     deactivate_harness,
@@ -74,14 +75,16 @@ class PrivateBetaCliTests(unittest.TestCase):
         self.assertTrue((self.safe_yolo_home / "state" / "codex-install.json").is_file())
         active = json.loads(self.hooks.read_text())
         command = active["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        self.assertEqual(receipt["command"], command)
         self.assertIn("--entry codex_v3", command)
-        self.assertIn("/releases/3.0.0-beta.2/scripts/bootstrap.py", command)
+        self.assertIn(f"{self.safe_yolo_home}/hooks/codex.py --harness codex", command)
+        self.assertNotIn("releases", command)
         self.assertIn(f"--safe-yolo-home {self.safe_yolo_home}", command)
-        self.assertIn(f"--harness-home {self.codex_home}", command)
+        self.assertEqual(str(self.codex_home), receipt["harness_home"])
         self.assertEqual(sha256(self.hooks), receipt["installed_hooks_sha256"])
 
     @patch("scripts.distribute.verify_source", return_value="8" * 40)
-    def test_install_keeps_an_older_legacy_bootstrap_and_pins_the_release_copy(self, _verify):
+    def test_install_keeps_an_older_legacy_bootstrap_and_runs_its_own_launcher(self, _verify):
         self.safe_yolo_home.mkdir()
         legacy_bootstrap = self.safe_yolo_home / "bootstrap.py"
         legacy_bootstrap.write_text("# beta.1 bootstrap\n")
@@ -189,9 +192,9 @@ class PrivateBetaCliTests(unittest.TestCase):
                 codex_home=self.codex_home,
             )
 
-    @patch("scripts.distribute.verify_source", return_value="9" * 40)
-    def test_beta_one_codex_receipt_remains_doctorable_and_reversible(self, _verify):
-        original = b'{"hooks":{"SessionStart":[]}}\n'
+    def beta_one_codex(self, original: bytes) -> None:
+        """Wire Codex the way 3.0.0-beta.1 did (git show 7b54ca8:scripts/distribute.py): a release-pinned
+        command through a home-level bootstrap.py, and a Codex receipt with no `bootstrap` or harness context."""
         self.hooks.write_bytes(original)
         install_codex(
             source=self.source,
@@ -199,14 +202,38 @@ class PrivateBetaCliTests(unittest.TestCase):
             codex_home=self.codex_home,
             expected_commit="9" * 40,
         )
-        generic = self.safe_yolo_home / "state" / "installations" / "codex.json"
-        generic.rename(self.root / "hidden-generic-receipt.json")
+        receipt = json.loads((self.safe_yolo_home / "state" / "codex-install.json").read_text())
+        release = Path(receipt["release"])
+        bootstrap = self.safe_yolo_home / "bootstrap.py"
+        shutil.copy2(release / "scripts" / "bootstrap.py", bootstrap)
+        pinned = shlex.join([
+            sys.executable, str(bootstrap), "--release", str(release), "--manifest-sha256",
+            receipt["manifest_sha256"], "--entry", "codex_v3", "--state-dir", str(self.safe_yolo_home / "state"),
+        ])
+        document = json.loads(self.hooks.read_text())
+        document["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = pinned
+        self.hooks.write_text(json.dumps(document, indent=2) + "\n")
+        legacy = {key: receipt[key] for key in (
+            "schema_version", "status", "version", "source_commit", "release", "manifest_sha256",
+            "hooks_path", "previous_hooks_existed", "previous_hooks_backup", "previous_hooks_mode", "healthy",
+            "canaries")}
+        legacy.update(installed_hooks_sha256=sha256(self.hooks),
+                      next_action="Restart Codex, open /hooks, review this command, and trust its hash.")
+        (self.safe_yolo_home / "state" / "codex-install.json").write_text(json.dumps(legacy))
+        (self.safe_yolo_home / "state" / "installations" / "codex.json").unlink()
+        Path(receipt["launcher"]).unlink()
+
+    @patch("scripts.distribute.verify_source", return_value="9" * 40)
+    def test_beta_one_codex_receipt_remains_doctorable_and_reversible(self, _verify):
+        original = b'{"hooks":{"SessionStart":[]}}\n'
+        self.beta_one_codex(original)
 
         report = doctor_codex(
             safe_yolo_home=self.safe_yolo_home,
             codex_home=self.codex_home,
         )
-        self.assertTrue(report["healthy"], report)
+        self.assertFalse(report["healthy"], report)
+        self.assertIn("run `safe-yolo update` to switch to it", " ".join(report["problems"]))
         result = deactivate_codex(
             safe_yolo_home=self.safe_yolo_home,
             codex_home=self.codex_home,
@@ -214,6 +241,49 @@ class PrivateBetaCliTests(unittest.TestCase):
 
         self.assertEqual("inactive", result["status"])
         self.assertEqual(original, self.hooks.read_bytes())
+
+    @patch("scripts.distribute.verify_source", return_value="9" * 40)
+    def test_beta_one_codex_receipt_migrates_to_the_stable_command_on_update(self, _verify):
+        original = b'{"hooks":{"SessionStart":[]}}\n'
+        self.beta_one_codex(original)
+        (self.source / "VERSION").write_text("3.0.0-beta.3\n")
+
+        receipt = install_codex(
+            source=self.source,
+            safe_yolo_home=self.safe_yolo_home,
+            codex_home=self.codex_home,
+            expected_commit="9" * 40,
+        )
+
+        command = json.loads(self.hooks.read_text())["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        self.assertEqual(receipt["command"], command)
+        self.assertIn("trust its hash", receipt["next_action"])
+        report = doctor_codex(safe_yolo_home=self.safe_yolo_home, codex_home=self.codex_home)
+        self.assertTrue(report["healthy"], report)
+        restore(self.safe_yolo_home.resolve(), self.user_home, "codex", uninstall=True)
+        self.assertEqual(original, self.hooks.read_bytes())
+
+    @patch("scripts.distribute.verify_source", return_value="9" * 40)
+    def test_rollback_to_beta_one_runs_the_saved_hook_before_publishing_it(self, _verify):
+        self.beta_one_codex(b'{"hooks":{"SessionStart":[]}}\n')
+        (self.source / "VERSION").write_text("3.0.0-beta.3\n")
+        install_codex(source=self.source, safe_yolo_home=self.safe_yolo_home, codex_home=self.codex_home,
+                      expected_commit="9" * 40)
+        migrated = self.hooks.read_bytes()
+        bootstrap = self.safe_yolo_home / "bootstrap.py"
+        kept = bootstrap.read_bytes()
+        bootstrap.unlink()
+
+        with self.assertRaisesRegex(RuntimeError, "rollback was not applied"):
+            restore(self.safe_yolo_home.resolve(), self.user_home, "codex", uninstall=False)
+
+        self.assertEqual(migrated, self.hooks.read_bytes())
+        self.assertTrue(doctor_codex(safe_yolo_home=self.safe_yolo_home, codex_home=self.codex_home)["healthy"])
+        bootstrap.write_bytes(kept)
+        result = restore(self.safe_yolo_home.resolve(), self.user_home, "codex", uninstall=False)
+        self.assertEqual(("active", "3.0.0-beta.2"), (result["status"], result["version"]))
+        command = json.loads(self.hooks.read_text())["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        self.assertEqual(str(bootstrap), shlex.split(command)[1])
 
     @patch("scripts.distribute.verify_source", return_value="e" * 40)
     def test_install_rolls_back_when_codex_hooks_are_disabled(self, _verify):
@@ -340,7 +410,7 @@ class PrivateBetaCliTests(unittest.TestCase):
         self.claude()
         document = json.loads(settings.read_text())
         own = document["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
-        other_state = {"type": "command", "command": own.replace(str(self.safe_yolo_home / "state"), "/srv/other/state")}
+        other_state = {"type": "command", "command": own.replace(str(self.safe_yolo_home), "/srv/other/.safe-yolo")}
         sibling = {"type": "command", "command": "echo sibling"}
         elsewhere = (
             "/usr/bin/python3 /srv/other/.safe-yolo/releases/9/scripts/bootstrap.py --release "
@@ -360,7 +430,7 @@ class PrivateBetaCliTests(unittest.TestCase):
 
         groups = json.loads(settings.read_text())["hooks"]["PreToolUse"]
         self.assertEqual(2, len(groups))
-        self.assertIn("/releases/3.0.0-beta.3/", groups[0]["hooks"][0]["command"])
+        self.assertEqual(own, groups[0]["hooks"][0]["command"])
         self.assertEqual(sibling, groups[0]["hooks"][1])
         self.assertEqual(later, groups[1])
         report = self.claude_doctor()
@@ -407,7 +477,7 @@ class PrivateBetaCliTests(unittest.TestCase):
                 settings.write_text(json.dumps(document))
                 edited = settings.read_bytes()
                 self.assertIn(
-                    "PreToolUse hook is not pinned to the expected Safe YOLO bootstrap release",
+                    "PreToolUse hook is not the command Safe YOLO installed",
                     self.claude_doctor()["problems"],
                 )
                 (self.source / "VERSION").write_text("3.0.0-beta.3\n")
@@ -425,7 +495,7 @@ class PrivateBetaCliTests(unittest.TestCase):
         for edit in (
             {"if": "Bash(printf *)"},
             {"timeout": "10"},
-            {"command": own["command"].replace(" --state-dir", "\n--state-dir")},
+            {"command": own["command"].replace(" --entry", "\n--entry")},
             {"command": own["command"] + " "},
             {"async": True},
             {"timeout": 10.0},
@@ -437,7 +507,7 @@ class PrivateBetaCliTests(unittest.TestCase):
                 settings.write_text(json.dumps(document))
                 edited = settings.read_bytes()
                 self.assertIn(
-                    "PreToolUse hook is not pinned to the expected Safe YOLO bootstrap release",
+                    "PreToolUse hook is not the command Safe YOLO installed",
                     self.claude_doctor()["problems"],
                 )
                 with self.assertRaisesRegex(RuntimeError, "Existing Safe YOLO hook changed"):
@@ -480,8 +550,7 @@ class PrivateBetaCliTests(unittest.TestCase):
         self.assertTrue(hook["failClosed"])
         self.assertIn("--entry cursor_v3", hook["command"])
         self.assertIn(f"--safe-yolo-home {self.safe_yolo_home}", hook["command"])
-        self.assertIn(f"--harness-home {cursor}", hook["command"])
-        self.assertIn(f"--user-home {self.user_home}", hook["command"])
+        self.assertEqual((str(cursor), str(self.user_home)), (receipt["harness_home"], receipt["user_home"]))
         protected_write = subprocess.run(
             shlex.split(hook["command"]),
             input=json.dumps(

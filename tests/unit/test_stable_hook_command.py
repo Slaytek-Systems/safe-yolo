@@ -1,0 +1,546 @@
+"""The hook command a harness sees stays byte-identical across Safe YOLO updates."""
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from scripts import distribute
+from scripts.distribute import deactivate_harness, doctor_harness, install_harness
+from scripts.global_cli import restore
+from scripts.harness_wiring import pinned_command, render_opencode_plugin
+
+
+ROOT = Path(__file__).resolve().parents[2]
+COMMIT = "c" * 40
+HARNESSES = ("codex", "claude-code", "cursor", "opencode", "antigravity")
+
+
+def codex_trust_hash(group: dict, hook: dict) -> str:
+    """The `currentHash` Codex 0.172.0 computes, and stores as `trusted_hash`, for one PreToolUse hook entry.
+
+    codex-rs/hooks/src/engine/discovery.rs `hook_hash`: the normalized handler, serialized through TOML
+    (absent options dropped), then codex-rs/config/src/fingerprint.rs `version_for_toml`: sorted compact
+    serde_json, UTF-8 unescaped, `sha256:` prefix.
+    """
+    handler = {"type": "command", "command": hook["command"], "timeout": max(1, hook.get("timeout", 600)),
+               "async": hook.get("async", False)}
+    if hook.get("statusMessage") is not None:
+        handler["statusMessage"] = hook["statusMessage"]
+    identity = {"event_name": "pre_tool_use", "hooks": [handler]}
+    if group.get("matcher") is not None:
+        identity["matcher"] = group["matcher"]
+    serialized = json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    return "sha256:" + hashlib.sha256(serialized).hexdigest()
+
+
+# A hooks.json entry and the `currentHash` Codex 0.172.0 reported for it (`codex app-server`, `hooks/list`).
+CODEX_KNOWN_ANSWER = (
+    {"matcher": "*", "hooks": [{
+        "type": "command",
+        "command": "/usr/bin/python3 /home/zo\u00eb/.safe-yolo/hooks/codex.py --harness codex --entry codex_v3 "
+                   "--safe-yolo-home /home/zo\u00eb/.safe-yolo",
+        "timeout": 10,
+        "statusMessage": "Checking explicit Safe YOLO restrictions \u2014 \u2713",
+    }]},
+    "sha256:1cf1bbc0f4a7eb543de01cd5605e95a522181817e5427c716fba7e9e9bf5db97",
+)
+
+
+class Interrupted(BaseException):
+    """The process stopped mid-write: no exception handler and no undo runs."""
+
+
+class StableHookCommandTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.homes(self.root)
+        environment = patch.dict(os.environ)
+        environment.start()
+        self.addCleanup(environment.stop)
+        for name in ("CODEX_HOME", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "OPENCODE_CONFIG_DIR", "GEMINI_HOME"):
+            os.environ.pop(name, None)
+        for target in ("scripts.distribute._require_opencode_v2",):
+            patcher = patch(target)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        verify = patch("scripts.distribute.verify_source", return_value=COMMIT)
+        verify.start()
+        self.addCleanup(verify.stop)
+
+    def homes(self, parent: Path) -> None:
+        """Point the test at a fresh Safe YOLO home and user home under `parent`."""
+        self.home = parent / ".safe-yolo"
+        self.user = parent / "home"
+        (self.user / ".codex").mkdir(parents=True)
+        (self.user / ".codex" / "config.toml").write_text(
+            'approval_policy = "never"\nsandbox_mode = "danger-full-access"\n')
+        (self.user / ".gemini" / "config").mkdir(parents=True)
+
+    def source(self, version: str) -> Path:
+        source = self.root / f"source-{version}"
+        for name in ("policy", "engine", "adapters"):
+            shutil.copytree(ROOT / name, source / name, ignore=shutil.ignore_patterns("__pycache__"))
+        (source / "scripts").mkdir()
+        # Each release's bootstrap differs, so a launcher left from the wrong release shows.
+        (source / "scripts" / "bootstrap.py").write_bytes(
+            (ROOT / "scripts" / "bootstrap.py").read_bytes() + f"# {version}\n".encode())
+        (source / "VERSION").write_text(f"{version}\n")
+        return source
+
+    def install(self, harness: str, version: str) -> dict:
+        source = self.root / f"source-{version}"
+        if not source.exists():
+            self.source(version)
+        return install_harness(harness=harness, source=source, safe_yolo_home=self.home,
+                               user_home=self.user, expected_commit=COMMIT)
+
+    def receipt(self, harness: str) -> dict:
+        return json.loads((self.home / "state" / "installations" / f"{harness}.json").read_text())
+
+    def config(self, harness: str) -> Path:
+        return Path(self.receipt(harness)["config_path"])
+
+    def command(self, harness: str) -> str:
+        path = self.config(harness)
+        if harness == "opencode":
+            text = path.read_text()
+            start = text.index("const COMMAND = ") + len("const COMMAND = ")
+            return shlex.join(json.loads(text[start:text.index(";", start)]))
+        document = json.loads(path.read_text())
+        if harness == "cursor":
+            return document["hooks"]["preToolUse"][0]["command"]
+        if harness == "antigravity":
+            return document["safe-yolo"]["PreToolUse"][0]["hooks"][0]["command"]
+        return document["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+
+    def decision(self, harness: str, shell_command: str, hook_command: str | None = None) -> str:
+        """Run the harness's hook command as the harness would and name its decision."""
+        cwd = str(self.root)
+        payload = {
+            "codex": {"hook_event_name": "PreToolUse", "cwd": cwd, "tool_name": "exec_command",
+                      "tool_input": {"cmd": shell_command}},
+            "claude-code": {"hook_event_name": "PreToolUse", "cwd": cwd, "tool_name": "Bash",
+                            "tool_input": {"command": shell_command}},
+            "cursor": {"hook_event_name": "preToolUse", "cwd": cwd, "tool_name": "Shell",
+                       "tool_input": {"command": shell_command}},
+            "opencode": {"tool": "shell", "sessionID": "s", "callID": "c", "cwd": cwd,
+                         "args": {"command": shell_command}},
+            "antigravity": {"stepIdx": 0, "conversationId": "c", "workspacePaths": [cwd],
+                            "toolCall": {"name": "run_command", "args": {"CommandLine": shell_command}}},
+        }[harness]
+        completed = subprocess.run(shlex.split(hook_command or self.command(harness)), input=json.dumps(payload),
+                                   capture_output=True, text=True, check=False)
+        if harness != "antigravity" and completed.returncode == 2:
+            return "fail-closed" if "fail-closed" in completed.stderr else "error"
+        if completed.returncode != 0:
+            return "error"
+        if not completed.stdout.strip():
+            return "allow"
+        reply = json.loads(completed.stdout)
+        if harness == "cursor":
+            return reply.get("permission", "error")
+        if harness in ("opencode", "antigravity"):
+            if "fail-closed" in str(reply.get("reason", "")):
+                return "fail-closed"
+            return reply.get("decision", "error")
+        return reply["hookSpecificOutput"]["permissionDecision"]
+
+    def tamper(self, release: Path) -> None:
+        policy = next(path for path in sorted((release / "policy").rglob("*")) if path.is_file())
+        policy.chmod(0o600)
+        policy.write_bytes(policy.read_bytes() + b"\n")
+
+    def test_update_leaves_every_harness_config_byte_identical(self):
+        for harness in HARNESSES:
+            self.install(harness, "3.0.0-beta.50")
+        before = {harness: self.config(harness).read_bytes() for harness in HARNESSES}
+        commands = {harness: self.command(harness) for harness in HARNESSES}
+
+        for harness in HARNESSES:
+            receipt = self.install(harness, "3.0.0-beta.51")
+            self.assertEqual("3.0.0-beta.51", receipt["version"])
+
+        for harness in HARNESSES:
+            with self.subTest(harness=harness):
+                self.assertEqual(before[harness], self.config(harness).read_bytes())
+                self.assertEqual(commands[harness], self.command(harness))
+                self.assertNotIn("releases", commands[harness])
+                self.assertNotIn(self.receipt(harness)["manifest_sha256"], commands[harness])
+                report = doctor_harness(harness=harness, safe_yolo_home=self.home, user_home=self.user)
+                self.assertTrue(report["healthy"], report)
+                self.assertEqual("3.0.0-beta.51", report["version"])
+
+    def test_codex_trust_hash_survives_an_update(self):
+        def trust_hash() -> str:
+            document = json.loads((self.user / ".codex" / "hooks.json").read_text())
+            group = document["hooks"]["PreToolUse"][0]
+            return codex_trust_hash(group, group["hooks"][0])
+
+        self.install("codex", "3.0.0-beta.50")
+        before = trust_hash()
+        self.install("codex", "3.0.0-beta.51")
+        self.assertEqual(before, trust_hash())
+        self.assertNotIn("trust its hash", self.receipt("codex")["next_action"].split(".")[0])
+
+    def test_after_an_update_the_same_command_runs_the_new_release(self):
+        for harness in HARNESSES:
+            self.install(harness, "3.0.0-beta.50")
+            self.install(harness, "3.0.0-beta.51")
+        # A broken old release no longer matters; only the new release is verified and run.
+        self.tamper(self.home / "releases" / "3.0.0-beta.50")
+        for harness in HARNESSES:
+            with self.subTest(harness=harness):
+                self.assertEqual("allow", self.decision(harness, "git status --short"))
+                self.assertEqual("deny", self.decision(harness, "git push --force origin main"))
+
+    def test_a_receipt_pointing_at_a_tampered_release_fails_closed(self):
+        for harness in HARNESSES:
+            self.install(harness, "3.0.0-beta.50")
+            self.install(harness, "3.0.0-beta.51")
+        self.tamper(self.home / "releases" / "3.0.0-beta.51")
+        for harness in HARNESSES:
+            with self.subTest(harness=harness):
+                self.assertEqual("fail-closed", self.decision(harness, "git status --short"))
+                report = doctor_harness(harness=harness, safe_yolo_home=self.home, user_home=self.user)
+                self.assertFalse(report["healthy"])
+
+    def test_an_inactive_or_unreadable_receipt_fails_closed(self):
+        for harness in ("codex", "antigravity"):
+            self.install(harness, "3.0.0-beta.50")
+        commands = {harness: self.command(harness) for harness in ("codex", "antigravity")}
+        codex = self.home / "state" / "installations" / "codex.json"
+        codex.write_text(json.dumps({**json.loads(codex.read_text()), "status": "inactive"}))
+        (self.home / "state" / "installations" / "antigravity.json").write_text("{not json")
+        for harness, command in commands.items():
+            self.assertEqual("fail-closed", self.decision(harness, "git status --short", command))
+
+    def test_the_launcher_is_refreshed_without_touching_the_command(self):
+        self.install("codex", "3.0.0-beta.50")
+        launcher = Path(shlex.split(self.command("codex"))[1])
+        self.assertFalse(launcher.is_relative_to(self.home / "releases"))
+        launcher.chmod(0o600)
+        launcher.write_text("# stale\n")
+        report = doctor_harness(harness="codex", safe_yolo_home=self.home, user_home=self.user)
+        self.assertFalse(report["healthy"])
+        self.assertTrue(any("launcher" in problem for problem in report["problems"]), report)
+        self.install("codex", "3.0.0-beta.51")
+        self.assertEqual((self.home / "releases" / "3.0.0-beta.51" / "scripts" / "bootstrap.py").read_bytes(),
+                         launcher.read_bytes())
+
+    def pin_like_beta_17(self, harness: str) -> None:
+        """Rewrite an install the way 3.0.0-beta.17 and earlier wired it: the command names a release and digest."""
+        receipt = self.receipt(harness)
+        release = Path(receipt["release"])
+        pinned = pinned_command(self.home, release, receipt["manifest_sha256"], {
+            "codex": "codex_v3", "claude-code": "claude_code_v3", "cursor": "cursor_v3",
+            "opencode": "opencode_v3", "antigravity": "antigravity_v3"}[harness],
+            user_home=self.user, harness_home=Path(receipt["harness_home"]))
+        path = self.config(harness)
+        if harness == "opencode":
+            payload = render_opencode_plugin(release, pinned)
+        else:
+            stable = json.dumps(self.command(harness))
+            payload = path.read_bytes().replace(stable.encode(), json.dumps(pinned).encode())
+        path.write_bytes(payload)
+        legacy = {key: value for key, value in receipt.items() if key not in ("command", "launcher")}
+        legacy["bootstrap"] = str(release / "scripts" / "bootstrap.py")
+        legacy["installed_config_sha256"] = hashlib.sha256(payload).hexdigest()
+        (self.home / "state" / "installations" / f"{harness}.json").write_text(json.dumps(legacy))
+        Path(receipt["launcher"]).unlink()
+
+    def test_one_update_migrates_a_pinned_command_and_later_updates_leave_it_alone(self):
+        for harness in HARNESSES:
+            self.install(harness, "3.0.0-beta.50")
+            self.pin_like_beta_17(harness)
+            self.assertIn("--manifest-sha256", self.command(harness))
+        for harness in HARNESSES:
+            self.install(harness, "3.0.0-beta.51")
+        migrated = {harness: self.config(harness).read_bytes() for harness in HARNESSES}
+        for harness in HARNESSES:
+            with self.subTest(harness=harness):
+                self.assertNotIn("--manifest-sha256", self.command(harness))
+                self.assertEqual("deny", self.decision(harness, "git push --force origin main"))
+            self.install(harness, "3.0.0-beta.52")
+        for harness in HARNESSES:
+            with self.subTest(harness=harness, step="second update"):
+                self.assertEqual(migrated[harness], self.config(harness).read_bytes())
+                report = doctor_harness(harness=harness, safe_yolo_home=self.home, user_home=self.user)
+                self.assertTrue(report["healthy"], report)
+
+    def test_the_trust_hash_helper_matches_a_hash_codex_computed(self):
+        group, expected = CODEX_KNOWN_ANSWER
+        self.assertEqual(expected, codex_trust_hash(group, group["hooks"][0]))
+
+    def write_refused(self, refuse):
+        """Patch Safe YOLO's file writes so `refuse(path, count)` decides, per write, whether to raise."""
+        real = distribute._atomic_write
+        counts: dict[Path, int] = {}
+
+        def write(path, payload, mode=0o600):
+            path = Path(path)
+            counts[path] = counts.get(path, 0) + 1
+            if refuse(path, counts[path]):
+                raise PermissionError(f"write refused: {path}")
+            real(path, payload, mode)
+
+        return patch("scripts.distribute._atomic_write", side_effect=write)
+
+    def test_a_failed_migration_restores_what_it_wrote_and_can_be_retried(self):
+        self.install("cursor", "3.0.0-beta.50")
+        self.pin_like_beta_17("cursor")
+        config = self.config("cursor")
+        receipt = self.home / "state" / "installations" / "cursor.json"
+        launcher = self.home / "hooks" / "cursor.py"
+        before = config.read_bytes(), receipt.read_bytes(), launcher.exists()
+
+        with self.write_refused(lambda path, _count: path == config):
+            with self.assertRaisesRegex(RuntimeError, "activation failed"):
+                self.install("cursor", "3.0.0-beta.51")
+
+        self.assertEqual(before, (config.read_bytes(), receipt.read_bytes(), launcher.exists()))
+        self.assertEqual("deny", self.decision("cursor", "git push --force origin main"))
+        self.install("cursor", "3.0.0-beta.51")
+        report = doctor_harness(harness="cursor", safe_yolo_home=self.home, user_home=self.user)
+        self.assertTrue(report["healthy"], report)
+
+    def test_a_failed_rollback_restores_every_file_it_can_and_names_the_rest(self):
+        self.install("cursor", "3.0.0-beta.50")
+        self.install("cursor", "3.0.0-beta.51")
+        receipt = self.home / "state" / "installations" / "cursor.json"
+        launcher = self.home / "hooks" / "cursor.py"
+        before = launcher.read_bytes()
+        real = distribute._run_canaries
+
+        def canaries(command, harness, timeout=None):
+            # The release itself answers; the hook published afterwards does not.
+            return real(command, harness, timeout) if "/releases/" in command else {"allow": False, "deny": False}
+
+        with self.write_refused(lambda path, count: path == receipt and count > 1), \
+                patch("scripts.distribute._run_canaries", side_effect=canaries):
+            with self.assertRaisesRegex(RuntimeError, f"rollback was not applied.*{receipt}"):
+                restore(self.home, self.user, "cursor", uninstall=False)
+
+        self.assertEqual(before, launcher.read_bytes())
+
+    def test_deactivate_after_an_update_leaves_no_safe_yolo_hook(self):
+        original = b'{"hooks":{"SessionStart":[]}}\n'
+        (self.user / ".codex" / "hooks.json").write_bytes(original)
+        for harness in HARNESSES:
+            self.install(harness, "3.0.0-beta.50")
+            self.install(harness, "3.0.0-beta.51")
+        configs = {harness: self.config(harness) for harness in HARNESSES}
+
+        for harness in HARNESSES:
+            with self.subTest(harness=harness):
+                deactivate_harness(harness=harness, safe_yolo_home=self.home, user_home=self.user)
+                if harness == "codex":
+                    self.assertEqual(original, configs[harness].read_bytes())
+                else:
+                    self.assertFalse(configs[harness].exists())
+        self.install("codex", "3.0.0-beta.52")
+        report = doctor_harness(harness="codex", safe_yolo_home=self.home, user_home=self.user)
+        self.assertTrue(report["healthy"], report)
+
+    def interrupted_migration(self, completed: int, *, history: bool) -> None:
+        """Migrate a pinned Cursor install and kill the update after `completed` of its writes: no undo runs."""
+        if history:
+            self.install("cursor", "3.0.0-beta.49")
+        self.install("cursor", "3.0.0-beta.50")
+        self.pin_like_beta_17("cursor")
+        watched = {self.home / "hooks" / "cursor.py", self.home / "state" / "installations" / "cursor.json",
+                   self.config("cursor")}
+        real = distribute._atomic_write
+        written = []
+
+        def write(path, payload, mode=0o600):
+            if Path(path) in watched:
+                if len(written) == completed:
+                    raise Interrupted(path)
+                written.append(path)
+            real(path, payload, mode)
+
+        with patch("scripts.distribute._atomic_write", side_effect=write), self.assertRaises(Interrupted):
+            self.install("cursor", "3.0.0-beta.51")
+
+    def test_an_interrupted_migration_still_guards_and_every_command_recovers(self):
+        def retry():
+            self.install("cursor", "3.0.0-beta.51")
+            return "3.0.0-beta.51"
+
+        def update():
+            self.install("cursor", "3.0.0-beta.52")
+            return "3.0.0-beta.52"
+
+        def rollback():
+            return restore(self.home, self.user, "cursor", uninstall=False)["version"]
+
+        def uninstall():
+            return restore(self.home, self.user, "cursor", uninstall=True)["status"]
+
+        def deactivate():
+            return deactivate_harness(harness="cursor", safe_yolo_home=self.home, user_home=self.user)["status"]
+
+        # Launcher, receipt, then hooks file: crash before the receipt, and before the hooks file.
+        for completed, rolled_back_to in ((1, "3.0.0-beta.49"), (2, "3.0.0-beta.50")):
+            for action, expected in ((retry, None), (update, None), (rollback, rolled_back_to),
+                                     (uninstall, "inactive"), (deactivate, "inactive")):
+                with self.subTest(completed=completed, action=action.__name__):
+                    self.homes(self.root / f"{completed}-{action.__name__}")
+                    self.interrupted_migration(completed, history=action is rollback)
+                    self.assertEqual("allow", self.decision("cursor", "git status --short"))
+                    self.assertEqual("deny", self.decision("cursor", "git push --force origin main"))
+                    config = self.config("cursor")
+
+                    outcome = action()
+
+                    if expected == "inactive":
+                        self.assertEqual("inactive", outcome)
+                        self.assertFalse(config.exists())
+                        continue
+                    self.assertEqual(expected or outcome, outcome)
+                    self.assertEqual(outcome, self.receipt("cursor")["version"])
+                    self.assertEqual("allow", self.decision("cursor", "git status --short"))
+                    self.assertEqual("deny", self.decision("cursor", "git push --force origin main"))
+                    if expected is None:
+                        report = doctor_harness(harness="cursor", safe_yolo_home=self.home, user_home=self.user)
+                        self.assertTrue(report["healthy"], report)
+
+    def stop_at_write(self, harness: str, config: Path, completed: int):
+        """Kill the process before the write after `completed` writes of launcher, receipt or harness file."""
+        watched = {self.home / "hooks" / f"{harness}.py", self.home / "state" / "installations" / f"{harness}.json",
+                   config}
+        real = distribute._atomic_write
+        written = []
+
+        def write(path, payload, mode=0o600):
+            if Path(path) in watched:
+                if len(written) == completed:
+                    raise Interrupted(path)
+                written.append(path)
+            real(path, payload, mode)
+
+        return patch("scripts.distribute._atomic_write", side_effect=write)
+
+    def test_a_first_install_stopped_before_the_hooks_file_can_be_installed_again(self):
+        for existing in (None, b'{"version": 1, "hooks": {"stop": [{"command": "echo stop"}]}}\n'):
+            for version in ("3.0.0-beta.50", "3.0.0-beta.51"):
+                with self.subTest(existing=bool(existing), version=version):
+                    self.homes(self.root / f"{bool(existing)}-{version}")
+                    hooks = self.user / ".cursor" / "hooks.json"
+                    if existing:
+                        hooks.parent.mkdir(parents=True)
+                        hooks.write_bytes(existing)
+                    # Launcher, receipt, then hooks file: stop before the hooks file.
+                    with self.stop_at_write("cursor", hooks, 2), self.assertRaises(Interrupted):
+                        self.install("cursor", "3.0.0-beta.50")
+                    self.assertEqual(existing, hooks.read_bytes() if hooks.exists() else None)
+
+                    self.install("cursor", version)
+
+                    self.assertEqual(version, self.receipt("cursor")["version"])
+                    self.assertEqual("deny", self.decision("cursor", "git push --force origin main"))
+                    report = doctor_harness(harness="cursor", safe_yolo_home=self.home, user_home=self.user)
+                    self.assertTrue(report["healthy"], report)
+                    deactivate_harness(harness="cursor", safe_yolo_home=self.home, user_home=self.user)
+                    self.assertEqual(existing, hooks.read_bytes() if hooks.exists() else None)
+
+    def test_doctor_reports_the_release_the_launcher_runs(self):
+        self.install("opencode", "3.0.0-beta.50")
+        source = self.source("3.0.0-beta.51")
+        # Same bootstrap bytes, so the launcher fits either release; a changed plugin template.
+        (source / "scripts" / "bootstrap.py").write_bytes(
+            (self.root / "source-3.0.0-beta.50" / "scripts" / "bootstrap.py").read_bytes())
+        template = source / "adapters" / "opencode_v2_plugin.js"
+        template.write_text(template.read_text() + "// changed\n")
+        # Launcher, receipt, then plugin: stop before the plugin.
+        with self.stop_at_write("opencode", self.config("opencode"), 2), self.assertRaises(Interrupted):
+            self.install("opencode", "3.0.0-beta.51")
+
+        report = doctor_harness(harness="opencode", safe_yolo_home=self.home, user_home=self.user)
+
+        self.assertEqual("3.0.0-beta.51", report["version"])
+        self.assertFalse(report["healthy"], report)
+
+    def test_a_deactivate_stopped_after_retiring_the_hooks_file_can_be_retried(self):
+        for action in ("deactivate", "uninstall"):
+            with self.subTest(action=action):
+                self.homes(self.root / action)
+                self.install("cursor", "3.0.0-beta.50")
+                hooks = self.config("cursor")
+                receipt = self.home / "state" / "installations" / "cursor.json"
+                with self.write_refused(lambda path, _count: path == receipt), self.assertRaises(PermissionError):
+                    deactivate_harness(harness="cursor", safe_yolo_home=self.home, user_home=self.user)
+                self.assertFalse(hooks.exists())
+
+                if action == "deactivate":
+                    deactivate_harness(harness="cursor", safe_yolo_home=self.home, user_home=self.user)
+                else:
+                    restore(self.home, self.user, "cursor", uninstall=True)
+
+                self.assertEqual("inactive", self.receipt("cursor")["status"])
+                self.assertFalse(hooks.exists())
+
+    def test_deactivate_removes_only_the_safe_yolo_hook(self):
+        stop = [{"hooks": [{"type": "command", "command": "echo stop"}]}]
+        deny = {"matcher": "Bash", "hooks": [{"type": "command", "command": "guard --deny"}]}
+        shell = [{"command": "guard --deny"}]
+        group = {"enabled": True, "PreToolUse": [{"matcher": "*", "hooks": [
+            {"type": "command", "command": "guard --deny", "timeout": 5}]}]}
+        # Each harness gets another owner's hook after install; the update carries it over.
+        cases = {
+            "codex": (lambda document: document["hooks"].update(Stop=stop), {"hooks": {"Stop": stop}}),
+            "claude-code": (lambda document: document["hooks"]["PreToolUse"].append(deny),
+                            {"hooks": {"PreToolUse": [deny]}}),
+            "cursor": (lambda document: document["hooks"].update(beforeShellExecution=shell),
+                       {"hooks": {"beforeShellExecution": shell}}),
+            "antigravity": (lambda document: document.update(guard=group), {"guard": group}),
+        }
+        for harness, (add, expected) in cases.items():
+            with self.subTest(harness=harness):
+                self.install(harness, "3.0.0-beta.50")
+                config = self.config(harness)
+                document = json.loads(config.read_text())
+                add(document)
+                config.write_text(json.dumps(document, indent=2) + "\n")
+                self.install(harness, "3.0.0-beta.51")
+
+                deactivate_harness(harness=harness, safe_yolo_home=self.home, user_home=self.user)
+
+                self.assertEqual(expected, json.loads(config.read_text()))
+
+    def test_an_unreadable_release_file_fails_closed(self):
+        for harness in ("codex", "claude-code", "antigravity"):
+            self.install(harness, "3.0.0-beta.50")
+        policy = next(path for path in sorted((self.home / "releases" / "3.0.0-beta.50" / "policy").rglob("*"))
+                      if path.is_file())
+        policy.chmod(0)
+        self.addCleanup(policy.chmod, 0o400)
+        for harness in ("codex", "claude-code", "antigravity"):
+            with self.subTest(harness=harness):
+                self.assertEqual("fail-closed", self.decision(harness, "git status --short"))
+
+    def test_doctor_does_not_run_a_launcher_that_does_not_match_the_release(self):
+        self.install("codex", "3.0.0-beta.50")
+        marker = self.root / "launcher-ran"
+        launcher = self.home / "hooks" / "codex.py"
+        launcher.chmod(0o600)
+        launcher.write_text(f"import pathlib\npathlib.Path({str(marker)!r}).touch()\n")
+
+        report = doctor_harness(harness="codex", safe_yolo_home=self.home, user_home=self.user)
+
+        self.assertFalse(report["healthy"])
+        self.assertEqual({"allow": False, "deny": False}, report["canaries"])
+        self.assertFalse(marker.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

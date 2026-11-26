@@ -1,5 +1,5 @@
 // Safe YOLO managed OpenCode V2 plugin. Written by `safe-yolo install --harness opencode`.
-// Do not edit: doctor compares this file with the copy rendered from the pinned release.
+// Do not edit: doctor compares this file with the copy rendered from the active release.
 import { spawn } from "node:child_process";
 
 const COMMAND = /* SAFE_YOLO_COMMAND */ [];

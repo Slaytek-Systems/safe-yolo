@@ -1,28 +1,51 @@
-# Safe YOLO 3.0.0-beta.17
+# Safe YOLO (unreleased): the hook command no longer changes on update
 
-A blocked command is now blocked however it is chained. Until now Safe YOLO
-judged only the first command of a line, so `cd repo && git push --force
-origin main` or `git status && rm -rf build` passed while the same command
-alone was denied. That held on every harness since the 3.0 engine.
+Updating Safe YOLO no longer switches the guard off in Codex. Until now each
+update rewrote the hook command, because it named the release folder and its
+manifest digest. Codex runs a hook only while its command matches the hash
+the user trusted in `/hooks`, so after every update Codex silently skipped the
+hook until it was trusted again. One devbox ran unguarded for six days.
 
-- Each command joined by `&&`, `||`, `;`, `|`, `&`, a newline or
-  parentheses gets the answer it would get alone. `if`/`then`/`do` and
-  similar opening words are skipped, so `for f in a b; do rm "$f"; done` is
-  read as `rm`.
-- A `cd` in the chain moves where later paths resolve, so `cd /tmp/x && rm
-  -rf build` is judged as a delete inside `/tmp`. A `cd` inside `( … )`
-  ends with the subshell.
-- Quoted text, comments and heredoc bodies are data: a commit message or a
-  `# note` that mentions `rm -rf` or `git push --force` is not a command.
-  Redirects such as `2>&1` and `&>` are not separators. A `$( )`, `<( )` or
-  `>( )` substitution is a word of the command around it.
-- Commands sent over `ssh` use the same reading, so a newline now separates
-  remote commands too.
+- Every harness now runs one stable command:
+  `<python3> ~/.safe-yolo/hooks/<harness>.py --harness <harness> --entry
+  <entry> --safe-yolo-home ~/.safe-yolo`. It names no release and no digest.
+- The launcher is a copy of the active release's bootstrap. It reads the
+  harness's install receipt for the release and digest, verifies the release,
+  and runs it. A missing, inactive or unreadable receipt, or a release that
+  is unreadable or fails verification, fails closed. Antigravity still gets a
+  JSON deny with exit 0. A missing launcher exits 2 from the interpreter, as a
+  missing pinned bootstrap did, which Antigravity ignores.
+- An update verifies the new release, runs the allow and deny canaries
+  against it directly, switches the receipt and launcher, then runs the
+  canaries again through the unchanged command. If any step fails, it undoes
+  each write that completed, newest first, and names any file it could not
+  restore. Rollback works the same way. It reads the hook from the saved
+  harness file, so receipts that name no command are covered too, and checks
+  that hook answers before it publishes it.
+- An update or rollback stopped between its receipt and harness-file writes
+  leaves the hook answering correctly. Every lifecycle command then continues
+  from the installation whose hook the file holds, so retry, update, rollback,
+  uninstall and deactivate all recover.
+- Deactivate, like uninstall, takes out only Safe YOLO's hook. Other owners'
+  hooks and settings stay, including ones added after install. A file Safe
+  YOLO created and that is left empty moves to the backup area. The OpenCode
+  plugin file is wholly Safe YOLO's and is retired as before.
+- Codex, Claude Code, Cursor and Antigravity hook files stay byte for byte the
+  same across updates. The OpenCode plugin stays the same unless a release
+  changes its template. Running sessions pick up the new release on their next
+  tool call, with no restart.
+- Doctor checks the stable command, that each launcher matches its active
+  release's bootstrap, and that the receipt's release verifies. It runs its
+  canaries only through a launcher that matches.
 
-Cost: an agent that chains a delete or a force push after other work is now
-denied, exactly as if it had run that command alone.
+Migration. The first update from 3.0.0-beta.17 or earlier recognises the old
+release-pinned command and replaces it with the stable one. That one rewrite
+changes the command, so Codex needs its hook trusted in `/hooks` once more.
+Later updates do not change it. Codex needs trust again only if the Python
+path in the command changes, for example after a Python upgrade.
 
-Limits. Wrappers, scripts, `bash -c` and `python -c` strings, variables,
-the inside of `$( )` substitutions and command output used as commands are
-still not read, as the architecture
-contract says.
+Limits. The stable command still embeds the interpreter path
+(`sys.executable` at install). Safe YOLO does not write Codex's trust record.
+The receipt and launcher are ordinary files in the user's home, as the release
+folder and the hooks file were before. Safe YOLO's integrity checks detect
+corruption and drift, not a same-user process that rewrites them on purpose.

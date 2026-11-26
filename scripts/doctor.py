@@ -42,8 +42,12 @@ def inspect_codex_wiring(
     safe_yolo_home: str | Path | None = None,
     user_home: str | Path | None = None,
     harness_home: str | Path | None = None,
+    command: str | None = None,
 ) -> dict[str, Any]:
-    """Read-only check for the pinned Codex hook lifecycle of one release entry."""
+    """Read-only check of the Codex hook lifecycle for one release entry.
+
+    With `command`, the PreToolUse hook must be exactly that command; otherwise it must pin the release.
+    """
     problems: list[str] = []
     try:
         config = tomllib.loads(Path(config_path).read_text(encoding="utf-8"))
@@ -64,17 +68,20 @@ def inspect_codex_wiring(
     pretool = _command_hooks(hooks, "PreToolUse")
     if len(pretool) != 1:
         problems.append("exactly one PreToolUse command hook is required")
-    elif pretool[0][0] != "*" or not _command_is_pinned(
+    elif pretool[0][0] != "*" or not _owns_command(
         pretool[0][1],
-        bootstrap_path=bootstrap_path,
-        release_path=release_path,
-        manifest_sha256=manifest_sha256,
-        entry=entry,
-        safe_yolo_home=safe_yolo_home,
-        user_home=user_home,
-        harness_home=harness_home,
+        {
+            "command": command,
+            "bootstrap_path": bootstrap_path,
+            "release_path": release_path,
+            "manifest_sha256": manifest_sha256,
+            "entry": entry,
+            "safe_yolo_home": safe_yolo_home,
+            "user_home": user_home,
+            "harness_home": harness_home,
+        },
     ):
-        problems.append("PreToolUse hook is not pinned to the expected Safe YOLO bootstrap release")
+        problems.append("PreToolUse hook is not the command Safe YOLO installed")
     if not _release_exposes_entry(release_path, entry):
         problems.append(f"release does not expose the expected entrypoint: {entry}")
     if approval_post_tool:
@@ -100,8 +107,8 @@ def inspect_codex_wiring(
 
 def inspect_claude_code_wiring(
     settings_path: str | Path,
-    bootstrap_path: str | Path,
-    manifest_sha256: str,
+    bootstrap_path: str | Path | None,
+    manifest_sha256: str | None,
     *,
     release_path: str | Path,
     entry: str = "claude_code_v3",
@@ -109,8 +116,9 @@ def inspect_claude_code_wiring(
     user_home: str | Path | None = None,
     harness_home: str | Path | None = None,
     state_dir: str | Path | None = None,
+    command: str | None = None,
 ) -> dict[str, Any]:
-    """Read-only check that Claude Code user settings pin one Safe YOLO PreToolUse hook."""
+    """Read-only check that Claude Code user settings hold one Safe YOLO PreToolUse hook."""
     problems: list[str] = []
     try:
         document = json.loads(Path(settings_path).read_text(encoding="utf-8"))
@@ -122,8 +130,9 @@ def inspect_claude_code_wiring(
         problems.append("disableAllHooks must not be set")
     hooks = document.get("hooks", {})
     groups = hooks.get("PreToolUse") if isinstance(hooks, dict) else None
-    slots = pinned_hook_slots(
+    slots = own_hook_slots(
         groups,
+        command=command,
         bootstrap_path=bootstrap_path,
         release_path=release_path,
         manifest_sha256=manifest_sha256,
@@ -136,7 +145,7 @@ def inspect_claude_code_wiring(
     if len(slots) > 1:
         problems.append("exactly one Safe YOLO PreToolUse command hook is required")
     elif not slots or groups[slots[0][0]].get("matcher", "") not in ("*", ""):
-        problems.append("PreToolUse hook is not pinned to the expected Safe YOLO bootstrap release")
+        problems.append("PreToolUse hook is not the command Safe YOLO installed")
     if not _release_exposes_entry(release_path, entry):
         problems.append(f"release does not expose the expected entrypoint: {entry}")
     return {"healthy": not problems, "problems": problems}
@@ -182,7 +191,7 @@ def _command_hooks(hooks: Any, event: str) -> list[tuple[str, str]]:
     return found
 
 
-def pinned_hook_slots(groups: Any, **pin: Any) -> list[tuple[int, int]]:
+def own_hook_slots(groups: Any, **pin: Any) -> list[tuple[int, int]]:
     """Positions, as (group, hook), of each hook that is, field for field, the entry Safe YOLO writes for this pin.
 
     Claude Code install, doctor and uninstall all find Safe YOLO's hook here.
@@ -200,14 +209,14 @@ def pinned_hook_slots(groups: Any, **pin: Any) -> list[tuple[int, int]]:
         and hook == command_hook(hook["command"])
         and type(hook["timeout"]) is int
         and _is_installer_spelling(hook["command"])
-        and _command_is_pinned(hook["command"], **pin)
+        and _owns_command(hook["command"], pin)
     ]
 
 
 def owns_antigravity_group(group: Any, **pin: Any) -> bool:
     """Whether this named group is, field for field, the one Safe YOLO writes for this pin."""
     command = antigravity_group_command(group)
-    return command is not None and _is_installer_spelling(command) and _command_is_pinned(command, **pin)
+    return command is not None and _is_installer_spelling(command) and _owns_command(command, pin)
 
 
 def inspect_antigravity_wiring(path: str | Path, **pin: Any) -> dict[str, Any]:
@@ -240,7 +249,25 @@ def _is_installer_spelling(command: str) -> bool:
     except ValueError:
         return False
     flags = tuple(tokens[2::2])
-    return shlex.join(tokens) == command and flags == INSTALLER_FLAG_ORDER[: len(flags)]
+    return shlex.join(tokens) == command and (
+        flags == INSTALLER_FLAG_ORDER[: len(flags)] or flags == STABLE_FLAG_ORDER
+    )
+
+
+STABLE_FLAG_ORDER = ("--harness", "--entry", "--safe-yolo-home")
+
+
+def _owns_command(command: str, pin: dict[str, Any]) -> bool:
+    """Whether `command` is the hook command this pin describes.
+
+    A pin with `command` is an install receipt's stable command and must match exactly.
+    Without it, the pin describes a release-pinned command from 3.0.0-beta.17 or earlier,
+    which one update migrates to the stable command.
+    """
+    if pin.get("command") is not None:
+        return command == pin["command"]
+    legacy = {key: value for key, value in pin.items() if key != "command"}
+    return legacy.get("bootstrap_path") is not None and _command_is_pinned(command, **legacy)
 
 
 def _command_is_pinned(

@@ -1,4 +1,4 @@
-"""Native harness configuration and immutable bootstrap command wiring."""
+"""Native harness configuration and the stable Safe YOLO hook command."""
 
 from __future__ import annotations
 
@@ -21,16 +21,54 @@ def read_json_object(path: Path) -> dict[str, Any]:
     return document
 
 
-def is_safe_yolo_command(command: Any, home: Path, entry: str = "codex_v3") -> bool:
+def launcher_path(home: Path, harness: str) -> Path:
+    """The fixed path of a harness's launcher: a copy of the active release's bootstrap.
+
+    One file per harness, so each harness's install, update and rollback refresh only its own.
+    """
+    return home / "hooks" / f"{harness}.py"
+
+
+def stable_arguments(home: Path, harness: str, entry: str) -> list[str]:
+    """Everything after the interpreter in the stable command; none of it changes between releases."""
+    return [str(launcher_path(home, harness)), "--harness", harness, "--entry", entry, "--safe-yolo-home", str(home)]
+
+
+def stable_command(home: Path, harness: str, entry: str) -> str:
+    """The hook command a harness runs. The release and its digest come from the install receipt."""
+    return shlex.join([sys.executable, *stable_arguments(home, harness, entry)])
+
+
+def _python_tokens(command: Any) -> list[str] | None:
     if not isinstance(command, str):
-        return False
+        return None
     try:
         tokens = shlex.split(command)
     except ValueError:
-        return False
+        return None
     if len(tokens) < 2 or not re.fullmatch(r"python3(\.\d+)?", Path(tokens[0]).name):
+        return None
+    return tokens
+
+
+def is_stable_command(command: Any, home: Path, harness: str, entry: str) -> bool:
+    """The stable command for this harness, as `shlex.join` spells it, with any python3 interpreter."""
+    tokens = _python_tokens(command)
+    return (
+        tokens is not None
+        and shlex.join(tokens) == command
+        and tokens[1:] == stable_arguments(home, harness, entry)
+    )
+
+
+def is_safe_yolo_command(command: Any, home: Path, entry: str = "codex_v3") -> bool:
+    """Any Safe YOLO hook command under this home: the stable form, or a release pin from 3.0.0-beta.17 or earlier."""
+    tokens = _python_tokens(command)
+    if tokens is None:
         return False
     bootstrap = Path(tokens[1])
+    if bootstrap.parent == home / "hooks":
+        return is_stable_command(command, home, bootstrap.stem, entry)
     release_bootstrap = (
         bootstrap.name == "bootstrap.py"
         and bootstrap.parent.name == "scripts"
@@ -180,6 +218,11 @@ def pinned_command(
     user_home: Path | None = None,
     harness_home: Path | None = None,
 ) -> str:
+    """A command that runs one release directly.
+
+    Install runs its canaries through it before the cut-over. Before 3.0.0-beta.18 every
+    hook was wired this way, which is why an update changed the command a harness saw.
+    """
     command = [
         sys.executable,
         str(release / "scripts" / "bootstrap.py"),
@@ -206,15 +249,7 @@ def pinned_command(
     return shlex.join(command)
 
 
-def inspect_cursor_wiring(
-    path: Path,
-    home: Path,
-    release: Path,
-    digest: str,
-    *,
-    user_home: Path | None = None,
-    harness_home: Path | None = None,
-) -> dict[str, Any]:
+def inspect_cursor_wiring(path: Path, owns: Callable[[str], bool]) -> dict[str, Any]:
     problems: list[str] = []
     try:
         document = read_json_object(path)
@@ -228,17 +263,8 @@ def inspect_cursor_wiring(
         hook = entries[0]
         if hook.get("matcher") != "*" or hook.get("failClosed") is not True:
             problems.append("Cursor preToolUse hook must match all tools and fail closed")
-        if not is_safe_yolo_command(hook.get("command"), home, "cursor_v3"):
-            problems.append("Cursor preToolUse hook is not a Safe YOLO command")
-        elif hook.get("command") != pinned_command(
-            home,
-            release,
-            digest,
-            "cursor_v3",
-            user_home=user_home,
-            harness_home=harness_home,
-        ):
-            problems.append("Cursor preToolUse hook is not pinned to the expected release")
+        if not isinstance(hook.get("command"), str) or not owns(hook["command"]):
+            problems.append("Cursor preToolUse hook is not the command Safe YOLO installed")
     return {"healthy": not problems, "problems": problems}
 
 
@@ -247,7 +273,7 @@ _OPENCODE_COMMAND_SLOT = "/* SAFE_YOLO_COMMAND */ []"
 
 
 def render_opencode_plugin(release: Path, command: str) -> bytes:
-    """The OpenCode plugin of this release, calling exactly this pinned command."""
+    """The OpenCode plugin of this release, calling exactly this command."""
     template = (release / OPENCODE_PLUGIN_TEMPLATE).read_text(encoding="utf-8")
     if template.count(_OPENCODE_COMMAND_SLOT) != 1:
         raise RuntimeError("OpenCode plugin template has no single command slot.")
@@ -296,30 +322,20 @@ def prepare_opencode_plugin(path: Path, release: Path, owned: list[bytes]) -> tu
     return original, path.stat().st_mode & 0o777
 
 
-def inspect_opencode_wiring(
-    path: Path,
-    home: Path,
-    release: Path,
-    digest: str,
-    *,
-    user_home: Path | None = None,
-    harness_home: Path | None = None,
-) -> dict[str, Any]:
+def inspect_opencode_wiring(path: Path, release: Path, commands: list[str]) -> dict[str, Any]:
+    """Whether the plugin file is this release's plugin calling one of `commands`."""
     problem = opencode_plugin_path_problem(path)
     if problem:
         return {"healthy": False, "problems": [problem]}
-    command = pinned_command(
-        home, release, digest, "opencode_v3", user_home=user_home, harness_home=harness_home
-    )
     try:
         actual = path.read_bytes()
-        expected = render_opencode_plugin(release, command)
+        expected = [render_opencode_plugin(release, command) for command in commands]
     except (OSError, RuntimeError) as error:
         return {"healthy": False, "problems": [f"OpenCode plugin unreadable: {type(error).__name__}"]}
-    if actual != expected:
+    if actual not in expected:
         return {
             "healthy": False,
-            "problems": ["OpenCode plugin is not the Safe YOLO plugin pinned to the expected release"],
+            "problems": ["OpenCode plugin is not the Safe YOLO plugin this installation wrote"],
         }
     return {"healthy": True, "problems": []}
 
@@ -422,6 +438,8 @@ def is_hand_wired_antigravity_group(group: Any, home: Path) -> bool:
         return False
     tokens = shlex.split(command)
     flags = dict(zip(tokens[2::2], tokens[3::2]))
+    if "--release" not in flags:
+        return False
     release = Path(flags["--release"])
     bootstrap = Path(tokens[1])
     return (
