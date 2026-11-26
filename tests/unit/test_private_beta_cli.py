@@ -196,6 +196,16 @@ class PrivateBetaCliTests(unittest.TestCase):
         self.assertEqual("Restart Codex.", doctor()["activation_check"])
         self.assertEqual("Restart Codex.", install()["next_action"])
 
+        approved = self.config.read_bytes()
+        cannot_tell = "Codex may skip Safe YOLO: cannot tell whether you approved it in /hooks"
+        self.config.write_bytes(approved + b'enabled = "true"\n')  # Codex rejects this whole config.toml.
+        self.assertFalse(doctor()["healthy"])
+        self.assertTrue(doctor()["hook_approval"].startswith(cannot_tell))
+        self.assertIn(skipped, install()["next_action"])
+        self.config.write_bytes(approved + b'# \xff\n')
+        self.assertEqual(f"{cannot_tell} (cannot read config.toml: UnicodeDecodeError)", doctor()["hook_approval"])
+        self.config.write_bytes(approved)
+
         (self.source / "VERSION").write_text("3.0.0-beta.3\n")
         self.assertIn(skipped, install()["next_action"])
         self.assertEqual(f"{skipped} (the saved approval is for a different hook)", doctor()["hook_approval"])

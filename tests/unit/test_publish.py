@@ -7,7 +7,8 @@ import unittest
 from unittest.mock import patch
 
 from scripts.package import build_bundle
-from scripts.publish import ROOT, acceptance, publish
+from scripts.doctor import CODEX_SKIPS_SAFE_YOLO
+from scripts.publish import ROOT, acceptance, check_fresh_doctor, publish
 
 
 class PublicationTests(unittest.TestCase):
@@ -89,6 +90,49 @@ class AcceptanceIsolationTests(unittest.TestCase):
 
             self.assertEqual([], list(home.iterdir()))
             self.assertFalse(agy_ran.exists())
+
+
+class FreshDoctorTests(unittest.TestCase):
+    """Release acceptance: in a fresh home only Codex is unhealthy, and only because /hooks has not approved it."""
+
+    def reports(self):
+        reports = [{'harness': harness, 'healthy': True, 'problems': [], 'canaries': {'allow': True, 'deny': True}}
+                   for harness in ('codex', 'claude-code', 'cursor', 'opencode', 'antigravity')]
+        reports[0].update(healthy=False, hook_approval=f'{CODEX_SKIPS_SAFE_YOLO} (no approval is saved)')
+        return reports
+
+    def check(self, reports, returncode=1):
+        check_fresh_doctor(returncode, json.dumps({'healthy': False, 'reports': reports}))
+
+    def test_accepts_only_the_codex_approval_warning(self):
+        self.check(self.reports())
+
+    def test_rejects_every_other_doctor_result(self):
+        def warning_elsewhere(reports):
+            reports[1].update(healthy=False, hook_approval=reports[0]['hook_approval'])
+
+        def codex_problem(reports):
+            reports[0]['problems'] = ['hooks unreadable']
+
+        wrong = {
+            'exit 0': lambda reports: 0, 'exit 2': lambda reports: 2,
+            'missing codex': lambda reports: reports.pop(0),
+            'codex twice': lambda reports: reports.append(dict(reports[0])),
+            'warning on another harness': warning_elsewhere,
+            'codex unknown': lambda reports: reports[0].update(hook_approval='Codex may skip Safe YOLO: x'),
+            'codex healthy': lambda reports: reports[0].update(healthy=True),
+            'empty canaries': lambda reports: reports[2].update(canaries={}),
+            'failed canary': lambda reports: reports[3].update(canaries={'allow': True, 'deny': False}),
+            'codex problem': codex_problem,
+        }
+        for name, change in wrong.items():
+            with self.subTest(name):
+                reports = self.reports()
+                returncode = change(reports)
+                with self.assertRaises(ValueError):
+                    self.check(reports, returncode if isinstance(returncode, int) else 1)
+        with self.assertRaises(ValueError):
+            check_fresh_doctor(2, '')
 
 
 if __name__ == '__main__':
