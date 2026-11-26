@@ -414,6 +414,81 @@ class StableHookCommandTests(unittest.TestCase):
                         report = doctor_harness(harness="cursor", safe_yolo_home=self.home, user_home=self.user)
                         self.assertTrue(report["healthy"], report)
 
+    def stop_at_write(self, harness: str, config: Path, completed: int):
+        """Kill the process before the write after `completed` writes of launcher, receipt or harness file."""
+        watched = {self.home / "hooks" / f"{harness}.py", self.home / "state" / "installations" / f"{harness}.json",
+                   config}
+        real = distribute._atomic_write
+        written = []
+
+        def write(path, payload, mode=0o600):
+            if Path(path) in watched:
+                if len(written) == completed:
+                    raise Interrupted(path)
+                written.append(path)
+            real(path, payload, mode)
+
+        return patch("scripts.distribute._atomic_write", side_effect=write)
+
+    def test_a_first_install_stopped_before_the_hooks_file_can_be_installed_again(self):
+        for existing in (None, b'{"version": 1, "hooks": {"stop": [{"command": "echo stop"}]}}\n'):
+            for version in ("3.0.0-beta.50", "3.0.0-beta.51"):
+                with self.subTest(existing=bool(existing), version=version):
+                    self.homes(self.root / f"{bool(existing)}-{version}")
+                    hooks = self.user / ".cursor" / "hooks.json"
+                    if existing:
+                        hooks.parent.mkdir(parents=True)
+                        hooks.write_bytes(existing)
+                    # Launcher, receipt, then hooks file: stop before the hooks file.
+                    with self.stop_at_write("cursor", hooks, 2), self.assertRaises(Interrupted):
+                        self.install("cursor", "3.0.0-beta.50")
+                    self.assertEqual(existing, hooks.read_bytes() if hooks.exists() else None)
+
+                    self.install("cursor", version)
+
+                    self.assertEqual(version, self.receipt("cursor")["version"])
+                    self.assertEqual("deny", self.decision("cursor", "git push --force origin main"))
+                    report = doctor_harness(harness="cursor", safe_yolo_home=self.home, user_home=self.user)
+                    self.assertTrue(report["healthy"], report)
+                    deactivate_harness(harness="cursor", safe_yolo_home=self.home, user_home=self.user)
+                    self.assertEqual(existing, hooks.read_bytes() if hooks.exists() else None)
+
+    def test_doctor_reports_the_release_the_launcher_runs(self):
+        self.install("opencode", "3.0.0-beta.50")
+        source = self.source("3.0.0-beta.51")
+        # Same bootstrap bytes, so the launcher fits either release; a changed plugin template.
+        (source / "scripts" / "bootstrap.py").write_bytes(
+            (self.root / "source-3.0.0-beta.50" / "scripts" / "bootstrap.py").read_bytes())
+        template = source / "adapters" / "opencode_v2_plugin.js"
+        template.write_text(template.read_text() + "// changed\n")
+        # Launcher, receipt, then plugin: stop before the plugin.
+        with self.stop_at_write("opencode", self.config("opencode"), 2), self.assertRaises(Interrupted):
+            self.install("opencode", "3.0.0-beta.51")
+
+        report = doctor_harness(harness="opencode", safe_yolo_home=self.home, user_home=self.user)
+
+        self.assertEqual("3.0.0-beta.51", report["version"])
+        self.assertFalse(report["healthy"], report)
+
+    def test_a_deactivate_stopped_after_retiring_the_hooks_file_can_be_retried(self):
+        for action in ("deactivate", "uninstall"):
+            with self.subTest(action=action):
+                self.homes(self.root / action)
+                self.install("cursor", "3.0.0-beta.50")
+                hooks = self.config("cursor")
+                receipt = self.home / "state" / "installations" / "cursor.json"
+                with self.write_refused(lambda path, _count: path == receipt), self.assertRaises(PermissionError):
+                    deactivate_harness(harness="cursor", safe_yolo_home=self.home, user_home=self.user)
+                self.assertFalse(hooks.exists())
+
+                if action == "deactivate":
+                    deactivate_harness(harness="cursor", safe_yolo_home=self.home, user_home=self.user)
+                else:
+                    restore(self.home, self.user, "cursor", uninstall=True)
+
+                self.assertEqual("inactive", self.receipt("cursor")["status"])
+                self.assertFalse(hooks.exists())
+
     def test_deactivate_removes_only_the_safe_yolo_hook(self):
         stop = [{"hooks": [{"type": "command", "command": "echo stop"}]}]
         deny = {"matcher": "Bash", "hooks": [{"type": "command", "command": "guard --deny"}]}
