@@ -59,7 +59,11 @@ bootstrap. It reads the harness's install receipt
 (`state/installations/<harness>.json`) for the release, its manifest digest and
 the user and harness configuration roots, verifies the release against that
 digest, and dispatches to the adapter. A missing, inactive or unreadable
-receipt, or a release that fails verification, fails closed. The command names
+receipt, or a release that is unreadable or fails verification, fails closed.
+A missing launcher is the one case Python cannot answer: the interpreter exits
+2 without running anything, as it did for a missing release-pinned bootstrap.
+Codex, Claude Code and Cursor treat that as a block, Antigravity ignores it, and
+doctor reports the launcher as not matching. The command names
 no release and no digest, so an update changes only the receipt and the
 launcher. The harness file and any trust a harness gives the command, such as
 Codex's `/hooks` hash, stay the same. Running sessions use the new release on

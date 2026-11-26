@@ -234,7 +234,9 @@ class AntigravityLifecycleTests(unittest.TestCase):
             self.skipTest("running with permission to read any file")
         completed = self.bootstrap(release, "--release", str(unreadable), "--manifest-sha256",
                                    receipt["manifest_sha256"], "--entry", "codex_v3", "--state-dir", state)
-        self.assertEqual((1, ""), (completed.returncode, completed.stdout))
+        # An unreadable release blocks like any other integrity failure: exit 2, not a traceback.
+        self.assertEqual((2, ""), (completed.returncode, completed.stdout))
+        self.assertIn("fail-closed: PermissionError", completed.stderr)
 
     def test_other_entries_still_exit_two_on_integrity_failure(self):
         receipt = self.install()

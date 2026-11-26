@@ -75,9 +75,11 @@ for new installs and upgrades.
 python3 safe-yolo deactivate --harness cursor
 ```
 
-Deactivation restores the exact previous configuration bytes. For a fresh
-configuration, it moves the Safe-YOLO-created file into the backup area rather
-than erasing it.
+Deactivation restores the exact configuration bytes from before Safe YOLO was
+first installed, even after updates, so no Safe YOLO hook stays behind. For a
+fresh configuration, it moves the Safe-YOLO-created file into the backup area
+rather than erasing it. Changes made between install and the last update are
+kept in that update's backup under `~/.safe-yolo/backups/`.
 
 ## Support boundary
 

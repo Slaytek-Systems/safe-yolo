@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from typing import Any
+from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -118,6 +118,47 @@ def _exclusive_write(path: Path, payload: bytes, mode: int) -> None:
         os.link(temporary, path)
     finally:
         temporary.unlink()
+
+
+Step = tuple[Callable[[], None], Callable[[], None]]
+
+
+def _restore_file(path: Path, previous: bytes | None, mode: int) -> Callable[[], None]:
+    """An undo that puts `path` back as it was: `previous`, or absent."""
+    def undo() -> None:
+        try:
+            if previous is not None:
+                _atomic_write(path, previous, mode)
+            elif path.exists():
+                path.unlink()
+        except OSError as error:
+            raise RuntimeError(f"{path} ({error})") from error
+    return undo
+
+
+def _apply_steps(steps: list[Step], check: Callable[[], None]) -> None:
+    """Run each (write, undo) step in order, then `check`.
+
+    On any failure, undo the steps whose write completed, newest first. Every undo runs even
+    when another fails, so a write that never happened is never undone and one stuck file
+    does not strand the rest. The error says what was restored and names any file that was not.
+    """
+    undos: list[Callable[[], None]] = []
+    try:
+        for write, undo in steps:
+            write()
+            undos.append(undo)
+        check()
+    except Exception as error:
+        stuck = []
+        for undo in reversed(undos):
+            try:
+                undo()
+            except Exception as undo_error:
+                stuck.append(str(undo_error))
+        if stuck:
+            raise RuntimeError(f"{error}; could not restore {', '.join(stuck)}") from error
+        raise RuntimeError(f"previous hooks restored: {error}") from error
 
 
 def _run_canaries(command_text: str, harness: str, timeout: int | None = None) -> dict[str, bool]:
@@ -375,6 +416,19 @@ def _retire(
     return destination
 
 
+def _direct_command(command: str, home: Path, spec: HarnessSpec, receipt: dict[str, Any]) -> str:
+    """`command` made to run `receipt`'s release directly, with the same interpreter.
+
+    A stable command reads the release from the active receipt, so it cannot check a release
+    before the receipt names it. A release-pinned command already runs its own release.
+    """
+    if not _is_stable_command(command, home, spec.id, spec.entry):
+        return command
+    pinned = _pinned_command(home, Path(receipt["release"]), receipt["manifest_sha256"], spec.entry,
+                             user_home=Path(receipt["user_home"]), harness_home=Path(receipt["harness_home"]))
+    return shlex.join([shlex.split(command)[0], *shlex.split(pinned)[1:]])
+
+
 def _config_root(spec: HarnessSpec, config_path: Path) -> Path:
     """The harness configuration folder that holds this config file."""
     return config_path.parents[len(Path(spec.config_file).parts) - 1]
@@ -585,32 +639,33 @@ def install_harness(
                                                  'previous_config_mode')})
         receipt['previous_install'] = {key: value for key, value in previous_receipt.items()
                                        if key != 'previous_install'}
-    try:
+    receipt_bytes = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode()
+    steps: list[Step] = [
         # The launcher first: a newer bootstrap still verifies the release an older receipt names.
-        _atomic_write(launcher, (release / "scripts" / "bootstrap.py").read_bytes(), 0o700)
+        (lambda: _atomic_write(launcher, (release / "scripts" / "bootstrap.py").read_bytes(), 0o700),
+         _restore_file(launcher, previous_launcher, 0o700)),
         # The cut-over: from here the unchanged command runs the new release.
-        _atomic_write(receipt_path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode())
-        if config_changes:
-            _atomic_write(target, payload, original_mode)
+        (lambda: _atomic_write(receipt_path, receipt_bytes), _restore_file(receipt_path, previous_receipt_bytes, 0o600)),
+    ]
+    if config_changes:
+        def remove_new_config() -> None:
+            _retire(spec.id, target, hashlib.sha256(payload).hexdigest(), home,
+                    destination=backup_root / f"failed-{target.name}")
+        steps.append((lambda: _atomic_write(target, payload, original_mode),
+                      remove_new_config if original_bytes is None
+                      else _restore_file(target, original_bytes, original_mode)))
+
+    def check() -> None:
         wiring = _inspect_wiring(spec, target, home, _receipt_pin(receipt, home, spec))
         installed = (_installed_canaries(spec, command, target)
                      if wiring["healthy"] or spec.id not in ANTIGRAVITY_IDS else {"allow": False, "deny": False})
         if not wiring["healthy"] or not all(installed.values()):
             raise RuntimeError(f"doctor problems={wiring['problems']}; canaries={installed}")
-    except Exception as error:
-        if config_changes:
-            if original_bytes is None:
-                _retire(spec.id, target, hashlib.sha256(payload).hexdigest(), home,
-                        destination=backup_root / f"failed-{target.name}")
-            else:
-                _atomic_write(target, original_bytes, original_mode)
-        for path, previous, mode in ((receipt_path, previous_receipt_bytes, 0o600),
-                                     (launcher, previous_launcher, 0o700)):
-            if previous is not None:
-                _atomic_write(path, previous, mode)
-            elif path.exists():
-                path.unlink()
-        raise RuntimeError(f"Safe YOLO activation failed; previous hooks restored: {error}") from error
+
+    try:
+        _apply_steps(steps, check)
+    except RuntimeError as error:
+        raise RuntimeError(f"Safe YOLO activation failed; {error}") from error
     return receipt
 
 
@@ -673,12 +728,15 @@ def doctor_harness(
         command = None
     launcher = _launcher_path(home, spec.id)
     bootstrap = release / "scripts" / "bootstrap.py"
-    if not launcher.is_file() or not bootstrap.is_file() or launcher.read_bytes() != bootstrap.read_bytes():
+    launcher_matches = launcher.is_file() and bootstrap.is_file() and launcher.read_bytes() == bootstrap.read_bytes()
+    if not launcher_matches:
         problems.append(f"launcher {launcher} does not match the active release's bootstrap")
     wiring = _inspect_wiring(spec, config_path, home, _receipt_pin(receipt, home, spec))
     problems.extend(wiring["problems"])
     canaries = {"allow": False, "deny": False}
-    if command and release_report["healthy"] and (wiring["healthy"] or spec.id not in ANTIGRAVITY_IDS):
+    # Doctor runs only a launcher it has checked; an unknown file under the hook path stays unrun.
+    if command and launcher_matches and release_report["healthy"] and (
+            wiring["healthy"] or spec.id not in ANTIGRAVITY_IDS):
         try:
             canaries = _installed_canaries(spec, command, config_path)
         except RuntimeError as error:
@@ -706,7 +764,11 @@ def deactivate_harness(
     if receipt.get("status") != "active":
         raise RuntimeError(f"Safe YOLO {spec.name} installation is not active.")
     config_path = Path(str(receipt.get("config_path", "")))
-    if receipt.get("previous_config_existed"):
+    # After an update the configuration from before it holds the same Safe YOLO hook, which would
+    # then refuse everything once this receipt is inactive. Deactivate returns to the configuration
+    # from before Safe YOLO was first installed, the same baseline uninstall uses.
+    baseline = receipt.get("original_install", receipt)
+    if baseline.get("previous_config_existed"):
         if (
             config_path.is_symlink()
             or not config_path.is_file()
@@ -716,10 +778,10 @@ def deactivate_harness(
             raise RuntimeError(
                 f"{spec.name} configuration changed since installation; refusing to overwrite newer work."
             )
-        backup = Path(str(receipt.get("previous_config_backup")))
+        backup = Path(str(baseline.get("previous_config_backup")))
         if not backup.is_file():
             raise RuntimeError("Previous configuration backup is missing; refusing an incomplete rollback.")
-        _atomic_write(config_path, backup.read_bytes(), int(receipt.get("previous_config_mode", 0o600)))
+        _atomic_write(config_path, backup.read_bytes(), int(baseline.get("previous_config_mode", 0o600)))
     else:
         retained = _retire(spec.id, config_path, str(receipt.get("installed_config_sha256")), home)
         receipt["deactivated_config_backup"] = str(retained)
@@ -729,7 +791,7 @@ def deactivate_harness(
     return {
         "status": "inactive",
         "harness": spec.id,
-        "restored_previous_config": bool(receipt.get("previous_config_existed")),
+        "restored_previous_config": bool(baseline.get("previous_config_existed")),
         "retained_release": str(receipt.get("release")),
         "next_action": f"Restart {spec.name} if it is running. Immutable release and rollback evidence were retained.",
     }

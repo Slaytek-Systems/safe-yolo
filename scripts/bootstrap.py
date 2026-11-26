@@ -152,8 +152,9 @@ def _dispatch(args: argparse.Namespace) -> int:
         if args.harness is not None:
             _from_receipt(args)
         entry = verified_entry(args.release, args.entry, expected_manifest_hash=args.manifest_sha256)
-    except ValueError as error:
-        return _fail(args.entry, str(error))
+    except (OSError, ValueError) as error:
+        # An unreadable release file must still produce the harness's blocking reply, not a traceback.
+        return _fail(args.entry, f"{type(error).__name__}: {error}" if isinstance(error, OSError) else str(error))
     command = [sys.executable, str(entry), "--state-dir", str(args.state_dir)]
     if args.safe_yolo_home is not None:
         command.extend(["--safe-yolo-home", str(args.safe_yolo_home)])

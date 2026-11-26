@@ -177,35 +177,56 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
     report = inspect_release(Path(previous['release']), previous['manifest_sha256'])
     if not report['healthy']:
         raise RuntimeError('Previous release failed verification; rollback was not applied.')
-    from scripts.distribute import _antigravity_hook, _run_canaries
+    from scripts.distribute import (_antigravity_hook, _apply_steps, _direct_command, _restore_file,
+                                    _run_canaries)
+    spec = _spec(harness)
     previous_release = Path(previous['release'])
     launcher = Path(previous['launcher']) if previous.get('launcher') else None
-    snapshot = [(item, item.read_bytes() if item.is_file() else None, mode)
-                for item, mode in ((path, 0o600), (config, receipt['previous_config_mode']), (launcher, 0o700)) if item]
-    try:
-        # The same cut-over as an update: the launcher, the harness file if it differs, then the receipt.
-        if launcher:
-            _atomic_write(launcher, (previous_release / 'scripts' / 'bootstrap.py').read_bytes(), 0o700)
-        if config.read_bytes() != backup.read_bytes():
-            _atomic_write(config, backup.read_bytes(), receipt['previous_config_mode'])
-        _atomic_write(path, (json.dumps(previous, indent=2) + '\n').encode())
-        # The hook the harness now runs must answer; Antigravity ignores one that cannot start, so a
-        # dead command would restore no guard at all.
-        if harness in ANTIGRAVITY_IDS:
-            hook_command, timeout = _antigravity_hook(config)
-            canaries = _run_canaries(hook_command, harness, timeout)
-        elif previous.get('command'):
-            canaries = _run_canaries(previous['command'], harness)
-        else:
-            canaries = {'allow': True, 'deny': True}
+    saved = backup.read_bytes()
+    mode = receipt['previous_config_mode']
+    # The hook the harness will run must answer before it is published. Antigravity ignores a hook
+    # that cannot start, so a dead command would restore no guard at all.
+    if harness in ANTIGRAVITY_IDS:
+        hook_command, timeout = _antigravity_hook(backup)
+    else:
+        hook_command, timeout = previous.get('command'), None
+    if hook_command:
+        try:
+            canaries = _run_canaries(_direct_command(hook_command, home, spec, previous), harness, timeout)
+        except RuntimeError as error:
+            raise RuntimeError(f'{error}; rollback was not applied.') from error
         if not all(canaries.values()):
-            raise RuntimeError(f'Previous hook command failed its allow/deny check ({canaries})')
-    except (RuntimeError, OSError) as error:
-        for item, payload, mode in snapshot:
-            if payload is not None:
-                _atomic_write(item, payload, mode)
-            elif item.exists():
-                item.unlink()
-        raise RuntimeError(f'{error}; rollback was not applied.') from error
+            raise RuntimeError(f'Previous hook command failed its allow/deny check ({canaries}); '
+                               'rollback was not applied.')
+    # The same cut-over as an update: the launcher, the harness file if it differs, then the receipt.
+    steps = []
+    if launcher:
+        previous_launcher = launcher.read_bytes() if launcher.is_file() else None
+        steps.append((lambda: _atomic_write(launcher, (previous_release / 'scripts' / 'bootstrap.py').read_bytes(),
+                                            0o700),
+                      _restore_file(launcher, previous_launcher, 0o700)))
+    current = config.read_bytes()
+    if current != saved:
+        steps.append((lambda: _atomic_write(config, saved, mode), _restore_file(config, current, mode)))
+    current_receipt = path.read_bytes()
+    steps.append((lambda: _atomic_write(path, (json.dumps(previous, indent=2) + '\n').encode()),
+                  _restore_file(path, current_receipt, 0o600)))
+
+    def check() -> None:
+        # Through the published hook: the launcher and receipt it reads changed as well.
+        if harness in ANTIGRAVITY_IDS:
+            live_command, live_timeout = _antigravity_hook(config)
+            published = _run_canaries(live_command, harness, live_timeout)
+        elif previous.get('command'):
+            published = _run_canaries(previous['command'], harness)
+        else:
+            published = {'allow': True, 'deny': True}
+        if not all(published.values()):
+            raise RuntimeError(f'Previous hook command failed its allow/deny check ({published})')
+
+    try:
+        _apply_steps(steps, check)
+    except RuntimeError as error:
+        raise RuntimeError(f'Safe YOLO rollback was not applied; {error}') from error
     return {'status': 'active', 'harness': harness, 'version': previous['version'],
             'next_action': previous['next_action']}
