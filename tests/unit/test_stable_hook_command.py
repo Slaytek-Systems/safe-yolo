@@ -11,7 +11,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from scripts.distribute import doctor_harness, install_harness
+from scripts import distribute
+from scripts.distribute import deactivate_harness, doctor_harness, install_harness
+from scripts.global_cli import restore
 from scripts.harness_wiring import pinned_command, render_opencode_plugin
 
 
@@ -21,19 +23,34 @@ HARNESSES = ("codex", "claude-code", "cursor", "opencode", "antigravity")
 
 
 def codex_trust_hash(group: dict, hook: dict) -> str:
-    """The hash Codex stores as `trusted_hash` for one PreToolUse hook entry."""
-    identity = {
-        "event_name": "pre_tool_use",
-        "matcher": group.get("matcher"),
-        "hooks": [{
-            "type": "command",
-            "command": hook["command"],
-            "timeout": hook.get("timeout"),
-            "async": False,
-            "statusMessage": hook.get("statusMessage"),
-        }],
-    }
-    return hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    """The `currentHash` Codex 0.172.0 computes, and stores as `trusted_hash`, for one PreToolUse hook entry.
+
+    codex-rs/hooks/src/engine/discovery.rs `hook_hash`: the normalized handler, serialized through TOML
+    (absent options dropped), then codex-rs/config/src/fingerprint.rs `version_for_toml`: sorted compact
+    serde_json, UTF-8 unescaped, `sha256:` prefix.
+    """
+    handler = {"type": "command", "command": hook["command"], "timeout": max(1, hook.get("timeout", 600)),
+               "async": hook.get("async", False)}
+    if hook.get("statusMessage") is not None:
+        handler["statusMessage"] = hook["statusMessage"]
+    identity = {"event_name": "pre_tool_use", "hooks": [handler]}
+    if group.get("matcher") is not None:
+        identity["matcher"] = group["matcher"]
+    serialized = json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    return "sha256:" + hashlib.sha256(serialized).hexdigest()
+
+
+# A hooks.json entry and the `currentHash` Codex 0.172.0 reported for it (`codex app-server`, `hooks/list`).
+CODEX_KNOWN_ANSWER = (
+    {"matcher": "*", "hooks": [{
+        "type": "command",
+        "command": "/usr/bin/python3 /home/zo\u00eb/.safe-yolo/hooks/codex.py --harness codex --entry codex_v3 "
+                   "--safe-yolo-home /home/zo\u00eb/.safe-yolo",
+        "timeout": 10,
+        "statusMessage": "Checking explicit Safe YOLO restrictions \u2014 \u2713",
+    }]},
+    "sha256:1cf1bbc0f4a7eb543de01cd5605e95a522181817e5427c716fba7e9e9bf5db97",
+)
 
 
 class StableHookCommandTests(unittest.TestCase):
@@ -248,6 +265,104 @@ class StableHookCommandTests(unittest.TestCase):
                 self.assertEqual(migrated[harness], self.config(harness).read_bytes())
                 report = doctor_harness(harness=harness, safe_yolo_home=self.home, user_home=self.user)
                 self.assertTrue(report["healthy"], report)
+
+    def test_the_trust_hash_helper_matches_a_hash_codex_computed(self):
+        group, expected = CODEX_KNOWN_ANSWER
+        self.assertEqual(expected, codex_trust_hash(group, group["hooks"][0]))
+
+    def write_refused(self, refuse):
+        """Patch Safe YOLO's file writes so `refuse(path, count)` decides, per write, whether to raise."""
+        real = distribute._atomic_write
+        counts: dict[Path, int] = {}
+
+        def write(path, payload, mode=0o600):
+            path = Path(path)
+            counts[path] = counts.get(path, 0) + 1
+            if refuse(path, counts[path]):
+                raise PermissionError(f"write refused: {path}")
+            real(path, payload, mode)
+
+        return patch("scripts.distribute._atomic_write", side_effect=write)
+
+    def test_a_failed_migration_restores_what_it_wrote_and_can_be_retried(self):
+        self.install("cursor", "3.0.0-beta.50")
+        self.pin_like_beta_17("cursor")
+        config = self.config("cursor")
+        receipt = self.home / "state" / "installations" / "cursor.json"
+        launcher = self.home / "hooks" / "cursor.py"
+        before = config.read_bytes(), receipt.read_bytes(), launcher.exists()
+
+        with self.write_refused(lambda path, _count: path == config):
+            with self.assertRaisesRegex(RuntimeError, "activation failed"):
+                self.install("cursor", "3.0.0-beta.51")
+
+        self.assertEqual(before, (config.read_bytes(), receipt.read_bytes(), launcher.exists()))
+        self.assertEqual("deny", self.decision("cursor", "git push --force origin main"))
+        self.install("cursor", "3.0.0-beta.51")
+        report = doctor_harness(harness="cursor", safe_yolo_home=self.home, user_home=self.user)
+        self.assertTrue(report["healthy"], report)
+
+    def test_a_failed_rollback_restores_every_file_it_can_and_names_the_rest(self):
+        self.install("cursor", "3.0.0-beta.50")
+        self.install("cursor", "3.0.0-beta.51")
+        receipt = self.home / "state" / "installations" / "cursor.json"
+        launcher = self.home / "hooks" / "cursor.py"
+        before = launcher.read_bytes()
+        real = distribute._run_canaries
+
+        def canaries(command, harness, timeout=None):
+            # The release itself answers; the hook published afterwards does not.
+            return real(command, harness, timeout) if "/releases/" in command else {"allow": False, "deny": False}
+
+        with self.write_refused(lambda path, count: path == receipt and count > 1), \
+                patch("scripts.distribute._run_canaries", side_effect=canaries):
+            with self.assertRaisesRegex(RuntimeError, f"rollback was not applied.*{receipt}"):
+                restore(self.home, self.user, "cursor", uninstall=False)
+
+        self.assertEqual(before, launcher.read_bytes())
+
+    def test_deactivate_after_an_update_leaves_no_safe_yolo_hook(self):
+        original = b'{"hooks":{"SessionStart":[]}}\n'
+        (self.user / ".codex" / "hooks.json").write_bytes(original)
+        for harness in HARNESSES:
+            self.install(harness, "3.0.0-beta.50")
+            self.install(harness, "3.0.0-beta.51")
+        configs = {harness: self.config(harness) for harness in HARNESSES}
+
+        for harness in HARNESSES:
+            with self.subTest(harness=harness):
+                deactivate_harness(harness=harness, safe_yolo_home=self.home, user_home=self.user)
+                if harness == "codex":
+                    self.assertEqual(original, configs[harness].read_bytes())
+                else:
+                    self.assertFalse(configs[harness].exists())
+        self.install("codex", "3.0.0-beta.52")
+        report = doctor_harness(harness="codex", safe_yolo_home=self.home, user_home=self.user)
+        self.assertTrue(report["healthy"], report)
+
+    def test_an_unreadable_release_file_fails_closed(self):
+        for harness in ("codex", "claude-code", "antigravity"):
+            self.install(harness, "3.0.0-beta.50")
+        policy = next(path for path in sorted((self.home / "releases" / "3.0.0-beta.50" / "policy").rglob("*"))
+                      if path.is_file())
+        policy.chmod(0)
+        self.addCleanup(policy.chmod, 0o400)
+        for harness in ("codex", "claude-code", "antigravity"):
+            with self.subTest(harness=harness):
+                self.assertEqual("fail-closed", self.decision(harness, "git status --short"))
+
+    def test_doctor_does_not_run_a_launcher_that_does_not_match_the_release(self):
+        self.install("codex", "3.0.0-beta.50")
+        marker = self.root / "launcher-ran"
+        launcher = self.home / "hooks" / "codex.py"
+        launcher.chmod(0o600)
+        launcher.write_text(f"import pathlib\npathlib.Path({str(marker)!r}).touch()\n")
+
+        report = doctor_harness(harness="codex", safe_yolo_home=self.home, user_home=self.user)
+
+        self.assertFalse(report["healthy"])
+        self.assertEqual({"allow": False, "deny": False}, report["canaries"])
+        self.assertFalse(marker.exists())
 
 
 if __name__ == "__main__":

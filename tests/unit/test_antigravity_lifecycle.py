@@ -457,10 +457,21 @@ class AntigravityLifecycleTests(unittest.TestCase):
         self.install()
         interpreter.unlink()
         before = self.hooks.read_bytes(), self.receipt_path().read_bytes()
+        from scripts import distribute
+        real_write = distribute._atomic_write
+        published = []
 
-        with self.assertRaisesRegex(RuntimeError, "rollback was not applied"):
-            restore(self.safe_yolo_home, self.user_home, "antigravity", uninstall=False)
+        def write(path, payload, mode=0o600):
+            if Path(path) == self.hooks:
+                published.append(payload)
+            real_write(path, payload, mode)
 
+        with patch("scripts.distribute._atomic_write", side_effect=write):
+            with self.assertRaisesRegex(RuntimeError, "rollback was not applied"):
+                restore(self.safe_yolo_home, self.user_home, "antigravity", uninstall=False)
+
+        # Antigravity ignores a hook that cannot start, so the dead command must never be the live one.
+        self.assertEqual([], published)
         self.assertEqual(before, (self.hooks.read_bytes(), self.receipt_path().read_bytes()))
         self.assertTrue(self.doctor()["healthy"], self.doctor())
 

@@ -193,7 +193,8 @@ class PrivateBetaCliTests(unittest.TestCase):
             )
 
     def beta_one_codex(self, original: bytes) -> None:
-        """Wire Codex the way 3.0.0-beta.1 did: a release-pinned command and only the Codex receipt."""
+        """Wire Codex the way 3.0.0-beta.1 did (git show 7b54ca8:scripts/distribute.py): a release-pinned
+        command through a home-level bootstrap.py, and a Codex receipt with no `bootstrap` or harness context."""
         self.hooks.write_bytes(original)
         install_codex(
             source=self.source,
@@ -203,14 +204,21 @@ class PrivateBetaCliTests(unittest.TestCase):
         )
         receipt = json.loads((self.safe_yolo_home / "state" / "codex-install.json").read_text())
         release = Path(receipt["release"])
-        pinned = pinned_command(self.safe_yolo_home, release, receipt["manifest_sha256"], "codex_v3")
+        bootstrap = self.safe_yolo_home / "bootstrap.py"
+        shutil.copy2(release / "scripts" / "bootstrap.py", bootstrap)
+        pinned = shlex.join([
+            sys.executable, str(bootstrap), "--release", str(release), "--manifest-sha256",
+            receipt["manifest_sha256"], "--entry", "codex_v3", "--state-dir", str(self.safe_yolo_home / "state"),
+        ])
         document = json.loads(self.hooks.read_text())
         document["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = pinned
         self.hooks.write_text(json.dumps(document, indent=2) + "\n")
         legacy = {key: receipt[key] for key in (
             "schema_version", "status", "version", "source_commit", "release", "manifest_sha256",
-            "hooks_path", "previous_hooks_existed", "previous_hooks_backup", "previous_hooks_mode", "canaries")}
-        legacy.update(bootstrap=str(release / "scripts" / "bootstrap.py"), installed_hooks_sha256=sha256(self.hooks))
+            "hooks_path", "previous_hooks_existed", "previous_hooks_backup", "previous_hooks_mode", "healthy",
+            "canaries")}
+        legacy.update(installed_hooks_sha256=sha256(self.hooks),
+                      next_action="Restart Codex, open /hooks, review this command, and trust its hash.")
         (self.safe_yolo_home / "state" / "codex-install.json").write_text(json.dumps(legacy))
         (self.safe_yolo_home / "state" / "installations" / "codex.json").unlink()
         Path(receipt["launcher"]).unlink()
