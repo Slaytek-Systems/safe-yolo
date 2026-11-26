@@ -99,6 +99,32 @@ class CodexHookApprovalTests(unittest.TestCase):
         self.config.write_text('hooks = "on"\n')
         self.assertEqual("unknown", self.approval()[0])
 
+    def test_hooks_turned_off_in_codex_are_not_approved(self):
+        for key in ("hooks", "codex_hooks"):
+            with self.subTest(key=key):
+                self.save_state(f'trusted_hash = "{HASH}"\n', f"[features]\n{key} = false\n")
+                self.assertEqual(("not approved", "hooks are turned off in Codex"), self.approval())
+
+    def test_a_malformed_sibling_setting_codex_would_reject_is_unknown(self):
+        for before in ('[features]\nhooks = "true"\n', '[features]\ncodex_hooks = 1\n',
+                       '[hooks]\nSessionStart = "wrong type"\n'):
+            with self.subTest(before=before):
+                self.save_state(f'trusted_hash = "{HASH}"\n', before)
+                self.assertEqual("unknown", self.approval()[0])
+
+    def test_state_keys_that_trim_to_the_same_key_are_unknown(self):
+        self.config.write_text(f'[hooks.state."{self.hooks.absolute()}:pre_tool_use:0:0"]\n'
+                               f'trusted_hash = "{HASH}"\n'
+                               f'[hooks.state."{self.hooks.absolute()}:pre_tool_use:0:0 "]\nenabled = false\n')
+        self.assertEqual("unknown", self.approval()[0])
+
+    def test_a_malformed_sibling_event_in_hooks_json_is_unknown(self):
+        for sibling in ("wrong type", ["not an object"], {"matcher": "*"}):
+            with self.subTest(sibling=sibling):
+                self.hooks.write_text(json.dumps({"hooks": {"PreToolUse": [GROUP], "SessionStart": sibling}}))
+                self.save_state(f'trusted_hash = "{HASH}"\n')
+                self.assertEqual("unknown", self.approval()[0])
+
     def test_an_unreadable_or_broken_config_is_unknown(self):
         self.config.write_text("[hooks.state\n")
         self.assertEqual(("unknown", "cannot read config.toml: TOMLDecodeError"), self.approval())

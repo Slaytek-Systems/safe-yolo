@@ -110,6 +110,9 @@ remain usable. Run doctor to inspect the state before retrying.
 Each Codex install or update changes the hook, and Codex skips a hook until you
 approve it in `/hooks`. Approve it straight after. Until then, doctor reports
 "Codex will skip Safe YOLO until you approve it in /hooks" and exits 1.
+This check confirms that Codex's saved approval matches the installed Safe YOLO
+hook and that the approval entries are well formed. It does not fully validate
+Codex's config. Codex reports a config it cannot load itself.
 
 Local customizations live outside versioned releases at
 `~/.safe-yolo/customizations.json`. Install, update, rollback, and uninstall

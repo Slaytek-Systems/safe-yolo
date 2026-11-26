@@ -147,12 +147,16 @@ def codex_hook_approval(hooks_path: str | Path, config_path: str | Path) -> tupl
     """
     hooks_path, config_path = Path(hooks_path).absolute(), Path(config_path)
     try:
-        groups = json.loads(hooks_path.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+        events = json.loads(hooks_path.read_text(encoding="utf-8"))["hooks"]
+        groups = events["PreToolUse"]
         slots = [(group_index, hook_index, group, hook)
                  for group_index, group in enumerate(groups)
                  for hook_index, hook in enumerate(group["hooks"]) if hook.get("type") == "command"]
     except (OSError, ValueError, LookupError, TypeError, AttributeError) as error:
         return "unknown", f"cannot read hooks.json: {type(error).__name__}"
+    if not all(isinstance(event, list) and all(isinstance(group, dict) for group in event)
+               for event in events.values()):
+        return "unknown", "hooks.json has a hook event Codex would reject"
     if len(slots) != 1:
         return "unknown", "hooks.json does not hold exactly one PreToolUse command hook"
     group_index, hook_index, group, hook = slots[0]
@@ -160,13 +164,24 @@ def codex_hook_approval(hooks_path: str | Path, config_path: str | Path) -> tupl
     if current is None:
         return "unknown", "hooks.json has a hook field Safe YOLO does not check"
     try:
-        hooks = tomllib.loads(config_path.read_text(encoding="utf-8")).get("hooks", {})
+        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         return "unknown", f"cannot read config.toml: {type(error).__name__}"
-    states = hooks.get("state", {}) if isinstance(hooks, dict) else None
+    features, hooks = config.get("features", {}), config.get("hooks", {})
+    switches = [features.get(key, True) for key in ("hooks", "codex_hooks")] if isinstance(features, dict) else [None]
+    if not all(type(switch) is bool for switch in switches) or not isinstance(hooks, dict) or not all(
+            isinstance(value, list) for key, value in hooks.items() if key != "state"):
+        return "unknown", "config.toml has a hook setting Codex would reject"
+    if False in switches:
+        return "not approved", "hooks are turned off in Codex"
+    states = hooks.get("state", {})
     if not isinstance(states, dict) or not all(_has_shape(state, _STATE_FIELDS) for state in states.values()):
         return "unknown", "config.toml has a saved hook state Codex would reject"
-    state = states.get(f"{hooks_path}:pre_tool_use:{group_index}:{hook_index}", {})
+    # Codex trims state keys and merges the fields of keys that trim alike.
+    trimmed = {key.strip(): state for key, state in states.items()}
+    if len(trimmed) != len(states):
+        return "unknown", "config.toml saves the same hook state twice"
+    state = trimmed.get(f"{hooks_path}:pre_tool_use:{group_index}:{hook_index}", {})
     if state.get("enabled") is False:
         return "not approved", "the hook is turned off"
     if "trusted_hash" not in state:
