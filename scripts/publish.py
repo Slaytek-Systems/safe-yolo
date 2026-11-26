@@ -20,6 +20,21 @@ from scripts.download import REPOSITORY, extract
 from scripts.package import build_bundle, verify_bundle
 
 
+HARNESSES = ('codex', 'claude-code', 'cursor', 'opencode', 'antigravity')
+
+
+def check_fresh_doctor(returncode: int, stdout: str) -> None:
+    """Doctor in a fresh home: one report per harness, every canary passes, and only Codex is
+    unhealthy, solely because its hook is not yet approved in /hooks."""
+    reports = json.loads(stdout)['reports'] if returncode == 1 else []
+    approval = {harness: None for harness in HARNESSES} | {'codex': f'{CODEX_SKIPS_SAFE_YOLO} (no approval is saved)'}
+    if (sorted(item['harness'] for item in reports) != sorted(HARNESSES)
+            or any(item['problems'] or not item['canaries'] or not all(item['canaries'].values())
+                   or item['healthy'] != (approval[item['harness']] is None)
+                   or item.get('hook_approval') != approval[item['harness']] for item in reports)):
+        raise ValueError('Global doctor failed')
+
+
 def acceptance(archive: Path, revision: str) -> None:
     """Exercise the shipped bundle without touching the operator's installation."""
     with tempfile.TemporaryDirectory(prefix='safe-yolo-release-check-') as temporary:
@@ -53,24 +68,19 @@ def acceptance(archive: Path, revision: str) -> None:
                            XDG_CONFIG_HOME=str(user / '.config'), XDG_DATA_HOME=str(user / '.local/share'),
                            XDG_STATE_HOME=str(user / '.local/state'), XDG_CACHE_HOME=str(user / '.cache'))
 
-        def run(args: list[str], check: bool = True) -> dict:
+        def run(args: list[str]) -> dict:
             result = subprocess.run(args, cwd=root, env=environment, capture_output=True,
-                                    text=True, check=check)
+                                    text=True, check=True)
             return json.loads(result.stdout)
 
         result = run([sys.executable, str(source / 'safe-yolo'), '--home', str(user / '.safe-yolo'),
                       '--user-home', str(user), 'install'])
-        if {item['harness'] for item in result['reports']} != {'codex', 'claude-code', 'cursor', 'opencode',
-                                                               'antigravity'}:
+        if {item['harness'] for item in result['reports']} != set(HARNESSES):
             raise ValueError('Expected five installed harnesses')
         source.rename(root / 'moved-download')
         launcher = str(user / '.local/bin/safe-yolo')
-        # A fresh Codex has not approved the hook in /hooks, so doctor must say Codex will skip it.
-        reports = run([launcher, 'doctor'], check=False)['reports']
-        if (any(item['problems'] or not all(item['canaries'].values()) for item in reports)
-                or [item.get('hook_approval', '').split(' (')[0] for item in reports if not item['healthy']]
-                != [CODEX_SKIPS_SAFE_YOLO]):
-            raise ValueError('Global doctor failed')
+        doctor = subprocess.run([launcher, 'doctor'], cwd=root, env=environment, capture_output=True, text=True)
+        check_fresh_doctor(doctor.returncode, doctor.stdout)
         run([launcher, 'update', '--source', str(root / 'moved-download')])
         run([launcher, 'uninstall'])
         if any((user / path).exists() for path in

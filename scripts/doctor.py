@@ -48,7 +48,7 @@ def inspect_codex_wiring(
     problems: list[str] = []
     try:
         config = tomllib.loads(Path(config_path).read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as error:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         return {"healthy": False, "problems": [f"config unreadable: {type(error).__name__}"]}
     if config.get("approval_policy") != "never":
         problems.append("approval_policy must be never")
@@ -102,16 +102,36 @@ def inspect_codex_wiring(
 CODEX_SKIPS_SAFE_YOLO = "Codex will skip Safe YOLO until you approve it in /hooks"
 
 
-def codex_hook_hash(group: dict[str, Any], hook: dict[str, Any]) -> str:
+# The fields and value types Codex 0.172.0 accepts. Anything else means "unknown", never "approved".
+_STRING, _COUNT, _NONE = (str,), (int,), (type(None),)
+_GROUP_FIELDS = {"matcher": _STRING + _NONE, "hooks": (list,)}
+_HOOK_FIELDS = {"type": _STRING, "command": _STRING, "timeout": _COUNT + _NONE, "async": (bool,),
+                "statusMessage": _STRING + _NONE, "additionalContextLimit": _COUNT + _NONE}
+_STATE_FIELDS = {"enabled": (bool,), "trusted_hash": _STRING, "trusted_content_hash": _STRING}
+
+
+def _has_shape(table: Any, fields: dict[str, tuple[type, ...]]) -> bool:
+    return isinstance(table, dict) and all(
+        type(value) in fields.get(key, ()) and not (type(value) is int and value < 0) for key, value in table.items())
+
+
+def codex_hook_hash(group: dict[str, Any], hook: dict[str, Any]) -> str | None:
     """The hash Codex 0.172.0 compares with a PreToolUse command hook's saved `trusted_hash`.
 
     codex-rs/hooks/src/engine/discovery.rs `hook_hash` and codex-rs/config/src/fingerprint.rs
-    `version_for_toml`: the normalized hook as sorted, compact, unescaped JSON.
+    `version_for_toml`: the normalized hook as sorted, compact, unescaped JSON. None when the hook
+    has a field or value this does not model.
     """
-    handler = {"type": "command", "command": hook["command"], "timeout": max(1, hook.get("timeout", 600)),
+    if not (_has_shape(group, _GROUP_FIELDS) and _has_shape(hook, _HOOK_FIELDS)
+            and hook.get("type") == "command" and hook.get("command", "").strip()):
+        return None
+    timeout = hook.get("timeout")
+    handler = {"type": "command", "command": hook["command"], "timeout": max(1, 600 if timeout is None else timeout),
                "async": hook.get("async", False)}
     if hook.get("statusMessage") is not None:
         handler["statusMessage"] = hook["statusMessage"]
+    if hook.get("additionalContextLimit") not in (None, 2500):
+        handler["additionalContextLimit"] = hook["additionalContextLimit"]
     identity: dict[str, Any] = {"event_name": "pre_tool_use", "hooks": [handler]}
     if group.get("matcher") is not None:
         identity["matcher"] = group["matcher"]
@@ -136,17 +156,22 @@ def codex_hook_approval(hooks_path: str | Path, config_path: str | Path) -> tupl
     if len(slots) != 1:
         return "unknown", "hooks.json does not hold exactly one PreToolUse command hook"
     group_index, hook_index, group, hook = slots[0]
+    current = codex_hook_hash(group, hook)
+    if current is None:
+        return "unknown", "hooks.json has a hook field Safe YOLO does not check"
     try:
-        states = tomllib.loads(config_path.read_text(encoding="utf-8")).get("hooks", {}).get("state", {})
-        state = states.get(f"{hooks_path}:pre_tool_use:{group_index}:{hook_index}") or {}
-        trusted, enabled = state.get("trusted_hash"), state.get("enabled")
-    except (OSError, ValueError, AttributeError) as error:
+        hooks = tomllib.loads(config_path.read_text(encoding="utf-8")).get("hooks", {})
+    except (OSError, ValueError) as error:
         return "unknown", f"cannot read config.toml: {type(error).__name__}"
-    if enabled is False:
+    states = hooks.get("state", {}) if isinstance(hooks, dict) else None
+    if not isinstance(states, dict) or not all(_has_shape(state, _STATE_FIELDS) for state in states.values()):
+        return "unknown", "config.toml has a saved hook state Codex would reject"
+    state = states.get(f"{hooks_path}:pre_tool_use:{group_index}:{hook_index}", {})
+    if state.get("enabled") is False:
         return "not approved", "the hook is turned off"
-    if trusted is None:
+    if "trusted_hash" not in state:
         return "not approved", "no approval is saved"
-    if trusted != codex_hook_hash(group, hook):
+    if state["trusted_hash"] != current:
         return "not approved", "the saved approval is for a different hook"
     return "approved", None
 
