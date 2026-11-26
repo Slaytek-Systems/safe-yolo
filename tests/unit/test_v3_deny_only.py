@@ -512,10 +512,22 @@ class V3DenyOnlyTests(unittest.TestCase):
         )
 
     def test_nested_remote_commands_are_read_once_per_pass(self):
-        command = "ssh fixture.example " * 64 + "true"
-        started = time.perf_counter()
-        self.assertEqual(("allow", None), self.decide(command))
-        self.assertLess(time.perf_counter() - started, 1.0)
+        from engine.consequences_v2 import ConsequenceKernel
+
+        reads = []
+        remote_shell = ConsequenceKernel._remote_shell
+
+        def counted(kernel, *args, **kwargs):
+            reads.append(1)
+            return remote_shell(kernel, *args, **kwargs)
+
+        for depth in (16, 64):
+            reads.clear()
+            with patch.object(ConsequenceKernel, "_remote_shell", counted):
+                self.assertEqual(("allow", None), self.decide("ssh fixture.example " * depth + "true"))
+            # Four passes over the line (whole and per command, with and without residuals),
+            # each reading every nested remote command once. A re-read per level grows faster.
+            self.assertEqual(4 * depth, len(reads))
         self.assertEqual(
             ("deny", "credentials.access"),
             self.decide("ssh fixture.example " * 8 + f"cat {self.root}/home/.ssh/id_rsa>/tmp/x"),
