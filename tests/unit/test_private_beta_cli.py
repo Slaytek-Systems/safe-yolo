@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts.global_cli import restore
+from test_codex_hook_approval import approve
 from scripts.distribute import (
     deactivate_codex,
     deactivate_harness,
@@ -157,12 +158,13 @@ class PrivateBetaCliTests(unittest.TestCase):
             codex_home=self.codex_home,
             expected_commit="c" * 40,
         )
+        approve(self.hooks, self.config)
 
         report = doctor_codex(
             safe_yolo_home=self.safe_yolo_home,
             codex_home=self.codex_home,
         )
-        self.assertTrue(report["healthy"])
+        self.assertTrue(report["healthy"], report)
         self.assertEqual({"allow": True, "deny": True}, report["canaries"])
 
         result = deactivate_codex(
@@ -172,6 +174,41 @@ class PrivateBetaCliTests(unittest.TestCase):
         self.assertEqual("inactive", result["status"])
         self.assertEqual(original_bytes, self.hooks.read_bytes())
         self.assertTrue(Path(result["retained_release"]).is_dir())
+
+    @patch("scripts.distribute.verify_source", return_value="c" * 40)
+    def test_codex_says_when_it_will_skip_safe_yolo_until_approved(self, _verify):
+        def install():
+            return install_codex(source=self.source, safe_yolo_home=self.safe_yolo_home,
+                                 codex_home=self.codex_home, expected_commit="c" * 40)
+
+        def doctor():
+            return doctor_codex(safe_yolo_home=self.safe_yolo_home, codex_home=self.codex_home)
+
+        skipped = "Codex will skip Safe YOLO until you approve it in /hooks"
+        self.assertIn(skipped, install()["next_action"])
+        self.assertFalse(doctor()["healthy"])
+        self.assertEqual(f"{skipped} (no approval is saved)", doctor()["hook_approval"])
+        self.assertIn(skipped, install()["next_action"])  # Rerunning the same version still succeeds.
+
+        approve(self.hooks, self.config)
+        self.assertTrue(doctor()["healthy"])
+        self.assertNotIn("hook_approval", doctor())
+        self.assertEqual("Restart Codex.", doctor()["activation_check"])
+        self.assertEqual("Restart Codex.", install()["next_action"])
+
+        approved = self.config.read_bytes()
+        cannot_tell = "Codex may skip Safe YOLO: cannot tell whether you approved it in /hooks"
+        self.config.write_bytes(approved + b'enabled = "true"\n')  # Codex rejects this whole config.toml.
+        self.assertFalse(doctor()["healthy"])
+        self.assertTrue(doctor()["hook_approval"].startswith(cannot_tell))
+        self.assertIn(skipped, install()["next_action"])
+        self.config.write_bytes(approved + b'# \xff\n')
+        self.assertEqual(f"{cannot_tell} (cannot read config.toml: UnicodeDecodeError)", doctor()["hook_approval"])
+        self.config.write_bytes(approved)
+
+        (self.source / "VERSION").write_text("3.0.0-beta.3\n")
+        self.assertIn(skipped, install()["next_action"])
+        self.assertEqual(f"{skipped} (the saved approval is for a different hook)", doctor()["hook_approval"])
 
     @patch("scripts.distribute.verify_source", return_value="d" * 40)
     def test_deactivate_refuses_to_overwrite_hook_changed_after_install(self, _verify):
@@ -199,6 +236,7 @@ class PrivateBetaCliTests(unittest.TestCase):
             codex_home=self.codex_home,
             expected_commit="9" * 40,
         )
+        approve(self.hooks, self.config)
         generic = self.safe_yolo_home / "state" / "installations" / "codex.json"
         generic.rename(self.root / "hidden-generic-receipt.json")
 

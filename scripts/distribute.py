@@ -22,6 +22,8 @@ if str(ROOT) not in sys.path:
 
 from scripts.activate_v3 import _ensure_release, verify_source
 from scripts.doctor import (
+    CODEX_SKIPS_SAFE_YOLO,
+    codex_hook_approval,
     inspect_antigravity_wiring,
     inspect_claude_code_wiring,
     inspect_codex_wiring,
@@ -501,9 +503,9 @@ def install_harness(
     release, digest, version = _ensure_release(source_path, home)
     if previous_receipt and previous_receipt['version'] == version:
         report = doctor_harness(harness=harness, safe_yolo_home=home, user_home=user)
-        if not report['healthy']:
+        if report['problems']:
             raise RuntimeError('Existing installation needs attention: ' + '; '.join(report['problems']))
-        return previous_receipt
+        return {**previous_receipt, 'next_action': _codex_next_action(target)} if spec.id == 'codex' else previous_receipt
     if previous_receipt:
         current_wiring = _inspect_wiring(spec, target, home, Path(previous_receipt['release']),
                                         previous_receipt['manifest_sha256'], user_home=user,
@@ -628,8 +630,7 @@ def install_harness(
         "previous_config_mode": original_mode,
         "healthy": True,
         "canaries": canaries,
-        "next_action": {
-            "codex": "Restart Codex, open /hooks, review this command, and trust its hash.",
+        "next_action": _codex_next_action(target) if spec.id == "codex" else {
             "claude-code": "Restart Claude Code, then run /hooks and verify the Safe YOLO PreToolUse hook.",
             "cursor": "Cursor watches the user hooks file and reloads it automatically; verify Safe YOLO in Hooks.",
             "opencode": (
@@ -666,6 +667,12 @@ def install_harness(
         (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode(),
     )
     return receipt
+
+
+def _codex_next_action(hooks: Path) -> str:
+    if codex_hook_approval(hooks, hooks.parent / "config.toml")[0] == "approved":
+        return "Restart Codex."
+    return f"Restart Codex, then approve the Safe YOLO hook in /hooks now. {CODEX_SKIPS_SAFE_YOLO}."
 
 
 def doctor_harness(
@@ -720,7 +727,7 @@ def doctor_harness(
             problems.append(str(error))
     if not all(canaries.values()):
         problems.append("allow/deny runtime canaries failed")
-    return {
+    report = {
         "healthy": not problems,
         "harness": spec.id,
         "status": receipt.get("status"),
@@ -730,6 +737,15 @@ def doctor_harness(
         "problems": problems,
         "activation_check": receipt.get("next_action"),
     }
+    if spec.id == "codex":
+        # Not a wiring problem: a same-version install runs doctor and must still succeed before approval.
+        approval, reason = codex_hook_approval(config_path, config_path.parent / "config.toml")
+        report["activation_check"] = _codex_next_action(config_path)
+        if approval != "approved":
+            report["healthy"] = False
+            report["hook_approval"] = (f"{CODEX_SKIPS_SAFE_YOLO} ({reason})" if approval == "not approved" else
+                                       f"Codex may skip Safe YOLO: cannot tell whether you approved it in /hooks ({reason})")
+    return report
 
 
 def deactivate_harness(

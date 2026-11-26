@@ -15,8 +15,24 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from scripts.doctor import CODEX_SKIPS_SAFE_YOLO
 from scripts.download import REPOSITORY, extract
 from scripts.package import build_bundle, verify_bundle
+
+
+HARNESSES = ('codex', 'claude-code', 'cursor', 'opencode', 'antigravity')
+
+
+def check_fresh_doctor(returncode: int, stdout: str) -> None:
+    """Doctor in a fresh home: one report per harness, every canary passes, and only Codex is
+    unhealthy, solely because its hook is not yet approved in /hooks."""
+    reports = json.loads(stdout)['reports'] if returncode == 1 else []
+    approval = {harness: None for harness in HARNESSES} | {'codex': f'{CODEX_SKIPS_SAFE_YOLO} (no approval is saved)'}
+    if (sorted(item['harness'] for item in reports) != sorted(HARNESSES)
+            or any(item['problems'] or not item['canaries'] or not all(item['canaries'].values())
+                   or item['healthy'] != (approval[item['harness']] is None)
+                   or item.get('hook_approval') != approval[item['harness']] for item in reports)):
+        raise ValueError('Global doctor failed')
 
 
 def acceptance(archive: Path, revision: str) -> None:
@@ -59,13 +75,12 @@ def acceptance(archive: Path, revision: str) -> None:
 
         result = run([sys.executable, str(source / 'safe-yolo'), '--home', str(user / '.safe-yolo'),
                       '--user-home', str(user), 'install'])
-        if {item['harness'] for item in result['reports']} != {'codex', 'claude-code', 'cursor', 'opencode',
-                                                               'antigravity'}:
+        if {item['harness'] for item in result['reports']} != set(HARNESSES):
             raise ValueError('Expected five installed harnesses')
         source.rename(root / 'moved-download')
         launcher = str(user / '.local/bin/safe-yolo')
-        if not run([launcher, 'doctor'])['healthy']:
-            raise ValueError('Global doctor failed')
+        doctor = subprocess.run([launcher, 'doctor'], cwd=root, env=environment, capture_output=True, text=True)
+        check_fresh_doctor(doctor.returncode, doctor.stdout)
         run([launcher, 'update', '--source', str(root / 'moved-download')])
         run([launcher, 'uninstall'])
         if any((user / path).exists() for path in

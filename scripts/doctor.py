@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -47,7 +48,7 @@ def inspect_codex_wiring(
     problems: list[str] = []
     try:
         config = tomllib.loads(Path(config_path).read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as error:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         return {"healthy": False, "problems": [f"config unreadable: {type(error).__name__}"]}
     if config.get("approval_policy") != "never":
         problems.append("approval_policy must be never")
@@ -96,6 +97,98 @@ def inspect_codex_wiring(
     if entry in {"codex_v3", "claude_code_v3", "grok_v3", "cursor_v3", "opencode_v3", "antigravity_v3"} and _command_hooks(hooks, "PostToolUse"):
         problems.append(f"PostToolUse command hooks must be absent for {entry}")
     return {"healthy": not problems, "problems": problems}
+
+
+CODEX_SKIPS_SAFE_YOLO = "Codex will skip Safe YOLO until you approve it in /hooks"
+
+
+# The fields and value types Codex 0.172.0 accepts. Anything else means "unknown", never "approved".
+_STRING, _COUNT, _NONE = (str,), (int,), (type(None),)
+_GROUP_FIELDS = {"matcher": _STRING + _NONE, "hooks": (list,)}
+_HOOK_FIELDS = {"type": _STRING, "command": _STRING, "timeout": _COUNT + _NONE, "async": (bool,),
+                "statusMessage": _STRING + _NONE, "additionalContextLimit": _COUNT + _NONE}
+_STATE_FIELDS = {"enabled": (bool,), "trusted_hash": _STRING, "trusted_content_hash": _STRING}
+
+
+def _has_shape(table: Any, fields: dict[str, tuple[type, ...]]) -> bool:
+    return isinstance(table, dict) and all(
+        type(value) in fields.get(key, ()) and not (type(value) is int and value < 0) for key, value in table.items())
+
+
+def codex_hook_hash(group: dict[str, Any], hook: dict[str, Any]) -> str | None:
+    """The hash Codex 0.172.0 compares with a PreToolUse command hook's saved `trusted_hash`.
+
+    codex-rs/hooks/src/engine/discovery.rs `hook_hash` and codex-rs/config/src/fingerprint.rs
+    `version_for_toml`: the normalized hook as sorted, compact, unescaped JSON. None when the hook
+    has a field or value this does not model.
+    """
+    if not (_has_shape(group, _GROUP_FIELDS) and _has_shape(hook, _HOOK_FIELDS)
+            and hook.get("type") == "command" and hook.get("command", "").strip()):
+        return None
+    timeout = hook.get("timeout")
+    handler = {"type": "command", "command": hook["command"], "timeout": max(1, 600 if timeout is None else timeout),
+               "async": hook.get("async", False)}
+    if hook.get("statusMessage") is not None:
+        handler["statusMessage"] = hook["statusMessage"]
+    if hook.get("additionalContextLimit") not in (None, 2500):
+        handler["additionalContextLimit"] = hook["additionalContextLimit"]
+    identity: dict[str, Any] = {"event_name": "pre_tool_use", "hooks": [handler]}
+    if group.get("matcher") is not None:
+        identity["matcher"] = group["matcher"]
+    serialized = json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(serialized.encode()).hexdigest()
+
+
+def codex_hook_approval(hooks_path: str | Path, config_path: str | Path) -> tuple[str, str | None]:
+    """Read-only: whether Codex will run the one PreToolUse command hook in hooks.json.
+
+    Returns ("approved", None), ("not approved", reason) or ("unknown", reason). Codex skips a
+    user hook unless config.toml saves a `trusted_hash` equal to the hook's current hash.
+    """
+    hooks_path, config_path = Path(hooks_path).absolute(), Path(config_path)
+    try:
+        events = json.loads(hooks_path.read_text(encoding="utf-8"))["hooks"]
+        groups = events["PreToolUse"]
+        slots = [(group_index, hook_index, group, hook)
+                 for group_index, group in enumerate(groups)
+                 for hook_index, hook in enumerate(group["hooks"]) if hook.get("type") == "command"]
+    except (OSError, ValueError, LookupError, TypeError, AttributeError) as error:
+        return "unknown", f"cannot read hooks.json: {type(error).__name__}"
+    if not all(isinstance(event, list) and all(isinstance(group, dict) for group in event)
+               for event in events.values()):
+        return "unknown", "hooks.json has a hook event Codex would reject"
+    if len(slots) != 1:
+        return "unknown", "hooks.json does not hold exactly one PreToolUse command hook"
+    group_index, hook_index, group, hook = slots[0]
+    current = codex_hook_hash(group, hook)
+    if current is None:
+        return "unknown", "hooks.json has a hook field Safe YOLO does not check"
+    try:
+        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return "unknown", f"cannot read config.toml: {type(error).__name__}"
+    features, hooks = config.get("features", {}), config.get("hooks", {})
+    switches = [features.get(key, True) for key in ("hooks", "codex_hooks")] if isinstance(features, dict) else [None]
+    if not all(type(switch) is bool for switch in switches) or not isinstance(hooks, dict) or not all(
+            isinstance(value, list) for key, value in hooks.items() if key != "state"):
+        return "unknown", "config.toml has a hook setting Codex would reject"
+    if False in switches:
+        return "not approved", "hooks are turned off in Codex"
+    states = hooks.get("state", {})
+    if not isinstance(states, dict) or not all(_has_shape(state, _STATE_FIELDS) for state in states.values()):
+        return "unknown", "config.toml has a saved hook state Codex would reject"
+    # Codex trims state keys and merges the fields of keys that trim alike.
+    trimmed = {key.strip(): state for key, state in states.items()}
+    if len(trimmed) != len(states):
+        return "unknown", "config.toml saves the same hook state twice"
+    state = trimmed.get(f"{hooks_path}:pre_tool_use:{group_index}:{hook_index}", {})
+    if state.get("enabled") is False:
+        return "not approved", "the hook is turned off"
+    if "trusted_hash" not in state:
+        return "not approved", "no approval is saved"
+    if state["trusted_hash"] != current:
+        return "not approved", "the saved approval is for a different hook"
+    return "approved", None
 
 
 def inspect_claude_code_wiring(

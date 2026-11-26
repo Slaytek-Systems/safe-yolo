@@ -86,5 +86,5 @@ report; no durable dropped-event counter or complete-coverage claim is provided.
 
 Installed runtime activation remains a separate operator action. Native Codex
 trust is tied to the exact hook-definition hash and must be reviewed after a pin
-change; a release/wiring doctor or a directly invoked adapter alone cannot prove
-native hook execution.
+change. Doctor reads that saved trust and reports when Codex will skip the hook;
+a directly invoked adapter alone cannot prove native hook execution.

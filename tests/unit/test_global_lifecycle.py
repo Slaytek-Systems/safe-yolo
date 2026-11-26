@@ -10,6 +10,7 @@ import zipfile
 from scripts.package import build_bundle
 from scripts.package import digest, MANIFEST
 from scripts.global_cli import install_command
+from test_codex_hook_approval import approve
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -177,6 +178,8 @@ class GlobalLifecycleTests(unittest.TestCase):
             self.assertIn(str(interpreter), json.dumps(hook))
             launcher = str(user / '.local/bin/safe-yolo')
             for args in (['doctor'], ['update', '--source', str(upgrade)], ['doctor']):
+                if args == ['doctor']:
+                    approve(user / '.codex/hooks.json', user / '.codex/config.toml')
                 result = subprocess.run([launcher, *args], capture_output=True, text=True)
                 self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             report = json.loads(result.stdout)
