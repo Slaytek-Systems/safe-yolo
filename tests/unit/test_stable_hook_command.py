@@ -53,17 +53,16 @@ CODEX_KNOWN_ANSWER = (
 )
 
 
+class Interrupted(BaseException):
+    """The process stopped mid-write: no exception handler and no undo runs."""
+
+
 class StableHookCommandTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
-        self.home = self.root / ".safe-yolo"
-        self.user = self.root / "home"
-        (self.user / ".codex").mkdir(parents=True)
-        (self.user / ".codex" / "config.toml").write_text(
-            'approval_policy = "never"\nsandbox_mode = "danger-full-access"\n')
-        (self.user / ".gemini" / "config").mkdir(parents=True)
+        self.homes(self.root)
         environment = patch.dict(os.environ)
         environment.start()
         self.addCleanup(environment.stop)
@@ -77,12 +76,23 @@ class StableHookCommandTests(unittest.TestCase):
         verify.start()
         self.addCleanup(verify.stop)
 
+    def homes(self, parent: Path) -> None:
+        """Point the test at a fresh Safe YOLO home and user home under `parent`."""
+        self.home = parent / ".safe-yolo"
+        self.user = parent / "home"
+        (self.user / ".codex").mkdir(parents=True)
+        (self.user / ".codex" / "config.toml").write_text(
+            'approval_policy = "never"\nsandbox_mode = "danger-full-access"\n')
+        (self.user / ".gemini" / "config").mkdir(parents=True)
+
     def source(self, version: str) -> Path:
         source = self.root / f"source-{version}"
         for name in ("policy", "engine", "adapters"):
             shutil.copytree(ROOT / name, source / name, ignore=shutil.ignore_patterns("__pycache__"))
         (source / "scripts").mkdir()
-        shutil.copy2(ROOT / "scripts" / "bootstrap.py", source / "scripts" / "bootstrap.py")
+        # Each release's bootstrap differs, so a launcher left from the wrong release shows.
+        (source / "scripts" / "bootstrap.py").write_bytes(
+            (ROOT / "scripts" / "bootstrap.py").read_bytes() + f"# {version}\n".encode())
         (source / "VERSION").write_text(f"{version}\n")
         return source
 
@@ -339,6 +349,98 @@ class StableHookCommandTests(unittest.TestCase):
         self.install("codex", "3.0.0-beta.52")
         report = doctor_harness(harness="codex", safe_yolo_home=self.home, user_home=self.user)
         self.assertTrue(report["healthy"], report)
+
+    def interrupted_migration(self, completed: int, *, history: bool) -> None:
+        """Migrate a pinned Cursor install and kill the update after `completed` of its writes: no undo runs."""
+        if history:
+            self.install("cursor", "3.0.0-beta.49")
+        self.install("cursor", "3.0.0-beta.50")
+        self.pin_like_beta_17("cursor")
+        watched = {self.home / "hooks" / "cursor.py", self.home / "state" / "installations" / "cursor.json",
+                   self.config("cursor")}
+        real = distribute._atomic_write
+        written = []
+
+        def write(path, payload, mode=0o600):
+            if Path(path) in watched:
+                if len(written) == completed:
+                    raise Interrupted(path)
+                written.append(path)
+            real(path, payload, mode)
+
+        with patch("scripts.distribute._atomic_write", side_effect=write), self.assertRaises(Interrupted):
+            self.install("cursor", "3.0.0-beta.51")
+
+    def test_an_interrupted_migration_still_guards_and_every_command_recovers(self):
+        def retry():
+            self.install("cursor", "3.0.0-beta.51")
+            return "3.0.0-beta.51"
+
+        def update():
+            self.install("cursor", "3.0.0-beta.52")
+            return "3.0.0-beta.52"
+
+        def rollback():
+            return restore(self.home, self.user, "cursor", uninstall=False)["version"]
+
+        def uninstall():
+            return restore(self.home, self.user, "cursor", uninstall=True)["status"]
+
+        def deactivate():
+            return deactivate_harness(harness="cursor", safe_yolo_home=self.home, user_home=self.user)["status"]
+
+        # Launcher, receipt, then hooks file: crash before the receipt, and before the hooks file.
+        for completed, rolled_back_to in ((1, "3.0.0-beta.49"), (2, "3.0.0-beta.50")):
+            for action, expected in ((retry, None), (update, None), (rollback, rolled_back_to),
+                                     (uninstall, "inactive"), (deactivate, "inactive")):
+                with self.subTest(completed=completed, action=action.__name__):
+                    self.homes(self.root / f"{completed}-{action.__name__}")
+                    self.interrupted_migration(completed, history=action is rollback)
+                    self.assertEqual("allow", self.decision("cursor", "git status --short"))
+                    self.assertEqual("deny", self.decision("cursor", "git push --force origin main"))
+                    config = self.config("cursor")
+
+                    outcome = action()
+
+                    if expected == "inactive":
+                        self.assertEqual("inactive", outcome)
+                        self.assertFalse(config.exists())
+                        continue
+                    self.assertEqual(expected or outcome, outcome)
+                    self.assertEqual(outcome, self.receipt("cursor")["version"])
+                    self.assertEqual("allow", self.decision("cursor", "git status --short"))
+                    self.assertEqual("deny", self.decision("cursor", "git push --force origin main"))
+                    if expected is None:
+                        report = doctor_harness(harness="cursor", safe_yolo_home=self.home, user_home=self.user)
+                        self.assertTrue(report["healthy"], report)
+
+    def test_deactivate_removes_only_the_safe_yolo_hook(self):
+        stop = [{"hooks": [{"type": "command", "command": "echo stop"}]}]
+        deny = {"matcher": "Bash", "hooks": [{"type": "command", "command": "guard --deny"}]}
+        shell = [{"command": "guard --deny"}]
+        group = {"enabled": True, "PreToolUse": [{"matcher": "*", "hooks": [
+            {"type": "command", "command": "guard --deny", "timeout": 5}]}]}
+        # Each harness gets another owner's hook after install; the update carries it over.
+        cases = {
+            "codex": (lambda document: document["hooks"].update(Stop=stop), {"hooks": {"Stop": stop}}),
+            "claude-code": (lambda document: document["hooks"]["PreToolUse"].append(deny),
+                            {"hooks": {"PreToolUse": [deny]}}),
+            "cursor": (lambda document: document["hooks"].update(beforeShellExecution=shell),
+                       {"hooks": {"beforeShellExecution": shell}}),
+            "antigravity": (lambda document: document.update(guard=group), {"guard": group}),
+        }
+        for harness, (add, expected) in cases.items():
+            with self.subTest(harness=harness):
+                self.install(harness, "3.0.0-beta.50")
+                config = self.config(harness)
+                document = json.loads(config.read_text())
+                add(document)
+                config.write_text(json.dumps(document, indent=2) + "\n")
+                self.install(harness, "3.0.0-beta.51")
+
+                deactivate_harness(harness=harness, safe_yolo_home=self.home, user_home=self.user)
+
+                self.assertEqual(expected, json.loads(config.read_text()))
 
     def test_an_unreadable_release_file_fails_closed(self):
         for harness in ("codex", "claude-code", "antigravity"):

@@ -263,6 +263,28 @@ class PrivateBetaCliTests(unittest.TestCase):
         restore(self.safe_yolo_home.resolve(), self.user_home, "codex", uninstall=True)
         self.assertEqual(original, self.hooks.read_bytes())
 
+    @patch("scripts.distribute.verify_source", return_value="9" * 40)
+    def test_rollback_to_beta_one_runs_the_saved_hook_before_publishing_it(self, _verify):
+        self.beta_one_codex(b'{"hooks":{"SessionStart":[]}}\n')
+        (self.source / "VERSION").write_text("3.0.0-beta.3\n")
+        install_codex(source=self.source, safe_yolo_home=self.safe_yolo_home, codex_home=self.codex_home,
+                      expected_commit="9" * 40)
+        migrated = self.hooks.read_bytes()
+        bootstrap = self.safe_yolo_home / "bootstrap.py"
+        kept = bootstrap.read_bytes()
+        bootstrap.unlink()
+
+        with self.assertRaisesRegex(RuntimeError, "rollback was not applied"):
+            restore(self.safe_yolo_home.resolve(), self.user_home, "codex", uninstall=False)
+
+        self.assertEqual(migrated, self.hooks.read_bytes())
+        self.assertTrue(doctor_codex(safe_yolo_home=self.safe_yolo_home, codex_home=self.codex_home)["healthy"])
+        bootstrap.write_bytes(kept)
+        result = restore(self.safe_yolo_home.resolve(), self.user_home, "codex", uninstall=False)
+        self.assertEqual(("active", "3.0.0-beta.2"), (result["status"], result["version"]))
+        command = json.loads(self.hooks.read_text())["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        self.assertEqual(str(bootstrap), shlex.split(command)[1])
+
     @patch("scripts.distribute.verify_source", return_value="e" * 40)
     def test_install_rolls_back_when_codex_hooks_are_disabled(self, _verify):
         self.config.write_text(
