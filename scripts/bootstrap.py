@@ -82,11 +82,11 @@ def _requested_entry(argv: list[str]) -> str | None:
 
 def main() -> int:
     if _requested_entry(sys.argv[1:]) != "antigravity_v3":
-        return _dispatch(_parser().parse_args())
+        return _dispatch(_parse_args())
     # Antigravity ignores a hook that exits non-zero or prints nothing, so stdout carries one decision and nothing else.
     try:
         with contextlib.redirect_stdout(sys.stderr):
-            args = _parser().parse_args()
+            args = _parse_args()
         return _dispatch(args)
     except SystemExit:
         return _fail("antigravity_v3", "the hook command's arguments are invalid")
@@ -95,9 +95,10 @@ def main() -> int:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Verify a Safe YOLO release before dispatching a Codex hook.")
-    parser.add_argument("--release", type=Path, required=True)
-    parser.add_argument("--manifest-sha256", required=True)
+    parser = argparse.ArgumentParser(description="Verify a Safe YOLO release before dispatching a harness hook.")
+    parser.add_argument("--harness", help="Read the release and its digest from this harness's install receipt.")
+    parser.add_argument("--release", type=Path)
+    parser.add_argument("--manifest-sha256")
     parser.add_argument("--entry", choices=sorted(ENTRYPOINTS), required=True)
     parser.add_argument("--host-contract", type=Path)
     parser.add_argument("--audit-only", action="store_true")
@@ -108,8 +109,48 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _from_receipt(args: argparse.Namespace) -> None:
+    """Take the release, its digest and the harness context from the harness's install receipt.
+
+    The hook command then names no release, so it stays the same across updates and the
+    install receipt alone decides which verified release runs.
+    """
+    if args.release is not None or args.manifest_sha256 is not None:
+        raise ValueError("--harness reads the release from the install receipt; do not also pass --release")
+    if args.safe_yolo_home is None:
+        raise ValueError("--harness requires --safe-yolo-home")
+    path = args.safe_yolo_home / "state" / "installations" / f"{args.harness}.json"
+    try:
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ValueError(f"install receipt unreadable: {type(error).__name__}") from error
+    if not isinstance(receipt, dict) or receipt.get("status") != "active" or receipt.get("harness") != args.harness:
+        raise ValueError(f"no active {args.harness} installation")
+    fields = ("release", "manifest_sha256", "user_home", "harness_home")
+    if not all(isinstance(receipt.get(field), str) and receipt[field] for field in fields):
+        raise ValueError("install receipt is incomplete")
+    args.release = Path(receipt["release"])
+    args.manifest_sha256 = receipt["manifest_sha256"]
+    args.user_home = Path(receipt["user_home"])
+    args.harness_home = Path(receipt["harness_home"])
+    args.state_dir = args.safe_yolo_home / "state"
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = _parser()
+    args = parser.parse_args()
+    if args.harness is None:
+        missing = [flag for flag, value in (("--release", args.release), ("--manifest-sha256", args.manifest_sha256))
+                   if value is None]
+        if missing:
+            parser.error(f"the following arguments are required: {', '.join(missing)}")
+    return args
+
+
 def _dispatch(args: argparse.Namespace) -> int:
     try:
+        if args.harness is not None:
+            _from_receipt(args)
         entry = verified_entry(args.release, args.entry, expected_manifest_hash=args.manifest_sha256)
     except ValueError as error:
         return _fail(args.entry, str(error))

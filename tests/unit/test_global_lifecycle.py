@@ -132,6 +132,7 @@ class GlobalLifecycleTests(unittest.TestCase):
                 'install', '--harness', 'claude-code')
             other = {'matcher': 'Bash', 'hooks': [{'type': 'command', 'command': '/usr/bin/python3 /opt/other/guard.py'}]}
             document = json.loads(config.read_text())
+            installed = document['hooks']['PreToolUse'][0]
             document['hooks']['PreToolUse'].append(other)
             config.write_text(json.dumps(document))
             launcher = [str(user / '.local/bin/safe-yolo')]
@@ -142,7 +143,7 @@ class GlobalLifecycleTests(unittest.TestCase):
             groups = json.loads(config.read_text())['hooks']['PreToolUse']
             self.assertEqual(2, len(groups))
             self.assertIn(other, groups)
-            self.assertEqual(1, sum('3.0.0-beta.999' in hook['command'] for group in groups for hook in group['hooks']))
+            self.assertEqual(installed, groups[0])
             run(launcher, 'uninstall')
             self.assertEqual({'model': 'kept', 'hooks': {'PreToolUse': [other]}}, json.loads(config.read_text()))
 

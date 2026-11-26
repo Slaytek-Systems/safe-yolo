@@ -89,19 +89,10 @@ def active_receipts(home: Path) -> list[dict[str, Any]]:
 
 
 def _without_own_hook(groups: Any, receipt: dict[str, Any], home: Path) -> list[Any]:
-    """Claude Code's PreToolUse groups minus the hook this installation pinned, and any group that empties."""
-    from scripts.doctor import pinned_hook_slots
-    slots = set(pinned_hook_slots(
-        groups,
-        bootstrap_path=receipt.get('bootstrap') or home / 'bootstrap.py',
-        release_path=receipt['release'],
-        manifest_sha256=receipt['manifest_sha256'],
-        entry='claude_code_v3',
-        safe_yolo_home=home if receipt.get('user_home') else None,
-        user_home=receipt.get('user_home'),
-        harness_home=receipt.get('harness_home'),
-        state_dir=home / 'state',
-    ))
+    """Claude Code's PreToolUse groups minus the hook this installation wrote, and any group that empties."""
+    from scripts.distribute import _receipt_pin, _spec
+    from scripts.doctor import own_hook_slots
+    slots = set(own_hook_slots(groups, **_receipt_pin(receipt, home, _spec('claude-code'))))
     kept = []
     for group_index, group in enumerate(groups if isinstance(groups, list) else []):
         if not any(index == group_index for index, _ in slots):
@@ -186,18 +177,35 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
     report = inspect_release(Path(previous['release']), previous['manifest_sha256'])
     if not report['healthy']:
         raise RuntimeError('Previous release failed verification; rollback was not applied.')
-    if harness in ANTIGRAVITY_IDS:
-        # Antigravity ignores a hook that cannot start, so a dead command would restore no guard at all.
-        from scripts.distribute import _run_canaries
-        try:
-            canaries = _run_canaries(home, Path(previous['release']), previous['manifest_sha256'],
-                                     harness=harness, config_path=backup)
-        except RuntimeError as error:
-            raise RuntimeError(f'{error}; rollback was not applied.') from error
+    from scripts.distribute import _antigravity_hook, _run_canaries
+    previous_release = Path(previous['release'])
+    launcher = Path(previous['launcher']) if previous.get('launcher') else None
+    snapshot = [(item, item.read_bytes() if item.is_file() else None, mode)
+                for item, mode in ((path, 0o600), (config, receipt['previous_config_mode']), (launcher, 0o700)) if item]
+    try:
+        # The same cut-over as an update: the launcher, the harness file if it differs, then the receipt.
+        if launcher:
+            _atomic_write(launcher, (previous_release / 'scripts' / 'bootstrap.py').read_bytes(), 0o700)
+        if config.read_bytes() != backup.read_bytes():
+            _atomic_write(config, backup.read_bytes(), receipt['previous_config_mode'])
+        _atomic_write(path, (json.dumps(previous, indent=2) + '\n').encode())
+        # The hook the harness now runs must answer; Antigravity ignores one that cannot start, so a
+        # dead command would restore no guard at all.
+        if harness in ANTIGRAVITY_IDS:
+            hook_command, timeout = _antigravity_hook(config)
+            canaries = _run_canaries(hook_command, harness, timeout)
+        elif previous.get('command'):
+            canaries = _run_canaries(previous['command'], harness)
+        else:
+            canaries = {'allow': True, 'deny': True}
         if not all(canaries.values()):
-            raise RuntimeError(f'Previous hook command failed its allow/deny check ({canaries}); '
-                               'rollback was not applied.')
-    _atomic_write(config, backup.read_bytes(), receipt['previous_config_mode'])
-    _atomic_write(path, (json.dumps(previous, indent=2) + '\n').encode())
+            raise RuntimeError(f'Previous hook command failed its allow/deny check ({canaries})')
+    except (RuntimeError, OSError) as error:
+        for item, payload, mode in snapshot:
+            if payload is not None:
+                _atomic_write(item, payload, mode)
+            elif item.exists():
+                item.unlink()
+        raise RuntimeError(f'{error}; rollback was not applied.') from error
     return {'status': 'active', 'harness': harness, 'version': previous['version'],
             'next_action': previous['next_action']}

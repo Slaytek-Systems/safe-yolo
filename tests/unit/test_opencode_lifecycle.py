@@ -190,9 +190,9 @@ class OpenCodeLifecycleTests(unittest.TestCase):
         self.assertEqual(str(self.plugin.resolve()), receipt["config_path"])
         self.assertEqual(str(self.config_home.resolve()), receipt["harness_home"])
         text = self.plugin.read_text()
-        self.assertIn('"--entry", "opencode_v3"', text)
-        self.assertIn(f'"--harness-home", "{self.config_home.resolve()}"', text)
-        self.assertIn(receipt["manifest_sha256"], text)
+        self.assertIn('"--harness", "opencode", "--entry", "opencode_v3"', text)
+        self.assertNotIn(receipt["manifest_sha256"], text)
+        self.assertNotIn("releases", text)
         self.assertEqual(OTHER_PLUGIN, self.other.read_bytes())
         self.assertTrue(self.doctor()["healthy"])
 
@@ -227,14 +227,14 @@ class OpenCodeLifecycleTests(unittest.TestCase):
 
     def test_doctor_reports_an_edited_or_repinned_plugin(self):
         self.install()
-        self.plugin.write_text(self.plugin.read_text().replace("3.0.0-beta.2", "3.0.0-beta.1"))
+        self.plugin.write_text(self.plugin.read_text().replace('"--harness", "opencode"', '"--harness", "codex"'))
 
         report = self.doctor()
 
         self.assertFalse(report["healthy"])
         self.assertIn("installed harness configuration changed after activation", report["problems"])
         self.assertIn(
-            "OpenCode plugin is not the Safe YOLO plugin pinned to the expected release",
+            "OpenCode plugin is not the Safe YOLO plugin this installation wrote",
             report["problems"],
         )
 
@@ -261,9 +261,8 @@ class OpenCodeLifecycleTests(unittest.TestCase):
     def test_plugin_fails_closed_when_the_adapter_cannot_decide(self):
         self.install()
         installed = self.plugin.read_text()
-        release = str((self.safe_yolo_home / "releases" / "3.0.0-beta.2").resolve())
         cases = {
-            "missing release": installed.replace(f'"--release", "{release}"', '"--release", "/nonexistent"'),
+            "missing receipt": installed.replace('"--harness", "opencode"', '"--harness", "nonexistent"'),
             "missing interpreter": installed.replace(f'["{sys.executable}"', '["/nonexistent/python3"'),
             "unparsable output": installed.replace(f'["{sys.executable}"', '["/bin/echo"'),
         }
@@ -379,7 +378,8 @@ class OpenCodeLifecycleTests(unittest.TestCase):
             return real_replace(source, destination)
 
         with patch("os.replace", replace_across_mounts), \
-                patch("scripts.distribute._run_canaries", return_value={"allow": True, "deny": False}):
+                patch("scripts.distribute._run_canaries", side_effect=[
+                    {"allow": True, "deny": True}, {"allow": True, "deny": False}]):
             with self.assertRaisesRegex(RuntimeError, "activation failed"):
                 self.install()
 
@@ -696,6 +696,7 @@ class OpenCodeGlobalLifecycleTests(unittest.TestCase):
 
             run([sys.executable, str(first / "safe-yolo"), "--home", str(home), "--user-home", str(user)],
                 "install", "--harness", "opencode")
+            installed = (plugins / "safe-yolo.js").read_bytes()
             launcher = [str(user / ".local/bin/safe-yolo")]
             first_version = (first / "VERSION").read_text().strip()
             environment["OPENCODE_CONFIG_DIR"] = str(root / "another-config")
@@ -704,10 +705,10 @@ class OpenCodeGlobalLifecycleTests(unittest.TestCase):
             report = run(launcher, "doctor")
             self.assertTrue(report["healthy"], report)
             self.assertEqual("3.0.0-beta.999", report["reports"][0]["version"])
-            self.assertIn("releases/3.0.0-beta.999/", (plugins / "safe-yolo.js").read_text())
+            self.assertEqual(installed, (plugins / "safe-yolo.js").read_bytes())
             run(launcher, "rollback")
             self.assertEqual(first_version, run(launcher, "doctor")["reports"][0]["version"])
-            self.assertIn(f"releases/{first_version}/", (plugins / "safe-yolo.js").read_text())
+            self.assertEqual(installed, (plugins / "safe-yolo.js").read_bytes())
             run(launcher, "uninstall")
 
             self.assertEqual(["herdr-agent-state.js"], sorted(path.name for path in plugins.iterdir()))

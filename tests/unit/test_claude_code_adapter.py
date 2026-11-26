@@ -343,7 +343,7 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
         )
         self.assertFalse(stale["healthy"])
         self.assertIn(
-            "PreToolUse hook is not pinned to the expected Safe YOLO bootstrap release",
+            "PreToolUse hook is not the command Safe YOLO installed",
             stale["problems"],
         )
 

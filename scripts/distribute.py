@@ -27,7 +27,7 @@ from scripts.doctor import (
     inspect_codex_wiring,
     inspect_release,
     owns_antigravity_group,
-    pinned_hook_slots,
+    own_hook_slots,
 )
 from scripts.harness_specs import ANTIGRAVITY_IDS, HARNESS_BY_ID, HARNESS_HOME_ENV, HARNESSES, HarnessSpec
 from scripts.package import MANIFEST as DISTRIBUTION_MANIFEST, verify_bundle
@@ -37,6 +37,8 @@ from scripts.harness_wiring import (
     inspect_cursor_wiring as _inspect_cursor_wiring,
     inspect_opencode_wiring as _inspect_opencode_wiring,
     is_hand_wired_antigravity_group as _is_hand_wired_antigravity_group,
+    is_stable_command as _is_stable_command,
+    launcher_path as _launcher_path,
     pinned_command as _pinned_command,
     prepare_antigravity_hooks as _prepare_antigravity_hooks,
     prepare_command_hooks as _prepare_hooks,
@@ -45,6 +47,7 @@ from scripts.harness_wiring import (
     read_antigravity_hooks as _read_antigravity_hooks,
     read_json_object as _read_json_object,
     render_opencode_plugin as _render_opencode_plugin,
+    stable_command as _stable_command,
 )
 
 
@@ -117,35 +120,11 @@ def _exclusive_write(path: Path, payload: bytes, mode: int) -> None:
         temporary.unlink()
 
 
-def _run_canaries(
-    home: Path,
-    release: Path,
-    manifest_sha256: str,
-    *,
-    harness: str = "codex",
-    entry: str = "codex_v3",
-    user_home: Path | None = None,
-    harness_home: Path | None = None,
-    config_path: Path | None = None,
-) -> dict[str, bool]:
-    """Allow and deny replies of the hook command; for Antigravity, the command its hooks file runs.
-
-    The Antigravity hooks file must already have passed the wiring check.
-    """
-    timeout = None
-    if harness in ANTIGRAVITY_IDS:
-        hook = _read_antigravity_hooks(config_path)[_ANTIGRAVITY_GROUP]["PreToolUse"][0]["hooks"][0]
-        command_text, timeout = hook["command"], hook["timeout"]
-    else:
-        command_text = _pinned_command(
-            home,
-            release,
-            manifest_sha256,
-            entry,
-            user_home=user_home,
-            harness_home=harness_home,
-        )
+def _run_canaries(command_text: str, harness: str, timeout: int | None = None) -> dict[str, bool]:
+    """Allow and deny replies of one hook command, run as the harness would run it."""
     command = shlex.split(command_text)
+    if not command or shutil.which(command[0]) is None:
+        raise RuntimeError(f"Hook command cannot start: {command_text}")
     base = {"hook_event_name": "PreToolUse", "cwd": str(Path.cwd())}
     if harness == "codex":
         allowed_payload = {**base, "tool_name": "exec_command", "tool_input": {"cmd": "git status --short"}}
@@ -217,6 +196,20 @@ def _run_canaries(
         except (json.JSONDecodeError, AttributeError):
             allow_ok = False
     return {"allow": allow_ok, "deny": deny_ok}
+
+
+def _antigravity_hook(config_path: Path) -> tuple[str, int]:
+    """The command and timeout Antigravity runs; the hooks file must already have passed the wiring check."""
+    hook = _read_antigravity_hooks(config_path)[_ANTIGRAVITY_GROUP]["PreToolUse"][0]["hooks"][0]
+    return hook["command"], hook["timeout"]
+
+
+def _installed_canaries(spec: HarnessSpec, command: str, config_path: Path) -> dict[str, bool]:
+    """Canaries through the command the harness runs: for Antigravity, the one its hooks file holds."""
+    if spec.id in ANTIGRAVITY_IDS:
+        hook_command, timeout = _antigravity_hook(config_path)
+        return _run_canaries(hook_command, spec.id, timeout)
+    return _run_canaries(command, spec.id)
 
 
 def _reply_decision(stdout: str) -> str | None:
@@ -387,71 +380,74 @@ def _config_root(spec: HarnessSpec, config_path: Path) -> Path:
     return config_path.parents[len(Path(spec.config_file).parts) - 1]
 
 
-def _inspect_wiring(
-    spec: HarnessSpec,
-    config_path: Path,
-    home: Path,
-    release: Path,
-    digest: str,
-    *,
-    user_home: Path | None = None,
-    harness_home: Path | None = None,
-    bootstrap: Path | None = None,
-) -> dict[str, Any]:
-    bootstrap_path = bootstrap or home / "bootstrap.py"
+def _receipt_pin(receipt: dict[str, Any], home: Path, spec: HarnessSpec) -> dict[str, Any]:
+    """How to recognise the hook command that the installation behind this receipt wrote."""
+    pin: dict[str, Any] = {"release_path": receipt.get("release", ""), "entry": spec.entry}
+    if receipt.get("command"):
+        return {**pin, "command": receipt["command"]}
+    # Written by 3.0.0-beta.17 or earlier, whose command pinned the release. Kept so one update can migrate it.
+    user = receipt.get("user_home")
+    return {
+        **pin,
+        "bootstrap_path": receipt.get("bootstrap") or home / "bootstrap.py",
+        "manifest_sha256": receipt.get("manifest_sha256", ""),
+        "safe_yolo_home": home if user else None,
+        "user_home": user,
+        "harness_home": receipt.get("harness_home") if user else None,
+        "state_dir": home / "state",
+    }
+
+
+def _inspect_wiring(spec: HarnessSpec, config_path: Path, home: Path, pin: dict[str, Any]) -> dict[str, Any]:
+    """Whether the harness configuration holds the hook command `pin` describes."""
     if spec.id == "codex":
         return inspect_codex_wiring(
             config_path.parent / "config.toml",
             config_path,
-            bootstrap_path,
-            digest,
-            release_path=release,
+            pin.get("bootstrap_path"),
+            pin.get("manifest_sha256"),
+            release_path=pin["release_path"],
             entry=spec.entry,
-            safe_yolo_home=home if user_home is not None else None,
-            user_home=user_home,
-            harness_home=harness_home,
+            safe_yolo_home=pin.get("safe_yolo_home"),
+            user_home=pin.get("user_home"),
+            harness_home=pin.get("harness_home"),
+            command=pin.get("command"),
         )
     if spec.id in ANTIGRAVITY_IDS:
-        return inspect_antigravity_wiring(
-            config_path,
-            bootstrap_path=bootstrap_path,
-            release_path=release,
-            manifest_sha256=digest,
-            entry=spec.entry,
-            safe_yolo_home=home if user_home is not None else None,
-            user_home=user_home,
-            harness_home=harness_home,
-            state_dir=home / "state",
-        )
+        return inspect_antigravity_wiring(config_path, **pin)
     if spec.id == "claude-code":
         return inspect_claude_code_wiring(
             config_path,
-            bootstrap_path,
-            digest,
-            release_path=release,
+            pin.get("bootstrap_path"),
+            pin.get("manifest_sha256"),
+            release_path=pin["release_path"],
             entry=spec.entry,
-            safe_yolo_home=home if user_home is not None else None,
-            user_home=user_home,
-            harness_home=harness_home,
-            state_dir=home / "state",
+            safe_yolo_home=pin.get("safe_yolo_home"),
+            user_home=pin.get("user_home"),
+            harness_home=pin.get("harness_home"),
+            state_dir=pin.get("state_dir"),
+            command=pin.get("command"),
         )
     if spec.id == "opencode":
-        return _inspect_opencode_wiring(
-            config_path,
-            home,
-            release,
-            digest,
-            user_home=user_home,
-            harness_home=harness_home,
+        release = Path(pin["release_path"])
+        command = pin.get("command") or _pinned_command(
+            home, release, pin["manifest_sha256"], spec.entry,
+            user_home=Path(pin["user_home"]) if pin.get("user_home") else None,
+            harness_home=Path(pin["harness_home"]) if pin.get("harness_home") else None,
         )
-    return _inspect_cursor_wiring(
-        config_path,
-        home,
-        release,
-        digest,
-        user_home=user_home,
-        harness_home=harness_home,
-    )
+        return _inspect_opencode_wiring(config_path, release, [command])
+    from scripts.doctor import _owns_command
+    return _inspect_cursor_wiring(config_path, lambda command: _owns_command(command, pin))
+
+
+def _same_config(spec: HarnessSpec, original: bytes, payload: bytes) -> bool:
+    """Whether writing `payload` would change nothing the harness reads."""
+    if spec.id == "opencode":
+        return original == payload
+    try:
+        return json.loads(original) == json.loads(payload)
+    except ValueError:
+        return False
 
 
 def install_harness(
@@ -504,22 +500,21 @@ def install_harness(
         if not report['healthy']:
             raise RuntimeError('Existing installation needs attention: ' + '; '.join(report['problems']))
         return previous_receipt
+    previous_pin = _receipt_pin(previous_receipt, home, spec) if previous_receipt else None
     if previous_receipt:
-        current_wiring = _inspect_wiring(spec, target, home, Path(previous_receipt['release']),
-                                        previous_receipt['manifest_sha256'], user_home=user,
-                                        harness_home=harness_home, bootstrap=Path(previous_receipt['bootstrap']))
+        current_wiring = _inspect_wiring(spec, target, home, previous_pin)
         if not current_wiring['healthy']:
             raise RuntimeError('Existing Safe YOLO hook changed; refusing to overwrite it.')
         verified_current = target.read_bytes()
         previous_receipt = {**previous_receipt, 'installed_config_sha256': hashlib.sha256(verified_current).hexdigest()}
-    command = _pinned_command(
-        home,
-        release,
-        digest,
-        spec.entry,
-        user_home=user,
-        harness_home=harness_home,
-    )
+    # The new release must answer correctly on its own before anything a harness reads changes.
+    canaries = _run_canaries(
+        _pinned_command(home, release, digest, spec.entry, user_home=user, harness_home=harness_home), spec.id)
+    if not all(canaries.values()):
+        raise RuntimeError(
+            f"Safe YOLO activation failed: release {version} failed its allow/deny check ({canaries}); "
+            "nothing was changed.")
+    command = _stable_command(home, spec.id, spec.entry)
     if spec.id == "opencode":
         payload = _render_opencode_plugin(release, command)
         owned = [payload, verified_current] if previous_receipt else [payload]
@@ -531,40 +526,25 @@ def install_harness(
             def owns(group: Any) -> bool:
                 if not previous_receipt:
                     return _is_hand_wired_antigravity_group(group, home)
-                return owns_antigravity_group(
-                    group,
-                    bootstrap_path=Path(previous_receipt['bootstrap']),
-                    release_path=Path(previous_receipt['release']),
-                    manifest_sha256=previous_receipt['manifest_sha256'],
-                    entry=spec.entry,
-                    safe_yolo_home=home,
-                    user_home=user,
-                    harness_home=harness_home,
-                    state_dir=home / "state",
-                )
+                return owns_antigravity_group(group, **previous_pin)
             candidate, original_bytes, original_mode = _prepare_antigravity_hooks(target, command, owns)
         else:
             own_slots = None
             if previous_receipt and spec.id == "claude-code":
                 # Claude Code runs every matching hook and a deny from any of them wins, so other
-                # owners' hooks may stand beside this one. An update swaps only the hook pinned
-                # to the installed release, which the wiring check above found exactly once.
+                # owners' hooks may stand beside this one. An update swaps only the hook this
+                # installation wrote, which the wiring check above found exactly once.
                 def own_slots(groups: Any) -> list[tuple[int, int]]:
-                    return pinned_hook_slots(
-                        groups,
-                        bootstrap_path=Path(previous_receipt['bootstrap']),
-                        release_path=Path(previous_receipt['release']),
-                        manifest_sha256=previous_receipt['manifest_sha256'],
-                        entry=spec.entry,
-                        safe_yolo_home=home,
-                        user_home=user,
-                        harness_home=harness_home,
-                        state_dir=home / "state",
-                    )
+                    return own_hook_slots(groups, **previous_pin)
             candidate, original_bytes, original_mode = _prepare_hooks(
                 target, home, command, entry=spec.entry, label=spec.name, own_slots=own_slots
             )
         payload = (json.dumps(candidate, indent=2, allow_nan=spec.id not in ANTIGRAVITY_IDS) + "\n").encode()
+    # Rewrite the harness file only when its Safe YOLO entry differs from the stable form, which
+    # happens on a first install and on the one update that migrates a release-pinned command.
+    config_changes = original_bytes is None or not _same_config(spec, original_bytes, payload)
+    if not config_changes:
+        payload = original_bytes
     backup_root = home / "backups" / (
         f"pre-{spec.id}-{version}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
     )
@@ -573,43 +553,10 @@ def install_harness(
     if original_bytes is not None:
         backup_path = backup_root / target.name
         _atomic_write(backup_path, original_bytes, original_mode)
-    _atomic_write(target, payload, original_mode)
-    try:
-        wiring = _inspect_wiring(
-            spec,
-            target,
-            home,
-            release,
-            digest,
-            user_home=user,
-            harness_home=harness_home,
-            bootstrap=release / "scripts" / "bootstrap.py",
-        )
-        canaries = (
-            _run_canaries(
-                home,
-                release,
-                digest,
-                harness=spec.id,
-                entry=spec.entry,
-                user_home=user,
-                harness_home=harness_home,
-                config_path=target,
-            )
-            if wiring["healthy"] or spec.id not in ANTIGRAVITY_IDS
-            else {"allow": False, "deny": False}
-        )
-        if not wiring["healthy"] or not all(canaries.values()):
-            raise RuntimeError(
-                f"doctor problems={wiring['problems']}; canaries={canaries}"
-            )
-    except Exception as error:
-        if original_bytes is None:
-            _retire(spec.id, target, hashlib.sha256(payload).hexdigest(), home,
-                    destination=backup_root / f"failed-{target.name}")
-        else:
-            _atomic_write(target, original_bytes, original_mode)
-        raise RuntimeError(f"Safe YOLO activation failed; previous hooks restored: {error}") from error
+    launcher = _launcher_path(home, spec.id)
+    receipt_path = _harness_receipt_path(home, spec.id)
+    previous_launcher = launcher.read_bytes() if launcher.is_file() else None
+    previous_receipt_bytes = receipt_path.read_bytes() if receipt_path.is_file() else None
     receipt: dict[str, Any] = {
         "schema_version": 1,
         "status": "active",
@@ -617,43 +564,20 @@ def install_harness(
         "version": version,
         "source_commit": source_commit,
         "release": str(release),
-        "bootstrap": str(release / "scripts" / "bootstrap.py"),
+        "bootstrap": str(launcher),
+        "launcher": str(launcher),
+        "command": command,
         "manifest_sha256": digest,
         "config_path": str(target),
         "user_home": str(user),
         "harness_home": str(harness_home),
-        "installed_config_sha256": _sha256(target),
+        "installed_config_sha256": hashlib.sha256(payload).hexdigest(),
         "previous_config_existed": original_bytes is not None,
         "previous_config_backup": str(backup_path) if backup_path else None,
         "previous_config_mode": original_mode,
         "healthy": True,
         "canaries": canaries,
-        "next_action": {
-            "codex": "Restart Codex, open /hooks, review this command, and trust its hash.",
-            "claude-code": "Restart Claude Code, then run /hooks and verify the Safe YOLO PreToolUse hook.",
-            "cursor": "Cursor watches the user hooks file and reloads it automatically; verify Safe YOLO in Hooks.",
-            "opencode": (
-                "Run `opencode service restart` if the OpenCode background service is running, then start a new "
-                "session. Doctor checks the plugin file and release but cannot prove OpenCode loaded the plugin: "
-                "run `opencode api plugin.list` against the server and location your sessions use and confirm the "
-                "safe-yolo entry has state status `active`, not `failed`, with this plugin file as its source "
-                "(repeat it if the list is empty while plugins load), then in a session check that "
-                "`echo hello` runs and `git push --force origin main` is denied in a new empty folder after "
-                "`git init` (no remote, so nothing is pushed if the plugin did not load)."
-            ),
-            "antigravity": (
-                "Start a new Antigravity session, run /hooks and confirm the safe-yolo PreToolUse hook is listed. "
-                "Doctor runs the command in the hooks file but cannot prove Antigravity loaded the "
-                "hook. Antigravity ignores a hook that crashes, times out or prints invalid output."
-            ),
-            "antigravity-t3": (
-                "Start a new Antigravity thread in T3 Code and check that `git push --force origin main` is "
-                "denied with a Safe YOLO reason in a new empty folder after `git init` (no remote, so nothing is "
-                "pushed if the hook did not load; a git error about the remote is not proof). Doctor runs the command in the hooks file but cannot prove "
-                "Antigravity loaded the hook. Antigravity ignores a hook that crashes, times out or prints "
-                "invalid output."
-            ),
-        }[spec.id],
+        "next_action": _next_action(spec, config_changes),
     }
     if previous_receipt:
         receipt['original_install'] = previous_receipt.get('original_install', {
@@ -661,11 +585,69 @@ def install_harness(
                                                  'previous_config_mode')})
         receipt['previous_install'] = {key: value for key, value in previous_receipt.items()
                                        if key != 'previous_install'}
-    _atomic_write(
-        _harness_receipt_path(home, spec.id),
-        (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode(),
-    )
+    try:
+        # The launcher first: a newer bootstrap still verifies the release an older receipt names.
+        _atomic_write(launcher, (release / "scripts" / "bootstrap.py").read_bytes(), 0o700)
+        # The cut-over: from here the unchanged command runs the new release.
+        _atomic_write(receipt_path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode())
+        if config_changes:
+            _atomic_write(target, payload, original_mode)
+        wiring = _inspect_wiring(spec, target, home, _receipt_pin(receipt, home, spec))
+        installed = (_installed_canaries(spec, command, target)
+                     if wiring["healthy"] or spec.id not in ANTIGRAVITY_IDS else {"allow": False, "deny": False})
+        if not wiring["healthy"] or not all(installed.values()):
+            raise RuntimeError(f"doctor problems={wiring['problems']}; canaries={installed}")
+    except Exception as error:
+        if config_changes:
+            if original_bytes is None:
+                _retire(spec.id, target, hashlib.sha256(payload).hexdigest(), home,
+                        destination=backup_root / f"failed-{target.name}")
+            else:
+                _atomic_write(target, original_bytes, original_mode)
+        for path, previous, mode in ((receipt_path, previous_receipt_bytes, 0o600),
+                                     (launcher, previous_launcher, 0o700)):
+            if previous is not None:
+                _atomic_write(path, previous, mode)
+            elif path.exists():
+                path.unlink()
+        raise RuntimeError(f"Safe YOLO activation failed; previous hooks restored: {error}") from error
     return receipt
+
+
+def _next_action(spec: HarnessSpec, config_changed: bool) -> str:
+    if not config_changed:
+        return (f"Nothing to do: the {spec.name} hook command did not change, so running sessions use this "
+                "release on their next tool call.")
+    return {
+        "codex": (
+            "Restart Codex, open /hooks, review this command, and trust its hash. Later updates keep the same "
+            "command, so this is needed once after the switch to the stable command, and again only if the Python "
+            "path in the command changes."
+        ),
+        "claude-code": "Restart Claude Code, then run /hooks and verify the Safe YOLO PreToolUse hook.",
+        "cursor": "Cursor watches the user hooks file and reloads it automatically; verify Safe YOLO in Hooks.",
+        "opencode": (
+            "Run `opencode service restart` if the OpenCode background service is running, then start a new "
+            "session. Doctor checks the plugin file and release but cannot prove OpenCode loaded the plugin: "
+            "run `opencode api plugin.list` against the server and location your sessions use and confirm the "
+            "safe-yolo entry has state status `active`, not `failed`, with this plugin file as its source "
+            "(repeat it if the list is empty while plugins load), then in a session check that "
+            "`echo hello` runs and `git push --force origin main` is denied in a new empty folder after "
+            "`git init` (no remote, so nothing is pushed if the plugin did not load)."
+        ),
+        "antigravity": (
+            "Start a new Antigravity session, run /hooks and confirm the safe-yolo PreToolUse hook is listed. "
+            "Doctor runs the command in the hooks file but cannot prove Antigravity loaded the "
+            "hook. Antigravity ignores a hook that crashes, times out or prints invalid output."
+        ),
+        "antigravity-t3": (
+            "Start a new Antigravity thread in T3 Code and check that `git push --force origin main` is "
+            "denied with a Safe YOLO reason in a new empty folder after `git init` (no remote, so nothing is "
+            "pushed if the hook did not load; a git error about the remote is not proof). Doctor runs the command in the hooks file but cannot prove "
+            "Antigravity loaded the hook. Antigravity ignores a hook that crashes, times out or prints "
+            "invalid output."
+        ),
+    }[spec.id]
 
 
 def doctor_harness(
@@ -683,39 +665,22 @@ def doctor_harness(
     elif _sha256(config_path) != receipt.get("installed_config_sha256"):
         problems.append("installed harness configuration changed after activation")
     release = Path(str(receipt.get("release", "")))
-    digest = str(receipt.get("manifest_sha256", ""))
-    receipt_user_home = receipt.get("user_home")
-    receipt_harness_home = receipt.get("harness_home")
-    user = Path(str(receipt_user_home)) if receipt_user_home else None
-    harness_home = Path(str(receipt_harness_home)) if receipt_harness_home else None
-    receipt_bootstrap = receipt.get("bootstrap")
-    bootstrap = Path(str(receipt_bootstrap)) if receipt_bootstrap else home / "bootstrap.py"
-    release_report = inspect_release(release, digest)
+    release_report = inspect_release(release, str(receipt.get("manifest_sha256", "")))
     problems.extend(release_report["problems"])
-    wiring = _inspect_wiring(
-        spec,
-        config_path,
-        home,
-        release,
-        digest,
-        user_home=user,
-        harness_home=harness_home,
-        bootstrap=bootstrap,
-    )
+    command = receipt.get("command")
+    if not _is_stable_command(command, home, spec.id, spec.entry):
+        problems.append("the hook command is not the stable Safe YOLO command; run `safe-yolo update` to switch to it")
+        command = None
+    launcher = _launcher_path(home, spec.id)
+    bootstrap = release / "scripts" / "bootstrap.py"
+    if not launcher.is_file() or not bootstrap.is_file() or launcher.read_bytes() != bootstrap.read_bytes():
+        problems.append(f"launcher {launcher} does not match the active release's bootstrap")
+    wiring = _inspect_wiring(spec, config_path, home, _receipt_pin(receipt, home, spec))
     problems.extend(wiring["problems"])
     canaries = {"allow": False, "deny": False}
-    if release_report["healthy"] and (wiring["healthy"] or spec.id not in ANTIGRAVITY_IDS):
+    if command and release_report["healthy"] and (wiring["healthy"] or spec.id not in ANTIGRAVITY_IDS):
         try:
-            canaries = _run_canaries(
-                home,
-                release,
-                digest,
-                harness=spec.id,
-                entry=spec.entry,
-                user_home=user,
-                harness_home=harness_home,
-                config_path=config_path,
-            )
+            canaries = _installed_canaries(spec, command, config_path)
         except RuntimeError as error:
             problems.append(str(error))
     if not all(canaries.values()):
