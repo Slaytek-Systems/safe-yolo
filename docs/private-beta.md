@@ -75,11 +75,13 @@ for new installs and upgrades.
 python3 safe-yolo deactivate --harness cursor
 ```
 
-Deactivation restores the exact configuration bytes from before Safe YOLO was
-first installed, even after updates, so no Safe YOLO hook stays behind. For a
-fresh configuration, it moves the Safe-YOLO-created file into the backup area
-rather than erasing it. Changes made between install and the last update are
-kept in that update's backup under `~/.safe-yolo/backups/`.
+Deactivation removes only the Safe YOLO hook, even after updates, so no Safe
+YOLO hook stays behind and other owners' hooks and settings stay in place. Keys
+only Safe YOLO writes go back to their values from before the first install.
+If Safe YOLO created the file and nothing else is left in it, the file moves to
+the backup area rather than being erased. The OpenCode plugin file is wholly
+Safe YOLO's: deactivation puts back the plugin it replaced, or moves it to the
+backup area.
 
 ## Support boundary
 

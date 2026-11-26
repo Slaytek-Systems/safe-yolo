@@ -22,6 +22,8 @@ if str(ROOT) not in sys.path:
 
 from scripts.activate_v3 import _ensure_release, verify_source
 from scripts.doctor import (
+    _command_hooks,
+    _owns_command,
     inspect_antigravity_wiring,
     inspect_claude_code_wiring,
     inspect_codex_wiring,
@@ -295,6 +297,24 @@ def _read_harness_receipt(home: Path, spec: HarnessSpec) -> tuple[dict[str, Any]
     return normalized, legacy_path
 
 
+def _settled_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
+    """The installation whose hook the harness file holds.
+
+    Update writes the receipt before the harness file, and rollback writes the harness file
+    before the receipt. Stopped between the two, the receipt names one installation while the
+    file still holds, or already holds, the hook of `previous_install`. That one then runs, so
+    every lifecycle command continues from it.
+    """
+    previous = receipt.get("previous_install")
+    path = Path(str(receipt.get("config_path", "")))
+    if receipt.get("status") != "active" or not previous or path.is_symlink() or not path.is_file():
+        return receipt
+    digest = _sha256(path)
+    if digest != receipt.get("installed_config_sha256") and digest == previous.get("installed_config_sha256"):
+        return previous
+    return receipt
+
+
 def _has_harness_receipt(home: Path, spec: HarnessSpec) -> bool:
     return _harness_receipt_path(home, spec.id).is_file() or (
         spec.id == "codex" and _receipt_path(home).is_file()
@@ -483,15 +503,111 @@ def _inspect_wiring(spec: HarnessSpec, config_path: Path, home: Path, pin: dict[
             command=pin.get("command"),
         )
     if spec.id == "opencode":
-        release = Path(pin["release_path"])
-        command = pin.get("command") or _pinned_command(
-            home, release, pin["manifest_sha256"], spec.entry,
-            user_home=Path(pin["user_home"]) if pin.get("user_home") else None,
-            harness_home=Path(pin["harness_home"]) if pin.get("harness_home") else None,
-        )
-        return _inspect_opencode_wiring(config_path, release, [command])
-    from scripts.doctor import _owns_command
+        return _inspect_opencode_wiring(config_path, Path(pin["release_path"]), [_opencode_command(home, spec, pin)])
     return _inspect_cursor_wiring(config_path, lambda command: _owns_command(command, pin))
+
+
+def _opencode_command(home: Path, spec: HarnessSpec, pin: dict[str, Any]) -> str:
+    """The command the OpenCode plugin of this pin calls. The plugin text cannot be parsed back, only rendered."""
+    return pin.get("command") or _pinned_command(
+        home, Path(pin["release_path"]), pin["manifest_sha256"], spec.entry,
+        user_home=Path(pin["user_home"]) if pin.get("user_home") else None,
+        harness_home=Path(pin["harness_home"]) if pin.get("harness_home") else None,
+    )
+
+
+def _saved_hook(spec: HarnessSpec, path: Path, home: Path, receipt: dict[str, Any]) -> tuple[str, int | None]:
+    """The Safe YOLO hook command `path` holds for the installation behind `receipt`, with its Antigravity timeout.
+
+    Read from the file, not the receipt: receipts written before the stable command name no command,
+    and the file is what the harness runs.
+    """
+    pin = _receipt_pin(receipt, home, spec)
+    if spec.id in ANTIGRAVITY_IDS:
+        group = _read_antigravity_hooks(path).get(_ANTIGRAVITY_GROUP)
+        if owns_antigravity_group(group, **pin):
+            hook = group["PreToolUse"][0]["hooks"][0]
+            return hook["command"], hook["timeout"]
+    elif spec.id == "opencode":
+        if _inspect_wiring(spec, path, home, pin)["healthy"]:
+            return _opencode_command(home, spec, pin), None
+    else:
+        hooks = _read_json_object(path).get("hooks")
+        if spec.id == "cursor":
+            entries = hooks.get("preToolUse") if isinstance(hooks, dict) else None
+            commands = [entry.get("command") for entry in entries or [] if isinstance(entry, dict)]
+        else:
+            commands = [command for _, command in _command_hooks(hooks, "PreToolUse")]
+        owned = [command for command in commands if isinstance(command, str) and _owns_command(command, pin)]
+        if len(owned) == 1:
+            return owned[0], None
+    raise RuntimeError(f"{path} does not hold the Safe YOLO hook of release {receipt.get('version')}")
+
+
+def _without_own_hook(groups: Any, pin: dict[str, Any]) -> list[Any]:
+    """Claude Code's PreToolUse groups minus the hook this installation wrote, and any group that empties."""
+    slots = set(own_hook_slots(groups, **pin))
+    kept = []
+    for group_index, group in enumerate(groups if isinstance(groups, list) else []):
+        if not any(index == group_index for index, _ in slots):
+            kept.append(group)
+            continue
+        hooks = [hook for hook_index, hook in enumerate(group['hooks']) if (group_index, hook_index) not in slots]
+        if hooks:
+            kept.append({**group, 'hooks': hooks})
+    return kept
+
+
+def _remove_own_hook(spec: HarnessSpec, receipt: dict[str, Any], home: Path) -> Path | None:
+    """Take this installation's hook out of the harness file and leave everything else in it.
+
+    Other owners' hooks and settings stay, including any added after install. Keys only Safe YOLO
+    writes go back to their values from before the first install. A file Safe YOLO created that
+    is left holding nothing is retired; the retained copy is returned.
+    """
+    harness = spec.id
+    config = Path(str(receipt.get('config_path', '')))
+    if (config.is_symlink() or not config.is_file() or _config_path_problem(harness, config)
+            or _sha256(config) != receipt.get('installed_config_sha256')):
+        raise RuntimeError(f'{spec.name} configuration changed since installation; refusing to overwrite newer work.')
+    baseline = receipt.get('original_install', receipt)
+    original_bytes = None
+    original: dict[str, Any] = {}
+    if baseline['previous_config_existed']:
+        original_bytes = Path(baseline['previous_config_backup']).read_bytes()
+        original = (_read_antigravity_hooks(Path(baseline['previous_config_backup'])) if harness in ANTIGRAVITY_IDS
+                    else json.loads(original_bytes))
+    document = _read_antigravity_hooks(config) if harness in ANTIGRAVITY_IDS else json.loads(config.read_text())
+    if harness in ANTIGRAVITY_IDS:
+        document.pop(_ANTIGRAVITY_GROUP)
+    else:
+        event = 'preToolUse' if harness == 'cursor' else 'PreToolUse'
+        original_hooks = original.get('hooks', {})
+        if original_hooks.get(event):
+            raise RuntimeError('The legacy baseline already contains an enforcement hook; a complete uninstall needs operator review.')
+        # Install and update keep Codex and Cursor's event to Safe YOLO's hook alone; Claude Code shares it.
+        others = (_without_own_hook(document['hooks'].get(event), _receipt_pin(receipt, home, spec))
+                  if harness == 'claude-code' else [])
+        if others:
+            document['hooks'][event] = others
+        elif event in original_hooks:
+            document['hooks'][event] = original_hooks[event]
+        else:
+            document['hooks'].pop(event, None)
+        if not document['hooks'] and 'hooks' not in original:
+            document.pop('hooks')
+    owned_key = 'version' if harness == 'cursor' else 'description' if harness == 'codex' else None
+    if owned_key:
+        if owned_key in original:
+            document[owned_key] = original[owned_key]
+        else:
+            document.pop(owned_key, None)
+    if not document and original_bytes is None:
+        return _retire(harness, config, receipt['installed_config_sha256'], home)
+    payload = original_bytes if document == original and original_bytes is not None else (
+        json.dumps(document, indent=2, allow_nan=harness not in ANTIGRAVITY_IDS) + '\n').encode()
+    _atomic_write(config, payload, baseline['previous_config_mode'])
+    return None
 
 
 def _same_config(spec: HarnessSpec, original: bytes, payload: bytes) -> bool:
@@ -521,7 +637,7 @@ def install_harness(
     harness_home = _config_root(spec, target)
     previous_receipt = None
     if _has_harness_receipt(home, spec):
-        existing, _ = _read_harness_receipt(home, spec)
+        existing = _settled_receipt(_read_harness_receipt(home, spec)[0])
         if existing.get('status') == 'active':
             previous_receipt = existing
     if previous_receipt and Path(str(previous_receipt.get('config_path'))) != target:
@@ -710,7 +826,7 @@ def doctor_harness(
 ) -> dict[str, Any]:
     spec = _spec(harness)
     home = Path(safe_yolo_home).expanduser().resolve(strict=False)
-    receipt, _ = _read_harness_receipt(home, spec)
+    receipt = _settled_receipt(_read_harness_receipt(home, spec)[0])
     problems: list[str] = []
     if receipt.get("status") != "active":
         problems.append("installation receipt is not active")
@@ -760,15 +876,16 @@ def deactivate_harness(
 ) -> dict[str, Any]:
     spec = _spec(harness)
     home = Path(safe_yolo_home).expanduser().resolve(strict=False)
-    receipt, receipt_path = _read_harness_receipt(home, spec)
+    recorded, receipt_path = _read_harness_receipt(home, spec)
+    receipt = _settled_receipt(recorded)
     if receipt.get("status") != "active":
         raise RuntimeError(f"Safe YOLO {spec.name} installation is not active.")
-    config_path = Path(str(receipt.get("config_path", "")))
-    # After an update the configuration from before it holds the same Safe YOLO hook, which would
-    # then refuse everything once this receipt is inactive. Deactivate returns to the configuration
-    # from before Safe YOLO was first installed, the same baseline uninstall uses.
     baseline = receipt.get("original_install", receipt)
-    if baseline.get("previous_config_existed"):
+    if spec.id != "opencode":
+        retained = _remove_own_hook(spec, receipt, home)
+    elif baseline.get("previous_config_existed"):
+        # The plugin file is wholly Safe YOLO's: put back the plugin it replaced, from before the first install.
+        config_path = Path(str(receipt.get("config_path", "")))
         if (
             config_path.is_symlink()
             or not config_path.is_file()
@@ -782,8 +899,11 @@ def deactivate_harness(
         if not backup.is_file():
             raise RuntimeError("Previous configuration backup is missing; refusing an incomplete rollback.")
         _atomic_write(config_path, backup.read_bytes(), int(baseline.get("previous_config_mode", 0o600)))
+        retained = None
     else:
-        retained = _retire(spec.id, config_path, str(receipt.get("installed_config_sha256")), home)
+        retained = _retire(spec.id, Path(str(receipt.get("config_path", ""))),
+                           str(receipt.get("installed_config_sha256")), home)
+    if retained:
         receipt["deactivated_config_backup"] = str(retained)
     receipt["status"] = "inactive"
     receipt["deactivated_at"] = datetime.now(UTC).isoformat()

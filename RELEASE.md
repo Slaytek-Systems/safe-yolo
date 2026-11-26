@@ -19,11 +19,17 @@ hook until it was trusted again. One devbox ran unguarded for six days.
   against it directly, switches the receipt and launcher, then runs the
   canaries again through the unchanged command. If any step fails, it undoes
   each write that completed, newest first, and names any file it could not
-  restore. Rollback works the same way, and checks the saved hook answers
-  before it publishes it.
-- Deactivate returns the harness file to its state from before Safe YOLO was
-  first installed, as uninstall does, so no hook is left reading an inactive
-  receipt.
+  restore. Rollback works the same way. It reads the hook from the saved
+  harness file, so receipts that name no command are covered too, and checks
+  that hook answers before it publishes it.
+- An update or rollback stopped between its receipt and harness-file writes
+  leaves the hook answering correctly. Every lifecycle command then continues
+  from the installation whose hook the file holds, so retry, update, rollback,
+  uninstall and deactivate all recover.
+- Deactivate, like uninstall, takes out only Safe YOLO's hook. Other owners'
+  hooks and settings stay, including ones added after install. A file Safe
+  YOLO created and that is left empty moves to the backup area. The OpenCode
+  plugin file is wholly Safe YOLO's and is retired as before.
 - Codex, Claude Code, Cursor and Antigravity hook files stay byte for byte the
   same across updates. The OpenCode plugin stays the same unless a release
   changes its template. Running sessions pick up the new release on their next

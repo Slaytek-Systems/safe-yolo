@@ -12,7 +12,6 @@ import sys
 import tempfile
 from typing import Any
 
-from scripts.harness_specs import ANTIGRAVITY_IDS
 from scripts.package import MANIFEST, verify_bundle
 
 
@@ -88,25 +87,15 @@ def active_receipts(home: Path) -> list[dict[str, Any]]:
             for receipt, _ in [_read_harness_receipt(home, spec)] if receipt.get('status') == 'active']
 
 
-def _without_own_hook(groups: Any, receipt: dict[str, Any], home: Path) -> list[Any]:
-    """Claude Code's PreToolUse groups minus the hook this installation wrote, and any group that empties."""
-    from scripts.distribute import _receipt_pin, _spec
-    from scripts.doctor import own_hook_slots
-    slots = set(own_hook_slots(groups, **_receipt_pin(receipt, home, _spec('claude-code'))))
-    kept = []
-    for group_index, group in enumerate(groups if isinstance(groups, list) else []):
-        if not any(index == group_index for index, _ in slots):
-            kept.append(group)
-            continue
-        hooks = [hook for hook_index, hook in enumerate(group['hooks']) if (group_index, hook_index) not in slots]
-        if hooks:
-            kept.append({**group, 'hooks': hooks})
-    return kept
-
-
 def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[str, Any]:
-    from scripts.distribute import _atomic_write, _read_harness_receipt, _retire, _sha256, _spec
-    receipt, path = _read_harness_receipt(home, _spec(harness))
+    from scripts.distribute import (_apply_steps, _atomic_write, _direct_command, _read_harness_receipt,
+                                    _remove_own_hook, _restore_file, _retire, _run_canaries, _saved_hook,
+                                    _settled_receipt, _sha256, _spec)
+    from scripts.doctor import inspect_release
+    from scripts.harness_wiring import config_path_problem
+    spec = _spec(harness)
+    recorded, path = _read_harness_receipt(home, spec)
+    receipt = _settled_receipt(recorded)
     config = Path(receipt['config_path'])
     if uninstall and harness == 'opencode':
         # Safe YOLO owns the whole plugin file. A replaced V1 copy never ran on OpenCode V2,
@@ -119,108 +108,57 @@ def restore(home: Path, user: Path, harness: str, *, uninstall: bool) -> dict[st
             'Restart every OpenCode server that loaded Safe YOLO (`opencode service restart` for the background '
             f'service, and any `opencode serve` you started), then confirm safe-yolo.js is absent from {config.parent} '
             'and `opencode api plugin.list` against that server no longer lists safe-yolo.')}
+    if uninstall:
+        _remove_own_hook(spec, receipt, home)
+        receipt['status'] = 'inactive'
+        _atomic_write(path, (json.dumps(receipt, indent=2) + '\n').encode())
+        return {'status': 'inactive', 'harness': harness, 'next_action': 'Restart the harness to unload Safe YOLO.'}
+    # Rollback moves from the recorded installation to its previous one. The harness file holds
+    # the hook of one of the two; the settled receipt says which.
     current_bytes = None if config.is_symlink() or not config.is_file() else config.read_bytes()
-    from scripts.harness_wiring import config_path_problem
     if config_path_problem(harness, config):
         current_bytes = None
     if current_bytes is None or hashlib.sha256(current_bytes).hexdigest() != receipt['installed_config_sha256']:
         raise RuntimeError('Harness configuration changed; refusing to overwrite newer work.')
-    if uninstall:
-        baseline = receipt.get('original_install', receipt)
-        original_bytes = None
-        original = {}
-        from scripts.harness_wiring import ANTIGRAVITY_GROUP, read_antigravity_hooks
-        if baseline['previous_config_existed']:
-            original_bytes = Path(baseline['previous_config_backup']).read_bytes()
-            original = (read_antigravity_hooks(Path(baseline['previous_config_backup'])) if harness in ANTIGRAVITY_IDS
-                        else json.loads(original_bytes))
-        document = read_antigravity_hooks(config) if harness in ANTIGRAVITY_IDS else json.loads(config.read_text())
-        if harness in ANTIGRAVITY_IDS:
-            document.pop(ANTIGRAVITY_GROUP)
-        else:
-            event = 'preToolUse' if harness == 'cursor' else 'PreToolUse'
-            original_hooks = original.get('hooks', {})
-            if original_hooks.get(event):
-                raise RuntimeError('The legacy baseline already contains an enforcement hook; a complete uninstall needs operator review.')
-            others = _without_own_hook(document['hooks'].get(event), receipt, home) if harness == 'claude-code' else []
-            if others:
-                document['hooks'][event] = others
-            elif event in original_hooks:
-                document['hooks'][event] = original_hooks[event]
-            else:
-                document['hooks'].pop(event, None)
-            if not document['hooks'] and 'hooks' not in original:
-                document.pop('hooks')
-        owned_key = 'version' if harness == 'cursor' else 'description' if harness == 'codex' else None
-        if owned_key:
-            if owned_key in original:
-                document[owned_key] = original[owned_key]
-            else:
-                document.pop(owned_key, None)
-        if not document and original_bytes is None:
-            from datetime import datetime, UTC
-            retained = home / 'backups' / ('uninstalled-' + harness + '-' + datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ'))
-            os.replace(config, retained)
-        else:
-            payload = original_bytes if document == original and original_bytes is not None else (json.dumps(document, indent=2, allow_nan=harness not in ANTIGRAVITY_IDS) + '\n').encode()
-            _atomic_write(config, payload, baseline['previous_config_mode'])
-        receipt['status'] = 'inactive'
-        _atomic_write(path, (json.dumps(receipt, indent=2) + '\n').encode())
-        return {'status': 'inactive', 'harness': harness, 'next_action': 'Restart the harness to unload Safe YOLO.'}
-    previous = receipt.get('previous_install')
+    previous = recorded.get('previous_install')
     if not previous:
         raise RuntimeError('No previous installation is available for rollback.')
-    backup = Path(receipt['previous_config_backup'])
+    backup = Path(recorded['previous_config_backup'])
     if not backup.is_file() or _sha256(backup) != previous['installed_config_sha256']:
         raise RuntimeError('Rollback configuration backup is missing or changed.')
-    from scripts.doctor import inspect_release
     report = inspect_release(Path(previous['release']), previous['manifest_sha256'])
     if not report['healthy']:
         raise RuntimeError('Previous release failed verification; rollback was not applied.')
-    from scripts.distribute import (_antigravity_hook, _apply_steps, _direct_command, _restore_file,
-                                    _run_canaries)
-    spec = _spec(harness)
     previous_release = Path(previous['release'])
     launcher = Path(previous['launcher']) if previous.get('launcher') else None
     saved = backup.read_bytes()
-    mode = receipt['previous_config_mode']
-    # The hook the harness will run must answer before it is published. Antigravity ignores a hook
-    # that cannot start, so a dead command would restore no guard at all.
-    if harness in ANTIGRAVITY_IDS:
-        hook_command, timeout = _antigravity_hook(backup)
-    else:
-        hook_command, timeout = previous.get('command'), None
-    if hook_command:
-        try:
-            canaries = _run_canaries(_direct_command(hook_command, home, spec, previous), harness, timeout)
-        except RuntimeError as error:
-            raise RuntimeError(f'{error}; rollback was not applied.') from error
-        if not all(canaries.values()):
-            raise RuntimeError(f'Previous hook command failed its allow/deny check ({canaries}); '
-                               'rollback was not applied.')
-    # The same cut-over as an update: the launcher, the harness file if it differs, then the receipt.
+    mode = recorded['previous_config_mode']
+    # The hook the harness will run is the one in the saved file, and it must answer before it is
+    # published: a command that cannot start restores no guard at all.
+    try:
+        hook_command, timeout = _saved_hook(spec, backup, home, previous)
+        canaries = _run_canaries(_direct_command(hook_command, home, spec, previous), harness, timeout)
+    except RuntimeError as error:
+        raise RuntimeError(f'{error}; rollback was not applied.') from error
+    if not all(canaries.values()):
+        raise RuntimeError(f'Previous hook command failed its allow/deny check ({canaries}); '
+                           'rollback was not applied.')
+    # The launcher, the harness file if it differs, then the receipt.
     steps = []
     if launcher:
         previous_launcher = launcher.read_bytes() if launcher.is_file() else None
         steps.append((lambda: _atomic_write(launcher, (previous_release / 'scripts' / 'bootstrap.py').read_bytes(),
                                             0o700),
                       _restore_file(launcher, previous_launcher, 0o700)))
-    current = config.read_bytes()
-    if current != saved:
-        steps.append((lambda: _atomic_write(config, saved, mode), _restore_file(config, current, mode)))
+    if current_bytes != saved:
+        steps.append((lambda: _atomic_write(config, saved, mode), _restore_file(config, current_bytes, mode)))
     current_receipt = path.read_bytes()
     steps.append((lambda: _atomic_write(path, (json.dumps(previous, indent=2) + '\n').encode()),
                   _restore_file(path, current_receipt, 0o600)))
 
     def check() -> None:
         # Through the published hook: the launcher and receipt it reads changed as well.
-        if harness in ANTIGRAVITY_IDS:
-            live_command, live_timeout = _antigravity_hook(config)
-            published = _run_canaries(live_command, harness, live_timeout)
-        elif previous.get('command'):
-            published = _run_canaries(previous['command'], harness)
-        else:
-            published = {'allow': True, 'deny': True}
+        published = _run_canaries(hook_command, harness, timeout)
         if not all(published.values()):
             raise RuntimeError(f'Previous hook command failed its allow/deny check ({published})')
 
