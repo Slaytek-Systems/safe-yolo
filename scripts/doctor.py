@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -96,6 +97,58 @@ def inspect_codex_wiring(
     if entry in {"codex_v3", "claude_code_v3", "grok_v3", "cursor_v3", "opencode_v3", "antigravity_v3"} and _command_hooks(hooks, "PostToolUse"):
         problems.append(f"PostToolUse command hooks must be absent for {entry}")
     return {"healthy": not problems, "problems": problems}
+
+
+CODEX_SKIPS_SAFE_YOLO = "Codex will skip Safe YOLO until you approve it in /hooks"
+
+
+def codex_hook_hash(group: dict[str, Any], hook: dict[str, Any]) -> str:
+    """The hash Codex 0.172.0 compares with a PreToolUse command hook's saved `trusted_hash`.
+
+    codex-rs/hooks/src/engine/discovery.rs `hook_hash` and codex-rs/config/src/fingerprint.rs
+    `version_for_toml`: the normalized hook as sorted, compact, unescaped JSON.
+    """
+    handler = {"type": "command", "command": hook["command"], "timeout": max(1, hook.get("timeout", 600)),
+               "async": hook.get("async", False)}
+    if hook.get("statusMessage") is not None:
+        handler["statusMessage"] = hook["statusMessage"]
+    identity: dict[str, Any] = {"event_name": "pre_tool_use", "hooks": [handler]}
+    if group.get("matcher") is not None:
+        identity["matcher"] = group["matcher"]
+    serialized = json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(serialized.encode()).hexdigest()
+
+
+def codex_hook_approval(hooks_path: str | Path, config_path: str | Path) -> tuple[str, str | None]:
+    """Read-only: whether Codex will run the one PreToolUse command hook in hooks.json.
+
+    Returns ("approved", None), ("not approved", reason) or ("unknown", reason). Codex skips a
+    user hook unless config.toml saves a `trusted_hash` equal to the hook's current hash.
+    """
+    hooks_path, config_path = Path(hooks_path).absolute(), Path(config_path)
+    try:
+        groups = json.loads(hooks_path.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+        slots = [(group_index, hook_index, group, hook)
+                 for group_index, group in enumerate(groups)
+                 for hook_index, hook in enumerate(group["hooks"]) if hook.get("type") == "command"]
+    except (OSError, ValueError, LookupError, TypeError, AttributeError) as error:
+        return "unknown", f"cannot read hooks.json: {type(error).__name__}"
+    if len(slots) != 1:
+        return "unknown", "hooks.json does not hold exactly one PreToolUse command hook"
+    group_index, hook_index, group, hook = slots[0]
+    try:
+        states = tomllib.loads(config_path.read_text(encoding="utf-8")).get("hooks", {}).get("state", {})
+        state = states.get(f"{hooks_path}:pre_tool_use:{group_index}:{hook_index}") or {}
+        trusted, enabled = state.get("trusted_hash"), state.get("enabled")
+    except (OSError, ValueError, AttributeError) as error:
+        return "unknown", f"cannot read config.toml: {type(error).__name__}"
+    if enabled is False:
+        return "not approved", "the hook is turned off"
+    if trusted is None:
+        return "not approved", "no approval is saved"
+    if trusted != codex_hook_hash(group, hook):
+        return "not approved", "the saved approval is for a different hook"
+    return "approved", None
 
 
 def inspect_claude_code_wiring(

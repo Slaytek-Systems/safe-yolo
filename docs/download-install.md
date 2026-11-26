@@ -107,6 +107,9 @@ a tool's configuration or pointing `CODEX_HOME`, `CLAUDE_CONFIG_DIR`,
 place, use the recorded folder.
 Each harness is updated independently; if one fails, completed installations
 remain usable. Run doctor to inspect the state before retrying.
+Each Codex install or update changes the hook, and Codex skips a hook until you
+approve it in `/hooks`. Approve it straight after. Until then, doctor reports
+"Codex will skip Safe YOLO until you approve it in /hooks" and exits 1.
 
 Local customizations live outside versioned releases at
 `~/.safe-yolo/customizations.json`. Install, update, rollback, and uninstall

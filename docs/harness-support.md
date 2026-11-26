@@ -6,7 +6,7 @@ and exact rollback are proven.
 
 | Harness | Status | Install ID | Native surface | Activation note |
 | --- | --- | --- | --- | --- |
-| Codex | Supported | `codex` | `~/.codex/hooks.json` | Restart and review/trust the hook in `/hooks` |
+| Codex | Supported | `codex` | `~/.codex/hooks.json` | Restart, then approve the hook in `/hooks` after each install or update; doctor reports when Codex will skip it |
 | Claude Code | Beta | `claude-code` | `~/.claude/settings.json` | Restart and verify the `PreToolUse` hook in `/hooks` |
 | Cursor | Beta | `cursor` | `~/.cursor/hooks.json` | Cursor watches and reloads user hooks |
 | Grok | Adapter only | `grok` | Native hook/plugin surface | Lifecycle installer deferred |

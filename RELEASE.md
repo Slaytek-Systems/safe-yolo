@@ -1,3 +1,18 @@
+# Safe YOLO (unreleased): doctor says when Codex is skipping the guard
+
+Codex runs a hook only if the approval saved in its `config.toml` matches the
+hook. Every Safe YOLO install or update changes the hook, so Codex silently
+skipped the guard until someone approved it again in `/hooks`. One machine ran
+unguarded for six days this way.
+
+- `safe-yolo doctor` now reads that approval. When it is missing or stale,
+  doctor exits 1 and says "Codex will skip Safe YOLO until you approve it in
+  /hooks", with the reason.
+- `install` and `update` for Codex end by telling you to approve the hook in
+  `/hooks` now. When the approval already matches, they say only "Restart
+  Codex."
+- Safe YOLO only reads Codex's approval. It never writes it.
+
 # Safe YOLO 3.0.0-beta.17
 
 A blocked command is now blocked however it is chained. Until now Safe YOLO
