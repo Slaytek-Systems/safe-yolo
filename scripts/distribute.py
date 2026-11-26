@@ -302,8 +302,9 @@ def _settled_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
 
     Update writes the receipt before the harness file, and rollback writes the harness file
     before the receipt. Stopped between the two, the receipt names one installation while the
-    file still holds, or already holds, the hook of `previous_install`. That one then runs, so
-    every lifecycle command continues from it.
+    file still holds, or already holds, the hook of `previous_install`, so every command that
+    rewrites the file continues from that one. Doctor reads the receipt as written: it names
+    the release the launcher runs.
     """
     previous = receipt.get("previous_install")
     path = Path(str(receipt.get("config_path", "")))
@@ -313,6 +314,18 @@ def _settled_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
     if digest != receipt.get("installed_config_sha256") and digest == previous.get("installed_config_sha256"):
         return previous
     return receipt
+
+
+def _never_published(receipt: dict[str, Any]) -> bool:
+    """A first install stopped after its receipt and before the harness file: the file is as it found it."""
+    path = Path(str(receipt.get("config_path", "")))
+    if receipt.get("previous_install") or path.is_symlink():
+        return False
+    if not receipt.get("previous_config_existed"):
+        return not path.exists()
+    backup = Path(str(receipt.get("previous_config_backup")))
+    return (path.is_file() and backup.is_file() and path.read_bytes() == backup.read_bytes()
+            and _sha256(path) != receipt.get("installed_config_sha256"))
 
 
 def _has_harness_receipt(home: Path, spec: HarnessSpec) -> bool:
@@ -567,10 +580,13 @@ def _remove_own_hook(spec: HarnessSpec, receipt: dict[str, Any], home: Path) -> 
     """
     harness = spec.id
     config = Path(str(receipt.get('config_path', '')))
+    baseline = receipt.get('original_install', receipt)
+    if not baseline['previous_config_existed'] and not config.exists() and not config.is_symlink():
+        # An earlier run retired the file and stopped; finish from its verified copy.
+        return _retire(harness, config, receipt['installed_config_sha256'], home)
     if (config.is_symlink() or not config.is_file() or _config_path_problem(harness, config)
             or _sha256(config) != receipt.get('installed_config_sha256')):
         raise RuntimeError(f'{spec.name} configuration changed since installation; refusing to overwrite newer work.')
-    baseline = receipt.get('original_install', receipt)
     original_bytes = None
     original: dict[str, Any] = {}
     if baseline['previous_config_existed']:
@@ -638,7 +654,7 @@ def install_harness(
     previous_receipt = None
     if _has_harness_receipt(home, spec):
         existing = _settled_receipt(_read_harness_receipt(home, spec)[0])
-        if existing.get('status') == 'active':
+        if existing.get('status') == 'active' and not _never_published(existing):
             previous_receipt = existing
     if previous_receipt and Path(str(previous_receipt.get('config_path'))) != target:
         raise RuntimeError(
@@ -826,7 +842,7 @@ def doctor_harness(
 ) -> dict[str, Any]:
     spec = _spec(harness)
     home = Path(safe_yolo_home).expanduser().resolve(strict=False)
-    receipt = _settled_receipt(_read_harness_receipt(home, spec)[0])
+    receipt = _read_harness_receipt(home, spec)[0]
     problems: list[str] = []
     if receipt.get("status") != "active":
         problems.append("installation receipt is not active")
