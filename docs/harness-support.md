@@ -6,7 +6,7 @@ and exact rollback are proven.
 
 | Harness | Status | Install ID | Native surface | Activation note |
 | --- | --- | --- | --- | --- |
-| Codex | Supported | `codex` | `~/.codex/hooks.json` | Restart and review/trust the hook in `/hooks` |
+| Codex | Supported | `codex` | `~/.codex/hooks.json` | Restart and review/trust the hook in `/hooks` once; updates keep the same command |
 | Claude Code | Beta | `claude-code` | `~/.claude/settings.json` | Restart and verify the `PreToolUse` hook in `/hooks` |
 | Cursor | Beta | `cursor` | `~/.cursor/hooks.json` | Cursor watches and reloads user hooks |
 | Grok | Adapter only | `grok` | Native hook/plugin surface | Lifecycle installer deferred |
@@ -112,14 +112,16 @@ it. The group install writes is:
   "safe-yolo": {
     "enabled": true,
     "PreToolUse": [
-      {"matcher": "*", "hooks": [{"type": "command", "command": "<pinned bootstrap>", "timeout": 10}]}
+      {"matcher": "*", "hooks": [{"type": "command", "command": "<stable command>", "timeout": 10}]}
     ]
   }
 }
 ```
 
-The pinned bootstrap runs `--entry antigravity_v3` and passes the root as
-`--harness-home`. Other named groups in the file are kept as they are and not
+The stable command runs `~/.safe-yolo/hooks/antigravity.py --harness
+antigravity --entry antigravity_v3` (`antigravity-t3` for the T3 Code
+profile). The launcher reads the root from the install receipt and passes it to
+the adapter as `--gemini-home`. Other named groups in the file are kept as they are and not
 judged. Install, update, uninstall and deactivate refuse, and leave the hooks
 file unchanged, when it holds a duplicate key anywhere or a number that Safe
 YOLO would not write back character for character, such as `1e400`,
@@ -130,9 +132,10 @@ uninstall and deactivate all apply that rule. The check runs before the write,
 so a link swapped in between them is not caught. Rollback also runs the
 previous hook command's allow and deny check first, and refuses when that
 command cannot start or replies wrongly. A group is Safe YOLO's only when it equals, field for field, what the
-installer writes for the pin the receipt records; only the `python3`
-interpreter path may differ, the command must keep the installer's spelling
-and flag order, and `timeout` must be an integer. Doctor requires that group
+installer wrote: the exact command the receipt records, or, for an install made
+by 3.0.0-beta.17 or earlier, the release-pinned command that receipt describes
+(only the `python3` interpreter path may differ there). The command must keep
+the installer's spelling and flag order, and `timeout` must be an integer. Doctor requires that group
 once.
 
 First install refuses, and leaves the hooks file unchanged, when a
