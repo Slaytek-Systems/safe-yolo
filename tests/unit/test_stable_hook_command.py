@@ -7,7 +7,6 @@ from pathlib import Path
 import shlex
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
 from unittest.mock import patch
