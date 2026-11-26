@@ -1,4 +1,4 @@
-# Safe YOLO (unreleased): doctor says when Codex is skipping the guard
+# Safe YOLO 3.0.0-beta.18: doctor says when Codex is skipping the guard
 
 Codex runs a hook only if the approval saved in its `config.toml` matches the
 hook. Every Safe YOLO install or update changes the hook, so Codex silently
