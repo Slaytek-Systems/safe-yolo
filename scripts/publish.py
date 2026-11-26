@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from scripts.doctor import CODEX_SKIPS_SAFE_YOLO
 from scripts.download import REPOSITORY, extract
 from scripts.package import build_bundle, verify_bundle
 
@@ -52,9 +53,9 @@ def acceptance(archive: Path, revision: str) -> None:
                            XDG_CONFIG_HOME=str(user / '.config'), XDG_DATA_HOME=str(user / '.local/share'),
                            XDG_STATE_HOME=str(user / '.local/state'), XDG_CACHE_HOME=str(user / '.cache'))
 
-        def run(args: list[str]) -> dict:
+        def run(args: list[str], check: bool = True) -> dict:
             result = subprocess.run(args, cwd=root, env=environment, capture_output=True,
-                                    text=True, check=True)
+                                    text=True, check=check)
             return json.loads(result.stdout)
 
         result = run([sys.executable, str(source / 'safe-yolo'), '--home', str(user / '.safe-yolo'),
@@ -64,7 +65,11 @@ def acceptance(archive: Path, revision: str) -> None:
             raise ValueError('Expected five installed harnesses')
         source.rename(root / 'moved-download')
         launcher = str(user / '.local/bin/safe-yolo')
-        if not run([launcher, 'doctor'])['healthy']:
+        # A fresh Codex has not approved the hook in /hooks, so doctor must say Codex will skip it.
+        reports = run([launcher, 'doctor'], check=False)['reports']
+        if (any(item['problems'] or not all(item['canaries'].values()) for item in reports)
+                or [item.get('hook_approval', '').split(' (')[0] for item in reports if not item['healthy']]
+                != [CODEX_SKIPS_SAFE_YOLO]):
             raise ValueError('Global doctor failed')
         run([launcher, 'update', '--source', str(root / 'moved-download')])
         run([launcher, 'uninstall'])
