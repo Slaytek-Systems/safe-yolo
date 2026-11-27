@@ -41,7 +41,7 @@ class RateLimitMessageTests(unittest.TestCase):
     def test_primary_limit_names_request_quota_reset_and_both_routes(self):
         message = rate_limit_message(self.URL, 403, _headers(X_RateLimit_Remaining='0',
                                      X_RateLimit_Reset='1900'), now=1000)
-        self.assertIn(f'api.github.com refused {self.URL}', message)
+        self.assertIn('api.github.com refused https://api.github.com/repos/Slaytek-Systems/safe-yolo/releases ', message)
         self.assertIn('HTTP 403', message)
         self.assertIn('60 unauthenticated API requests per hour', message)
         self.assertIn('in about 15 min', message)
@@ -56,15 +56,17 @@ class RateLimitMessageTests(unittest.TestCase):
     def test_secondary_limits_are_recognised(self):
         body = b'{"message":"You have exceeded a secondary rate limit."}'
         for code, headers, payload in [(403, _headers(X_RateLimit_Remaining='12'), body),
-                                       (429, _headers(), b''), (403, _headers(Retry_After='60'), b'')]:
-            with self.subTest(code=code):
-                message = rate_limit_message(self.URL, code, headers, payload, now=1000)
+                                       (429, _headers(), b''), (403, _headers(Retry_After='60'), b''),
+                                       (403, _headers(X_RateLimit_Remaining='12',
+                                                      Retry_After='Wed, 21 Oct 2026 07:28:00 GMT'), b'')]:
+            with self.subTest(code=code, headers=dict(headers)):
+                message = rate_limit_message(self.URL, code, headers, lambda: payload, now=1000)
                 self.assertIn('rate limit reached', message)
                 self.assertNotIn('60 unauthenticated', message)
 
     def test_other_errors_are_left_alone(self):
         self.assertIsNone(rate_limit_message(self.URL, 403, _headers(X_RateLimit_Remaining='12'),
-                                             b'{"message":"Forbidden"}'))
+                                             lambda: b'{"message":"Forbidden"}'))
         self.assertIsNone(rate_limit_message(self.URL, 404, _headers(X_RateLimit_Remaining='0')))
         self.assertIsNone(rate_limit_message(self.URL, 403, None))
 
@@ -88,6 +90,37 @@ class RateLimitMessageTests(unittest.TestCase):
         with patch('urllib.request.OpenerDirector.open', side_effect=error):
             with self.assertRaisesRegex(RuntimeError, 'objects.githubusercontent.com refused'):
                 fetch('https://github.com/Slaytek-Systems/safe-yolo/releases/download/v3/x.zip')
+
+    def test_redirected_signed_query_is_not_printed(self):
+        asset = 'https://objects.githubusercontent.com/release-asset?X-Amz-Signature=secret123&token=abc'
+        error = urllib.error.HTTPError(asset, 429, 'Too Many Requests', _headers(), None)
+        with patch('urllib.request.OpenerDirector.open', side_effect=error):
+            with self.assertRaises(RuntimeError) as caught:
+                fetch('https://github.com/Slaytek-Systems/safe-yolo/releases/download/v3/x.zip')
+        self.assertIn('objects.githubusercontent.com/release-asset ', str(caught.exception))
+        self.assertNotIn('secret123', str(caught.exception))
+        self.assertNotIn('token', str(caught.exception))
+
+    def test_body_is_read_only_when_needed_and_read_failures_keep_the_status(self):
+        import http.client
+
+        class BrokenBody(urllib.error.HTTPError):
+            reads = 0
+
+            def read(self, *args):
+                BrokenBody.reads += 1
+                raise http.client.IncompleteRead(b'')
+
+        for code, expected in [(429, RuntimeError), (404, urllib.error.HTTPError), (403, urllib.error.HTTPError)]:
+            with self.subTest(code=code):
+                BrokenBody.reads = 0
+                error = BrokenBody(self.URL, code, 'x', _headers(), None)
+                with patch('urllib.request.OpenerDirector.open', side_effect=error):
+                    with self.assertRaises(expected) as caught:
+                        fetch(self.URL)
+                self.assertIs(type(caught.exception), BrokenBody if expected is urllib.error.HTTPError
+                              else RuntimeError)
+                self.assertEqual(1 if code == 403 else 0, BrokenBody.reads)
 
     def test_fetch_keeps_other_http_errors(self):
         error = urllib.error.HTTPError(self.URL, 404, 'Not Found', _headers(), None)
