@@ -30,7 +30,11 @@ def fetch(url: str, limit: int = MAX_DOWNLOAD) -> bytes:
         with opener.open(urllib.request.Request(url, headers={'User-Agent': 'safe-yolo'}), timeout=30) as response:
             data = response.read(limit + 1)
     except urllib.error.HTTPError as error:
-        message = rate_limit_message(url, error.code, error.headers)
+        try:
+            body = error.read(4096)
+        except OSError:
+            body = b''
+        message = rate_limit_message(error.geturl() or url, error.code, error.headers, body)
         if message:
             raise RuntimeError(message) from None
         raise
@@ -39,26 +43,39 @@ def fetch(url: str, limit: int = MAX_DOWNLOAD) -> bytes:
     return data
 
 
-def rate_limit_message(url: str, code: int, headers, now: float | None = None) -> str | None:
-    """Explain a GitHub rate-limit refusal: which request, whose limit, and when to retry."""
+MANUAL_INSTALL = f'https://github.com/{REPOSITORY}/blob/main/docs/download-install.md'
+
+
+def _seconds(value) -> int | None:
+    value = (value or '').strip()
+    return int(value) if value.isascii() and value.isdigit() and len(value) <= 12 else None
+
+
+def rate_limit_message(url: str, code: int, headers, body: bytes = b'',
+                       now: float | None = None) -> str | None:
+    """Explain a rate-limit refusal: which request, whose limit, and when to retry."""
     headers = headers or {}
-    remaining, reset, retry = (headers.get(name) for name in
-                               ('X-RateLimit-Remaining', 'X-RateLimit-Reset', 'Retry-After'))
-    if code not in (403, 429) or (remaining != '0' and retry is None):
+    remaining = (headers.get('X-RateLimit-Remaining') or '').strip()
+    retry, reset = _seconds(headers.get('Retry-After')), _seconds(headers.get('X-RateLimit-Reset'))
+    limited = code == 429 or (code == 403 and (
+        remaining == '0' or retry is not None or b'rate limit' in (body or b'').lower()))
+    if not limited:
         return None
     now = time.time() if now is None else now
-    wait = None
-    if retry is not None and retry.isdigit():
-        wait = int(retry)
-    elif reset is not None and reset.isdigit():
-        wait = max(0, int(reset) - int(now))
-    when = 'later' if wait is None else (
-        f"at {time.strftime('%H:%M', time.localtime(now + wait))} (in about {max(1, -(-wait // 60))} min)")
-    quota = (' GitHub allows 60 anonymous requests per hour per internet address, '
-             'shared by everything on this network.' if remaining == '0' else '')
-    return (f'GitHub refused {url} (HTTP {code}): rate limit reached.{quota} '
-            f'Try again {when}, or download the release zip yourself and run '
-            f'`safe-yolo update --source <unzipped release dir>`.')
+    wait = retry if retry is not None else (max(0, reset - int(now)) if reset is not None else None)
+    when = 'later'
+    if wait is not None and wait <= 7 * 24 * 3600:
+        try:
+            when = (f"at {time.strftime('%H:%M', time.localtime(now + wait))} "
+                    f"(in about {max(1, -(-wait // 60))} min)")
+        except (OverflowError, OSError, ValueError):
+            pass
+    host = urllib.parse.urlparse(url).hostname or 'the server'
+    quota = (' GitHub allows 60 unauthenticated API requests per hour from each public IP address, '
+             'shared by every tool on this network.' if host == 'api.github.com' and remaining == '0' else '')
+    return (f'{host} refused {url} (HTTP {code}): rate limit reached.{quota} '
+            f'Try again {when}. Or install by hand from the release ZIP ({MANUAL_INSTALL}); '
+            f'to update an existing install that way, run `safe-yolo update --source <unzipped release dir>`.')
 
 
 def extract(archive: Path, destination: Path) -> Path:
