@@ -5,6 +5,8 @@ import json
 from pathlib import Path, PurePosixPath
 import re
 import stat
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
@@ -24,11 +26,39 @@ def fetch(url: str, limit: int = MAX_DOWNLOAD) -> bytes:
     if urllib.parse.urlparse(url).scheme != 'https':
         raise RuntimeError('Downloads require HTTPS.')
     opener = urllib.request.build_opener(HTTPSRedirect())
-    with opener.open(urllib.request.Request(url, headers={'User-Agent': 'safe-yolo'}), timeout=30) as response:
-        data = response.read(limit + 1)
+    try:
+        with opener.open(urllib.request.Request(url, headers={'User-Agent': 'safe-yolo'}), timeout=30) as response:
+            data = response.read(limit + 1)
+    except urllib.error.HTTPError as error:
+        message = rate_limit_message(url, error.code, error.headers)
+        if message:
+            raise RuntimeError(message) from None
+        raise
     if len(data) > limit:
         raise RuntimeError('Download exceeded the size limit.')
     return data
+
+
+def rate_limit_message(url: str, code: int, headers, now: float | None = None) -> str | None:
+    """Explain a GitHub rate-limit refusal: which request, whose limit, and when to retry."""
+    headers = headers or {}
+    remaining, reset, retry = (headers.get(name) for name in
+                               ('X-RateLimit-Remaining', 'X-RateLimit-Reset', 'Retry-After'))
+    if code not in (403, 429) or (remaining != '0' and retry is None):
+        return None
+    now = time.time() if now is None else now
+    wait = None
+    if retry is not None and retry.isdigit():
+        wait = int(retry)
+    elif reset is not None and reset.isdigit():
+        wait = max(0, int(reset) - int(now))
+    when = 'later' if wait is None else (
+        f"at {time.strftime('%H:%M', time.localtime(now + wait))} (in about {max(1, -(-wait // 60))} min)")
+    quota = (' GitHub allows 60 anonymous requests per hour per internet address, '
+             'shared by everything on this network.' if remaining == '0' else '')
+    return (f'GitHub refused {url} (HTTP {code}): rate limit reached.{quota} '
+            f'Try again {when}, or download the release zip yourself and run '
+            f'`safe-yolo update --source <unzipped release dir>`.')
 
 
 def extract(archive: Path, destination: Path) -> Path:
