@@ -5,6 +5,8 @@ import json
 from pathlib import Path, PurePosixPath
 import re
 import stat
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
@@ -24,11 +26,65 @@ def fetch(url: str, limit: int = MAX_DOWNLOAD) -> bytes:
     if urllib.parse.urlparse(url).scheme != 'https':
         raise RuntimeError('Downloads require HTTPS.')
     opener = urllib.request.build_opener(HTTPSRedirect())
-    with opener.open(urllib.request.Request(url, headers={'User-Agent': 'safe-yolo'}), timeout=30) as response:
-        data = response.read(limit + 1)
+    try:
+        with opener.open(urllib.request.Request(url, headers={'User-Agent': 'safe-yolo'}), timeout=30) as response:
+            data = response.read(limit + 1)
+    except urllib.error.HTTPError as error:
+        message = rate_limit_message(error.geturl() or url, error.code, error.headers,
+                                     lambda: _read_quietly(error))
+        if message:
+            raise RuntimeError(message) from None
+        raise
     if len(data) > limit:
         raise RuntimeError('Download exceeded the size limit.')
     return data
+
+
+MANUAL_INSTALL = f'https://github.com/{REPOSITORY}/blob/main/docs/download-install.md'
+
+
+def _read_quietly(error) -> bytes:
+    try:
+        return error.read(4096) or b''
+    except Exception:  # A failed error-body read must not hide the HTTP status.
+        return b''
+
+
+def _seconds(value) -> int | None:
+    value = (value or '').strip()
+    return int(value) if value.isascii() and value.isdigit() and len(value) <= 12 else None
+
+
+def rate_limit_message(url: str, code: int, headers, read_body=lambda: b'',
+                       now: float | None = None) -> str | None:
+    """Explain a rate-limit refusal: which request, whose limit, and when to retry.
+
+    read_body is called only for a 403 the headers cannot classify."""
+    headers = headers or {}
+    remaining = (headers.get('X-RateLimit-Remaining') or '').strip()
+    has_retry = headers.get('Retry-After') is not None
+    retry, reset = _seconds(headers.get('Retry-After')), _seconds(headers.get('X-RateLimit-Reset'))
+    limited = code == 429 or (code == 403 and (
+        remaining == '0' or has_retry or b'rate limit' in (read_body() or b'').lower()))
+    if not limited:
+        return None
+    now = time.time() if now is None else now
+    wait = retry if retry is not None else (max(0, reset - int(now)) if reset is not None else None)
+    when = 'later'
+    if wait is not None and wait <= 7 * 24 * 3600:
+        try:
+            when = (f"at {time.strftime('%H:%M', time.localtime(now + wait))} "
+                    f"(in about {max(1, -(-wait // 60))} min)")
+        except (OverflowError, OSError, ValueError):
+            pass
+    parts = urllib.parse.urlparse(url)
+    host = parts.hostname or 'the server'
+    url = f'{parts.scheme}://{parts.netloc.rpartition("@")[2]}{parts.path}'  # Drop signed queries.
+    quota = (' GitHub allows 60 unauthenticated API requests per hour from each public IP address, '
+             'shared by every tool on this network.' if host == 'api.github.com' and remaining == '0' else '')
+    return (f'{host} refused {url} (HTTP {code}): rate limit reached.{quota} '
+            f'Try again {when}. Or install by hand from the release ZIP ({MANUAL_INSTALL}); '
+            f'to update an existing install that way, run `safe-yolo update --source <unzipped release dir>`.')
 
 
 def extract(archive: Path, destination: Path) -> Path:
